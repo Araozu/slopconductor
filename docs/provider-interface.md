@@ -35,12 +35,15 @@ The repository currently contains:
 - [Provider identities](../crates/slop-core/src/provider.rs) in `slop-core`.
 - A [runtime registry and `Provider` trait](../crates/slop-runtime/src/providers/mod.rs)
   covering metadata, a static model catalog, and wire-protocol lookup.
-- A [concrete OpenCode Go client](../crates/slop-runtime/src/providers/opencode_go.rs)
+- Concrete [OpenCode Go](../crates/slop-runtime/src/providers/opencode_go.rs) and
+  [OpenCode Zen](../crates/slop-runtime/src/providers/opencode_zen.rs) clients
   with live model listing, non-streaming inference, and SSE text streaming over
-  three wire shapes. Credentials are supplied explicitly or from the environment.
+  three wire shapes. Each supplies its own metadata, catalog, and credential
+  variable to a [shared internal transport/decoder](../crates/slop-runtime/src/providers/opencode.rs).
+  Credentials are supplied explicitly or from the environment.
 - An object-safe `ProviderClient` execution trait for validation, model listing,
   non-streaming and streaming one-turn inference. Its boxed futures are `Send`
-  and use the shared runtime; the concrete OpenCode Go client implements it.
+  and use the shared runtime; both concrete OpenCode clients implement it.
 - Small neutral types for string messages, requests, responses, text/reasoning
   deltas, explicit completed/incomplete outcomes, optional token counters with
   total provenance, and separate requested/reported model identifiers.
@@ -62,6 +65,46 @@ closer to the target contract without claiming a complete daemon execution API.
 Direct OpenAI, Anthropic, and Codex identity variants are reserved, with no
 registered implementation. The daemon's only live route remains
 `GET /v1/health`; a runtime integration is not evidence of a usable session API.
+
+### Implemented OpenCode adapters
+
+| Adapter ID | Base URL | Credential environment variable |
+| --- | --- | --- |
+| `opencode-go` | `https://opencode.ai/zen/go/v1` | `OPENCODE_GO_API_KEY` |
+| `opencode-zen` | `https://opencode.ai/zen/v1` | `OPENCODE_ZEN_API_KEY` |
+
+The Zen key comes from the OpenCode Zen account. This project uses its own
+explicit variable name; it does not fall back to `OPENCODE_API_KEY` or the Go
+key. Both clients also accept an explicit key through `new`.
+
+Both implement the same `Provider` metadata and `ProviderClient` execution
+contracts. For example, runtime code can put an authenticated
+`OpencodeZenClient::from_env()?` in a `Box<dyn ProviderClient>` and call
+`validate`, `list_models`, `complete`, or `complete_streaming` without parsing
+Zen transport objects. The static registry resolves `ProviderId::OpencodeZen`;
+provider/model references use `opencode-zen/<model-id>`.
+
+The Zen execution catalog follows its documented endpoint table, checked on
+2026-10-08. MiniMax M3/M2.7 and Qwen3.8 Max use Chat Completions on Zen, while
+they use Messages on Go. The adapter keeps these mappings separate. Advertised
+IDs outside the execution catalog remain visible in `list_models`, but fail
+validation before dispatch. Zen's Gemini/Google and Jev/System One formats are
+unsupported. Account-scoped capabilities, tools, structured output,
+continuation, cancellation, and public daemon execution remain proposed.
+
+Local HTTP fixtures exercise both adapters through `dyn ProviderClient` across
+all three wires, including terminal/incomplete results, auth and session
+headers, model listing, safe failures, and disabled retries/redirects. No live
+Zen inference was performed. An optional budgeted check is available:
+
+```sh
+# Set OPENCODE_ZEN_API_KEY explicitly before opting in.
+cargo test -p slop-runtime --test opencode_zen_live --locked -- --ignored
+```
+
+That suite makes one model-list request and six inference requests, each with a
+512-output-token cap. These caps do not bound billing. Default tests use local
+fixtures and leave all live tests ignored.
 
 ## Boundaries and ownership
 
@@ -462,7 +505,7 @@ rejection, not by claiming simulated parity.
 2. Introduce shared runtime execution/content/capability types and deterministic
    fake adapters. Keep domain invariants and public DTOs in their owning crates.
 3. Grow the current `ProviderClient` into the target interface, retaining OpenCode
-   Go's existing catalog/wire mappings. Preserve the implemented text, terminal,
+   Go and Zen's existing catalog/wire mappings. Preserve the implemented text, terminal,
    safe-error, optional-usage and bound behavior; add explicit capability
    discovery and cancellation. Declare other features unsupported until shipped.
 4. Wire a persisted one-turn daemon request through the supervisor, then map its
@@ -487,21 +530,23 @@ capability, or client-independence requirements above.
 
 This review covers the integrated one-turn code, not the future session service.
 The [provider surface fixtures](../crates/slop-runtime/tests/provider_surface.rs)
-exercise the shared trait with a real client rejected before network dispatch
-and a deterministic fixture adapter. Decoder regression fixtures live alongside
-the OpenCode Go implementation. Live checks also use the shared trait and are
-ignored by default; their documented opt-in command requires a credential and
+exercise the shared trait with both real clients rejected before network dispatch
+and a deterministic fixture adapter. Decoder regression fixtures live in the
+shared OpenCode implementation, and
+[local HTTP fixtures](../crates/slop-runtime/src/providers/opencode/http_tests.rs)
+exercise both concrete adapters with the same consumer. Live checks also use
+the shared trait and are ignored by default; their documented opt-in command requires a credential and
 names the request/output-token bounds. No live inference was performed for this
 review.
 
 | Criteria | Current evidence and remaining gap |
 | --- | --- |
-| C01–C02 | Shared object-safe execution interface and independent client dependencies. A persisted supervisor and second live integration remain planned. |
+| C01–C02 | Shared object-safe execution interface, two concrete adapters, the same HTTP fixture consumer for both, and independent client dependencies. A persisted supervisor remains planned. |
 | C03–C04 | Static model validation, bounded requests, requested/reported model identities, and rejection of multiple/non-leading Messages system instructions. Account-scoped discovery and general setting descriptors remain planned. |
 | C05–C08 | Text-only parsers reject unsupported structured output, missing/unknown terminal evidence, malformed JSON/UTF-8, contradictory outcomes and post-terminal text. Regression fixtures cover trailing end markers, incomplete stop reasons, multiline framing, and chunk splits. Structured blocks and tool dispatch remain planned. |
 | C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Explicit cancellation commands, supervisor retry budgets, and durable request identities remain planned. |
 | C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Required unsupported continuation is rejected. Detailed counters, per-counter completeness, durable continuation and restart recovery remain planned. |
-| C13–C15 | A common synthetic consumer verifies streaming/non-streaming results, incomplete outcomes and `Send` futures. Durable replay, public client fixtures, and separately budgeted live checks remain planned. |
+| C13–C15 | Common synthetic and HTTP consumers verify both adapters' streaming/non-streaming results, incomplete outcomes, wire translation, and `Send` futures. Opt-in Go/Zen live checks are present but were not run for this addition. Durable replay and public client fixtures remain planned. |
 
 ## Decoder references
 

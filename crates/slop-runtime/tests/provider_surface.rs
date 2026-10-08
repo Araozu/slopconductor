@@ -3,7 +3,7 @@
 use slop_runtime::providers::{
     ChatMessage, ChatRequest, ChatResponse, OpencodeGoProvider, Provider, ProviderClient,
     ProviderError, ProviderFuture, Role, StreamDelta, TurnOutcome, Usage,
-    opencode_go::OpencodeGoClient,
+    opencode_go::OpencodeGoClient, opencode_zen::OpencodeZenClient,
 };
 
 struct FixtureClient {
@@ -103,12 +103,14 @@ async fn one_consumer_handles_complete_and_incomplete_streams() {
 #[tokio::test]
 async fn real_and_fixture_clients_reject_invalid_requests_before_dispatch() {
     let real = OpencodeGoClient::new("synthetic-not-a-live-credential").unwrap();
+    let zen = OpencodeZenClient::new("synthetic-not-a-live-credential").unwrap();
     let fixture = FixtureClient {
         text: "unused",
         outcome: TurnOutcome::Completed,
     };
     for client in [
         &real as &dyn ProviderClient,
+        &zen as &dyn ProviderClient,
         &fixture as &dyn ProviderClient,
     ] {
         let mut invalid = request("glm-5.3-flash");

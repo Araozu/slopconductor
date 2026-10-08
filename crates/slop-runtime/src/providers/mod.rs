@@ -6,10 +6,13 @@
 //! an API-key credential referenced by environment variable, and a
 //! provider-neutral chat request/response used by the future agent loop.
 //!
-//! Implemented: OpenCode Go (`OPENCODE_GO_API_KEY`). Reserved for later
+//! Implemented: OpenCode Go (`OPENCODE_GO_API_KEY`) and OpenCode Zen
+//! (`OPENCODE_ZEN_API_KEY`). Reserved for later
 //! milestones: direct OpenAI, Anthropic, and Codex integrations.
 
+mod opencode;
 pub mod opencode_go;
+pub mod opencode_zen;
 
 use std::{fmt, future::Future, pin::Pin};
 
@@ -17,11 +20,12 @@ use slop_core::provider::{ProviderId, is_valid_model_id};
 use thiserror::Error;
 
 pub use opencode_go::OpencodeGoProvider;
+pub use opencode_zen::OpencodeZenProvider;
 
 /// The three HTTP API shapes a provider model can use.
 ///
-/// OpenCode Go exposes all three under one base URL (see its
-/// [endpoints table](https://opencode.ai/docs/go/#endpoints)); direct OpenAI
+/// OpenCode Go and Zen expose all three under separate gateway base URLs (see
+/// their documented endpoint tables); direct OpenAI
 /// and Anthropic integrations each use their native shape. Codex-style clients
 /// use the Responses shape with their own session header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -133,13 +137,14 @@ pub trait Provider: Send + Sync {
 
 /// Look up a compiled-in provider by id.
 ///
-/// Only OpenCode Go has a runtime integration today; the remaining
+/// OpenCode Go and Zen have runtime integrations; the remaining
 /// [`ProviderId`] variants are reserved so callers can match on the same
 /// structure without a plugin mechanism.
 #[must_use]
 pub fn provider(id: ProviderId) -> Option<&'static dyn Provider> {
     match id {
         ProviderId::OpencodeGo => Some(OpencodeGoProvider::instance()),
+        ProviderId::OpencodeZen => Some(OpencodeZenProvider::instance()),
         ProviderId::OpenAi | ProviderId::Anthropic | ProviderId::Codex => None,
     }
 }
@@ -392,8 +397,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_resolves_opencode_go_only() {
-        assert!(provider(ProviderId::OpencodeGo).is_some());
+    fn registry_resolves_opencode_gateways() {
+        for id in [ProviderId::OpencodeGo, ProviderId::OpencodeZen] {
+            assert_eq!(provider(id).unwrap().id(), id);
+        }
         assert!(provider(ProviderId::OpenAi).is_none());
         assert!(provider(ProviderId::Anthropic).is_none());
         assert!(provider(ProviderId::Codex).is_none());

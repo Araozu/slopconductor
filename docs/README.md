@@ -5,7 +5,7 @@ design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
 **Status as of 2026-10-08:** milestone M0 is a repository/bootstrap foundation,
-with a first runtime-only OpenCode Go provider integration added afterward.
+with runtime-only OpenCode Go and Zen provider integrations added afterward.
 The live API contains only the health endpoint. Commands, schemas, and workflows
 marked proposed describe future work.
 

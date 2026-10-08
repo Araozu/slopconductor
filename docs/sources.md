@@ -59,8 +59,21 @@ version has been claimed yet.
 
 A documented flow is not a guarantee that every provider, account, app category,
 or deployment is eligible. Store the integration's checked assumptions and
-availability with implementation. The repository contains no provider login or
-inference code yet.
+availability with implementation. The repository contains no OpenAI login or
+direct OpenAI integration yet; OpenCode gateway inference is implemented.
+
+## OpenCode gateways
+
+- [OpenCode Go endpoints](https://docs.opencode.ai/docs/go/#endpoints):
+  subscription gateway and model-specific wire formats.
+- [OpenCode Zen endpoints](https://docs.opencode.ai/docs/zen/#endpoints):
+  pay-as-you-go gateway, advertised model listing, and model-specific wire formats.
+
+Zen's execution mappings were checked on **2026-10-08**. Its Gemini/Google and
+Jev/System One formats are unsupported by the current three-wire text adapter.
+Live model listing does not grant execution support or establish account access.
+Go and Zen have separate keys and catalogs; some identical model IDs use different
+wire formats. No live Zen inference was performed for this addition.
 
 ## CI
 

@@ -13,5 +13,8 @@ slop-core.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+axum.workspace = true
+
 [lints]
 workspace = true

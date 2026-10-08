@@ -8,14 +8,15 @@ with concrete configuration and persistence. Frontends provide commands and
 presentation; they never run the agent loop.
 
 At M0, `slop-runtime` was an empty boundary crate. The provider registry
-(`slop-runtime::providers`) is now implemented with OpenCode Go as the first
-integration: a static catalog mapping each model to its wire shape (OpenAI
+(`slop-runtime::providers`) now implements OpenCode Go and Zen: separate static
+catalogs mapping each executable model to its documented wire shape (OpenAI
 Chat Completions, OpenAI Responses, or Anthropic Messages), `OPENCODE_GO_API_KEY`
-authentication, live model listing, and non-streaming plus SSE-streaming inference
-through a shared one-turn `ProviderClient` trait. Responses preserve terminal
+and `OPENCODE_ZEN_API_KEY` authentication, live model listing, and non-streaming
+plus SSE-streaming inference through a shared one-turn `ProviderClient` trait.
+Responses preserve terminal
 outcomes, optional usage/provenance, and requested/reported model IDs. The agent
-loop, scheduler, tools, and remaining sections
-below are still proposed for M1 and M2.
+loop, scheduler, tools, and remaining sections below are still proposed for M1
+and M2.
 
 ## Agent loop
 
@@ -82,9 +83,11 @@ inference failures needs backoff and a bounded attempt policy.
 ### Authentication
 
 API-key support is the first concrete provider integration, implemented for
-OpenCode Go via `OPENCODE_GO_API_KEY` (Bearer for Chat/Responses/model list,
-`x-api-key` plus `anthropic-version` for Messages). Keys live in the owner's
-credential store and are referenced by opaque account handles. Session
+OpenCode Go via `OPENCODE_GO_API_KEY` and Zen via `OPENCODE_ZEN_API_KEY` (Bearer
+for Chat/Responses/model list, `x-api-key` plus `anthropic-version` for Messages).
+The current clients accept an explicit key or read their own environment
+variable; there is no fallback between gateways. Owner credential storage and
+opaque account handles remain proposed. Session
 exports, batches, logs, and event streams exclude actual secrets.
 
 Supported subscriptions are a separate authentication capability of a provider.

@@ -16,6 +16,8 @@ use std::{fmt, str::FromStr};
 pub enum ProviderId {
     /// OpenCode Go subscription gateway (`OPENCODE_GO_API_KEY`).
     OpencodeGo,
+    /// OpenCode Zen pay-as-you-go gateway (`OPENCODE_ZEN_API_KEY`).
+    OpencodeZen,
     /// Direct OpenAI API integration (future).
     OpenAi,
     /// Direct Anthropic API integration (future).
@@ -30,6 +32,7 @@ impl ProviderId {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpencodeGo => "opencode-go",
+            Self::OpencodeZen => "opencode-zen",
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
             Self::Codex => "codex",
@@ -39,7 +42,13 @@ impl ProviderId {
     /// All providers compiled into this build, in registry order.
     #[must_use]
     pub fn all() -> &'static [Self] {
-        &[Self::OpencodeGo, Self::OpenAi, Self::Anthropic, Self::Codex]
+        &[
+            Self::OpencodeGo,
+            Self::OpencodeZen,
+            Self::OpenAi,
+            Self::Anthropic,
+            Self::Codex,
+        ]
     }
 }
 
@@ -67,6 +76,7 @@ impl FromStr for ProviderId {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "opencode-go" => Ok(Self::OpencodeGo),
+            "opencode-zen" => Ok(Self::OpencodeZen),
             "openai" => Ok(Self::OpenAi),
             "anthropic" => Ok(Self::Anthropic),
             "codex" => Ok(Self::Codex),
@@ -176,6 +186,10 @@ mod tests {
         assert_eq!(parsed.provider(), ProviderId::OpencodeGo);
         assert_eq!(parsed.model(), "glm-5.3-flash");
         assert_eq!(parsed.to_string(), "opencode-go/glm-5.3-flash");
+        let zen: ProviderModelRef = "opencode-zen/claude-sonnet-4-6".parse().unwrap();
+        assert_eq!(zen.provider(), ProviderId::OpencodeZen);
+        assert_eq!(zen.model(), "claude-sonnet-4-6");
+        assert_eq!(zen.to_string(), "opencode-zen/claude-sonnet-4-6");
         assert!("opencode-go/".parse::<ProviderModelRef>().is_err());
         assert!("no-slash".parse::<ProviderModelRef>().is_err());
         assert!("unknown/model".parse::<ProviderModelRef>().is_err());

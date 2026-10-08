@@ -20,8 +20,10 @@ Implemented:
 - A native CLI that checks daemon identity, API version, and capabilities.
 - Human-readable and JSON status output.
 - A daemon/CLI smoke check and a Linux/Windows CI workflow.
+- Runtime-only OpenCode Go and Zen adapters implementing the shared text-only
+  provider interface, with model validation and blocking/SSE inference.
 
-Planned: session persistence, direct model integrations, coding tools, worktrees,
+Planned: session persistence, daemon-owned model execution, coding tools, worktrees,
 batch execution, child tasks, event replay, remote control, additional clients,
 browser tools, and session migration. See the [roadmap](docs/roadmap.md).
 
