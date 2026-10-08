@@ -66,6 +66,10 @@ objects do not acquire SQL connections or HTTP clients. Wire DTOs are translated
 at service boundaries so changes to internal representations do not accidentally
 become protocol changes.
 
+The [shared provider interface](provider-interface.md) develops this boundary
+into a proposed execution contract and a separate public DTO projection, with
+capability discovery and criteria for adapter/client conformance.
+
 A workspace is a source organization choice, not a runtime deployment boundary.
 Several crates still compile into one daemon executable.
 

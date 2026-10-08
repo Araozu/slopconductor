@@ -29,6 +29,12 @@ versions, auth mode, runtime/tool features, and provider capabilities. A healthy
 daemon does not necessarily have an available model credential or admission
 capacity. Clients must distinguish connectivity from readiness to execute.
 
+The [shared provider interface](provider-interface.md) defines the proposed
+provider/account/model-scoped capability descriptors and normalized content,
+usage, errors, and lifecycle facts exposed through these DTOs. Provider SDK
+objects and raw transport events stay inside runtime adapters; every client uses
+the same canonical public surface.
+
 Generated schema files and SDKs are release artifacts. Do not generate an SDK
 from runtime-private structures. Rust clients use `slop-protocol` directly.
 

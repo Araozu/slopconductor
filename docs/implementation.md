@@ -9,7 +9,9 @@ renders human or JSON status. The protocol has no session API yet.
 `slop-core` contains domain identities (including the static provider/model
 identity used by the runtime registry) and `slop-runtime` contains the provider
 registry with the first OpenCode Go integration (model catalog, API-key client,
-blocking and streaming inference, usage reporting). Neither implements an
+non-streaming and streaming inference, usage reporting). A shared object-safe
+`ProviderClient` now covers the text-only one-turn operations, with terminal
+validation, safe diagnostics and optional usage. Neither crate implements an
 agent loop yet. SQLite, session persistence, tool supervision, worktrees, batch
 execution, and peer control are next-stage work.
 
@@ -118,6 +120,12 @@ Acceptance: a second client can reconstruct a session from snapshot/events, and
 a lagging/disconnected client cannot stop unrelated execution.
 
 ## Step 4: one direct provider integration
+
+Use the [shared provider interface](provider-interface.md) as the adapter and
+public-surface contract, including its conformance criteria. The current OpenCode
+Go client implements the shared text-only `ProviderClient` subset; expand it
+toward the target adapter contract. Standalone one-turn operations do not yet
+provide this daemon vertical slice.
 
 Implement provider capability validation and API-key account references. Add a
 direct streaming request adapter and preserve response/tool-call metadata.

@@ -11,6 +11,8 @@
 
 pub mod opencode_go;
 
+use std::{fmt, future::Future, pin::Pin};
+
 use slop_core::provider::{ProviderId, is_valid_model_id};
 use thiserror::Error;
 
@@ -66,10 +68,9 @@ pub struct ProviderModel {
 
 /// Errors for provider configuration, validation, and inference.
 ///
-/// Never contains API keys: keys travel in headers only, upstream body text is
-/// sanitized against the configured key before storage, and is never
-/// interpolated into messages.
-#[derive(Debug, Error)]
+/// Upstream response bodies are never retained in diagnostics. Transport
+/// failures have a fixed display message; their source is runtime-private.
+#[derive(Error)]
 pub enum ProviderError {
     #[error("missing API key: set {env_var}")]
     MissingApiKey { env_var: &'static str },
@@ -79,24 +80,27 @@ pub enum ProviderError {
     InvalidModel { provider: ProviderId, model: String },
     #[error("invalid chat request: {0}")]
     InvalidRequest(&'static str),
-    #[error("provider {provider} returned HTTP {status}: {body}")]
-    UnexpectedStatus {
-        provider: ProviderId,
-        status: u16,
-        /// Sanitized (key-redacted) and truncated upstream excerpt.
-        body: String,
-    },
+    #[error("provider {provider} returned HTTP {status}")]
+    UnexpectedStatus { provider: ProviderId, status: u16 },
     #[error("provider {provider} returned an unrecognized response: {detail}")]
     InvalidResponse {
         provider: ProviderId,
         detail: &'static str,
     },
+    #[error("unsupported provider content or capability: {capability}")]
+    UnsupportedCapability { capability: &'static str },
     #[error("provider {provider} reported a failed turn")]
     TurnFailed { provider: ProviderId },
     #[error("request or response exceeded a bound: {detail}")]
     LimitExceeded { detail: &'static str },
-    #[error("provider request failed: {0}")]
+    #[error("provider transport request failed")]
     Http(#[from] reqwest::Error),
+}
+
+impl fmt::Debug for ProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 
 /// A compiled-in model provider.
@@ -138,6 +142,55 @@ pub fn provider(id: ProviderId) -> Option<&'static dyn Provider> {
         ProviderId::OpencodeGo => Some(OpencodeGoProvider::instance()),
         ProviderId::OpenAi | ProviderId::Anthropic | ProviderId::Codex => None,
     }
+}
+
+/// A provider operation scheduled on the daemon's shared async runtime.
+pub type ProviderFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
+
+/// Shared execution interface for the current, text-only one-turn slice.
+///
+/// The metadata registry and authenticated clients have separate lifetimes.
+/// This object-safe interface lets execution select a client without matching
+/// its concrete integration. Account discovery, structured blocks, cancellation,
+/// and continuation are still proposed in `docs/provider-interface.md`.
+pub trait ProviderClient: Send + Sync {
+    fn descriptor(&self) -> &dyn Provider;
+
+    /// Validate before any inference network access. No automatic fallback.
+    fn validate(&self, request: &ChatRequest) -> Result<WireProtocol, ProviderError> {
+        request.validate()?;
+        let wire = self.descriptor().wire_protocol(&request.model)?;
+        if wire == WireProtocol::AnthropicMessages {
+            // The current adapter accepts one optional leading system message.
+            // Hoisting later instructions or joining messages would change the
+            // supplied context without an explicit conversion policy.
+            if request
+                .messages
+                .iter()
+                .skip(1)
+                .any(|message| message.role == Role::System)
+            {
+                return Err(ProviderError::UnsupportedCapability {
+                    capability: "multiple or non-leading system messages",
+                });
+            }
+            if request.messages.iter().all(|m| m.role == Role::System) {
+                return Err(ProviderError::InvalidRequest(
+                    "messages require a user or assistant turn",
+                ));
+            }
+        }
+        Ok(wire)
+    }
+
+    fn list_models(&self) -> ProviderFuture<'_, Vec<String>>;
+    fn complete<'a>(&'a self, request: &'a ChatRequest) -> ProviderFuture<'a, ChatResponse>;
+    fn complete_streaming<'a>(
+        &'a self,
+        request: &'a ChatRequest,
+        on_delta: &'a mut (dyn FnMut(StreamDelta) + Send),
+    ) -> ProviderFuture<'a, ChatResponse>;
 }
 
 /// Conversation role in a provider-neutral chat request.
@@ -247,12 +300,56 @@ pub fn is_valid_session_id(session: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
-/// Provider-neutral token usage for a completed turn.
+/// Provenance of a known total. Input and output counters are provider-reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageSource {
+    Reported,
+    Derived,
+}
+
+/// Best-known provider-neutral token usage for a turn.
+///
+/// Missing counters remain unknown. Stream updates are cumulative snapshots,
+/// not increments; explicit zero is a known value. Detailed usage counters and
+/// per-counter completeness remain future additions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Usage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub total_tokens: u64,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub total_source: Option<UsageSource>,
+}
+
+impl Usage {
+    #[must_use]
+    pub fn from_reported(input: Option<u64>, output: Option<u64>, total: Option<u64>) -> Self {
+        let derived = input.zip(output).and_then(|(i, o)| i.checked_add(o));
+        Self {
+            input_tokens: input,
+            output_tokens: output,
+            total_tokens: total.or(derived),
+            total_source: if total.is_some() {
+                Some(UsageSource::Reported)
+            } else {
+                derived.map(|_| UsageSource::Derived)
+            },
+        }
+    }
+
+    /// Merge a cumulative provider snapshot without dropping absent fields or
+    /// double-counting repeated updates. Recompute derived totals after changes.
+    pub fn merge(&mut self, seen: Self) {
+        self.input_tokens = seen.input_tokens.or(self.input_tokens);
+        self.output_tokens = seen.output_tokens.or(self.output_tokens);
+        if seen.total_source == Some(UsageSource::Reported) {
+            self.total_tokens = seen.total_tokens;
+            self.total_source = seen.total_source;
+        } else if seen.input_tokens.is_some() || seen.output_tokens.is_some() {
+            let updated = Self::from_reported(self.input_tokens, self.output_tokens, None);
+            self.total_tokens = updated.total_tokens;
+            self.total_source = updated.total_source;
+        }
+    }
 }
 
 /// Provider-neutral terminal outcome for a turn.
@@ -269,7 +366,10 @@ pub enum TurnOutcome {
 /// Provider-neutral completed turn with the recorded usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatResponse {
+    /// Requested model selection. The upstream may resolve an alias differently.
     pub model: String,
+    /// Actual model reported upstream, or unknown when omitted.
+    pub resolved_model: Option<String>,
     pub text: String,
     pub usage: Usage,
     pub wire: WireProtocol,

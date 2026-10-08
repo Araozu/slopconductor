@@ -11,8 +11,10 @@ At M0, `slop-runtime` was an empty boundary crate. The provider registry
 (`slop-runtime::providers`) is now implemented with OpenCode Go as the first
 integration: a static catalog mapping each model to its wire shape (OpenAI
 Chat Completions, OpenAI Responses, or Anthropic Messages), `OPENCODE_GO_API_KEY`
-authentication, live model listing, and blocking plus SSE-streaming inference
-with usage reporting. The agent loop, scheduler, tools, and remaining sections
+authentication, live model listing, and non-streaming plus SSE-streaming inference
+through a shared one-turn `ProviderClient` trait. Responses preserve terminal
+outcomes, optional usage/provenance, and requested/reported model IDs. The agent
+loop, scheduler, tools, and remaining sections
 below are still proposed for M1 and M2.
 
 ## Agent loop
@@ -52,6 +54,13 @@ repeat a side effect. An incomplete provider response remains incomplete even
 if it emitted plausible text or a partial tool-call JSON fragment.
 
 ## Provider boundary
+
+The [shared provider interface](provider-interface.md) specifies the proposed
+runtime operations, capability validation, structured content, terminal outcomes,
+and conformance criteria. It also defines the daemon's mapping to a common public
+surface for every client. The registry `Provider` trait implements metadata;
+`ProviderClient` implements the text-only execution subset. Capability discovery,
+structured blocks, cancellation and the broader public surface remain proposed.
 
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.
