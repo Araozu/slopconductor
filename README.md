@@ -23,6 +23,9 @@ Implemented:
 - Runtime-only OpenCode Go and Zen integrations through the shared
   `ProviderClient` interface, with model discovery and streaming/non-streaming text turns across
   Chat Completions, Responses, and Messages. The daemon does not expose inference.
+- A native headless Codex connection through the same interface, with ChatGPT
+  subscription login, protected credentials and serialized refresh. See the
+  [Codex setup guide](docs/codex-connection.md). Platform API keys are also supported.
 
 Planned: session persistence, daemon-owned model execution, more providers,
 coding tools, worktrees, batch execution, child tasks, event replay, remote

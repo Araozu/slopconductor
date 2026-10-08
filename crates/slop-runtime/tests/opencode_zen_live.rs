@@ -22,7 +22,7 @@ async fn check_wire(model: &str, wire: WireProtocol) {
     let request = ChatRequest {
         model: model.to_owned(),
         messages: vec![ChatMessage::user("Reply with exactly: ok")],
-        max_tokens: 512,
+        max_tokens: Some(512),
         session_id: format!("slop-zen-live-{}", model.replace('.', "-")),
     };
     let blocking = client.complete(&request).await.expect("blocking turn");

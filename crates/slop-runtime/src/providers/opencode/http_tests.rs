@@ -115,7 +115,7 @@ fn request(model: &str) -> ChatRequest {
             },
             ChatMessage::user("next turn"),
         ],
-        max_tokens: 64,
+        max_tokens: Some(64),
         session_id: "fixture-session".to_owned(),
     }
 }

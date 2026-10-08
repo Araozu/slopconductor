@@ -41,9 +41,14 @@ The repository currently contains:
   three wire shapes. Each supplies its own metadata, catalog, and credential
   variable to a [shared internal transport/decoder](../crates/slop-runtime/src/providers/opencode.rs).
   Credentials are supplied explicitly or from the environment.
+- A [headless Codex client](../crates/slop-runtime/src/providers/codex.rs)
+  through the public Responses API, with native ChatGPT subscription login,
+  protected credential records and serialized token refresh. Platform API keys
+  are also supported. See [Codex connection](codex-connection.md) for setup and
+  the implemented restrictions.
 - An object-safe `ProviderClient` execution trait for validation, model listing,
   non-streaming and streaming one-turn inference. Its boxed futures are `Send`
-  and use the shared runtime; both concrete OpenCode clients implement it.
+  and use the shared runtime; all three concrete clients implement it.
 - Small neutral types for string messages, requests, responses, text/reasoning
   deltas, explicit completed/incomplete outcomes, optional token counters with
   total provenance, and separate requested/reported model identifiers.
@@ -62,8 +67,15 @@ UTF-8/SSE framing. HTTP redirects and transport retries are disabled; HTTP error
 bodies are excluded from diagnostics. These changes bring the one-turn subset
 closer to the target contract without claiming a complete daemon execution API.
 
-Direct OpenAI, Anthropic, and Codex identity variants are reserved, with no
-registered implementation. The daemon's only live route remains
+Direct OpenAI and Anthropic identity variants remain reserved. Codex is
+registered alongside OpenCode Go and Zen. Authentication modes are exposed
+through the shared descriptor/client interfaces. `ChatRequest.max_tokens` is
+optional: both OpenCode clients require `Some(limit)`; ChatGPT plan usage
+requires `None` and rejects an explicit cap. Developer messages retain their
+role on Responses/Chat and are rejected for Anthropic Messages. Subscription
+requests reject system messages instead of changing their priority; use an
+explicit developer role. All three clients share the bounded wire decoders.
+The daemon's only live route remains
 `GET /v1/health`; a runtime integration is not evidence of a usable session API.
 
 ### Implemented OpenCode adapters
@@ -547,16 +559,19 @@ non-streaming turns also require reported/derived token usage, while streaming
 turns verify that visible deltas reproduce the assembled text. This verifies the
 runtime adapter; the daemon still exposes only `GET /v1/health`.
 
-Zen live checks remain opt-in and have not been run.
+Zen live checks remain opt-in and have not been run. Codex local HTTP/auth
+fixtures cover both authentication modes, subscription request restrictions,
+loopback login, signed ID tokens, credential storage and refresh rotation. No
+live Codex login or inference was performed; see [Codex connection](codex-connection.md).
 
 | Criteria | Current evidence and remaining gap |
 | --- | --- |
-| C01–C02 | Shared object-safe execution interface, two concrete adapters, the same HTTP fixture consumer for both, and independent client dependencies. A persisted supervisor remains planned. |
+| C01–C02 | Shared object-safe execution interface, three concrete adapters, local HTTP fixture consumers, and independent client dependencies. A persisted supervisor remains planned. |
 | C03–C04 | Static model validation, bounded requests, requested/reported model identities, and rejection of multiple/non-leading Messages system instructions. Account-scoped discovery and general setting descriptors remain planned. |
 | C05–C08 | Text-only parsers reject unsupported structured output, missing/unknown terminal evidence, malformed JSON/UTF-8, contradictory outcomes and post-terminal text. Regression fixtures cover trailing end markers, incomplete stop reasons, multiline framing, and chunk splits. Structured blocks and tool dispatch remain planned. |
 | C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Explicit cancellation commands, supervisor retry budgets, and durable request identities remain planned. |
 | C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Required unsupported continuation is rejected. Detailed counters, per-counter completeness, durable continuation and restart recovery remain planned. |
-| C13–C15 | Common synthetic and HTTP consumers verify both adapters' streaming/non-streaming results, incomplete outcomes, wire translation, and `Send` futures. Separately budgeted Go live checks passed across all three wire shapes through the shared trait; Zen live checks remain opt-in and unverified. Durable replay and public client fixtures remain planned. |
+| C13–C15 | Common synthetic and HTTP consumers verify both adapters' streaming/non-streaming results, incomplete outcomes, wire translation, and `Send` futures. Separately budgeted Go live checks passed across all three wire shapes through the shared trait; Zen and Codex live checks remain opt-in and unverified. Durable replay and public client fixtures remain planned. |
 
 ## Decoder references
 

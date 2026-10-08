@@ -22,7 +22,7 @@ pub enum ProviderId {
     OpenAi,
     /// Direct Anthropic API integration (future).
     Anthropic,
-    /// Codex-style Responses integration with its own session handling (future).
+    /// Headless Codex model access through the public OpenAI Responses API.
     Codex,
 }
 

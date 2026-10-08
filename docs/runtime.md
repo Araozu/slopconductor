@@ -13,10 +13,12 @@ catalogs mapping each executable model to its documented wire shape (OpenAI
 Chat Completions, OpenAI Responses, or Anthropic Messages), `OPENCODE_GO_API_KEY`
 and `OPENCODE_ZEN_API_KEY` authentication, live model listing, and non-streaming
 plus SSE-streaming inference through a shared one-turn `ProviderClient` trait.
-Responses preserve terminal
-outcomes, optional usage/provenance, and requested/reported model IDs. The agent
-loop, scheduler, tools, and remaining sections below are still proposed for M1
-and M2.
+The same interface now includes headless Codex access through the public
+Responses API, with native ChatGPT subscription login or Platform API keys;
+see [Codex connection](codex-connection.md). All three clients share bounded
+wire decoders. Responses preserve terminal outcomes, optional usage/provenance,
+and requested/reported model IDs. The agent loop, scheduler, tools, and remaining
+sections below are still proposed for M1 and M2.
 
 ## Agent loop
 
@@ -95,11 +97,13 @@ They need account selection, token refresh, revocation handling, and usage-limit
 visibility. Do not assume credentials accepted by an official agent client can
 be used in arbitrary inference endpoints.
 
-Official OpenAI documentation currently describes Sign in with ChatGPT plan
-usage for eligible open-source/local apps and direct Responses API inference.
-Evaluate that documented route for this project's own runtime, and recheck
-eligibility before implementation. Paid/hosted products have separate access
-requirements. See the [overview](https://developers.openai.com/siwc/token-sharing-open-source)
+The Codex connection implements the documented Sign in with ChatGPT plan-usage
+flow for eligible open-source/local apps and direct Responses API inference,
+including protected per-account credentials and serialized token refresh.
+Subscription requests require no output-token cap (`max_tokens: None`) and
+preserve explicit developer instruction roles. Broader account selection,
+revocation and quota discovery remain proposed. Paid/hosted products have
+separate access requirements. See the [overview](https://developers.openai.com/siwc/token-sharing-open-source)
 and [inference guide](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
 
 Local-model support can be another provider implementation later. No model

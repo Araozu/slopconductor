@@ -56,7 +56,7 @@ fn request(model: &str) -> ChatRequest {
     ChatRequest {
         model: model.to_owned(),
         messages: vec![ChatMessage::user("fixture prompt")],
-        max_tokens: 64,
+        max_tokens: Some(64),
         session_id: "fixture-session".to_owned(),
     }
 }
@@ -126,6 +126,18 @@ async fn real_and_fixture_clients_reject_invalid_requests_before_dispatch() {
         ));
         assert!(!emitted);
 
+        let mut uncapped = request("glm-5.3-flash");
+        uncapped.max_tokens = None;
+        assert!(matches!(
+            require_send(client.complete(&uncapped)).await,
+            Err(ProviderError::InvalidRequest("max_tokens is required"))
+        ));
+        assert!(matches!(
+            require_send(client.complete_streaming(&uncapped, &mut |_| emitted = true)).await,
+            Err(ProviderError::InvalidRequest("max_tokens is required"))
+        ));
+        assert!(!emitted);
+
         let mut misplaced = request("claude-haiku-5-5");
         misplaced.messages.push(ChatMessage {
             role: Role::System,
@@ -134,6 +146,14 @@ async fn real_and_fixture_clients_reject_invalid_requests_before_dispatch() {
         assert!(matches!(
             client.validate(&misplaced),
             Err(ProviderError::UnsupportedCapability { .. })
+        ));
+
+        misplaced.messages[1].role = Role::Developer;
+        assert!(matches!(
+            client.validate(&misplaced),
+            Err(ProviderError::UnsupportedCapability {
+                capability: "developer messages for Anthropic Messages"
+            })
         ));
     }
 }

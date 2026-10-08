@@ -3,22 +3,29 @@
 //! Each provider is compiled in (no runtime plugins). All providers share the
 //! same shape: a static model catalog mapping every model to one of three wire
 //! protocols (OpenAI Chat Completions, OpenAI Responses, Anthropic Messages),
-//! an API-key credential referenced by environment variable, and a
+//! daemon-owned credentials (API keys or renewable ChatGPT authorization), and a
 //! provider-neutral chat request/response used by the future agent loop.
 //!
-//! Implemented: OpenCode Go (`OPENCODE_GO_API_KEY`) and OpenCode Zen
-//! (`OPENCODE_ZEN_API_KEY`). Reserved for later
-//! milestones: direct OpenAI, Anthropic, and Codex integrations.
+//! Implemented: OpenCode Go (`OPENCODE_GO_API_KEY`), OpenCode Zen
+//! (`OPENCODE_ZEN_API_KEY`), and headless Codex model access (ChatGPT subscription
+//! login or `OPENAI_API_KEY`). Direct OpenAI and Anthropic identities remain reserved.
 
+pub mod chatgpt_auth;
+pub mod codex;
 mod opencode;
 pub mod opencode_go;
 pub mod opencode_zen;
+#[cfg(test)]
+mod test_http;
+mod transport;
+mod wire;
 
 use std::{fmt, future::Future, pin::Pin};
 
 use slop_core::provider::{ProviderId, is_valid_model_id};
 use thiserror::Error;
 
+pub use codex::CodexProvider;
 pub use opencode_go::OpencodeGoProvider;
 pub use opencode_zen::OpencodeZenProvider;
 
@@ -26,8 +33,8 @@ pub use opencode_zen::OpencodeZenProvider;
 ///
 /// OpenCode Go and Zen expose all three under separate gateway base URLs (see
 /// their documented endpoint tables); direct OpenAI
-/// and Anthropic integrations each use their native shape. Codex-style clients
-/// use the Responses shape with their own session header.
+/// and Anthropic integrations each use their native shape. Codex uses the
+/// public Responses API with ChatGPT plan usage or Platform API-key auth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WireProtocol {
     /// `POST {base}/chat/completions` (OpenAI Chat Completions compatible).
@@ -97,6 +104,10 @@ pub enum ProviderError {
     TurnFailed { provider: ProviderId },
     #[error("request or response exceeded a bound: {detail}")]
     LimitExceeded { detail: &'static str },
+    #[error("ChatGPT authentication failed: {detail}")]
+    Authentication { detail: &'static str },
+    #[error("ChatGPT credential storage failed")]
+    CredentialStorage,
     #[error("provider transport request failed")]
     Http(#[from] reqwest::Error),
 }
@@ -107,6 +118,13 @@ impl fmt::Debug for ProviderError {
     }
 }
 
+/// Authentication implemented by a compiled-in adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMode {
+    ApiKey,
+    ChatGptSubscription,
+}
+
 /// A compiled-in model provider.
 pub trait Provider: Send + Sync {
     fn id(&self) -> ProviderId;
@@ -115,6 +133,15 @@ pub trait Provider: Send + Sync {
     /// Environment variable holding this provider's API key.
     fn env_key_var(&self) -> &'static str;
     fn models(&self) -> &'static [ProviderModel];
+
+    fn auth_modes(&self) -> &'static [AuthMode] {
+        &[AuthMode::ApiKey]
+    }
+
+    /// Whether the current integration requires an explicit output-token limit.
+    fn requires_output_limit(&self) -> bool {
+        true
+    }
 
     /// Look up which wire shape serves `model`, rejecting unknown ids.
     fn wire_protocol(&self, model: &str) -> Result<WireProtocol, ProviderError> {
@@ -137,7 +164,7 @@ pub trait Provider: Send + Sync {
 
 /// Look up a compiled-in provider by id.
 ///
-/// OpenCode Go and Zen have runtime integrations; the remaining
+/// OpenCode Go, Zen, and Codex have runtime integrations; the remaining
 /// [`ProviderId`] variants are reserved so callers can match on the same
 /// structure without a plugin mechanism.
 #[must_use]
@@ -145,7 +172,8 @@ pub fn provider(id: ProviderId) -> Option<&'static dyn Provider> {
     match id {
         ProviderId::OpencodeGo => Some(OpencodeGoProvider::instance()),
         ProviderId::OpencodeZen => Some(OpencodeZenProvider::instance()),
-        ProviderId::OpenAi | ProviderId::Anthropic | ProviderId::Codex => None,
+        ProviderId::Codex => Some(CodexProvider::instance()),
+        ProviderId::OpenAi | ProviderId::Anthropic => None,
     }
 }
 
@@ -162,11 +190,27 @@ pub type ProviderFuture<'a, T> =
 pub trait ProviderClient: Send + Sync {
     fn descriptor(&self) -> &dyn Provider;
 
+    fn auth_mode(&self) -> AuthMode {
+        AuthMode::ApiKey
+    }
+
     /// Validate before any inference network access. No automatic fallback.
     fn validate(&self, request: &ChatRequest) -> Result<WireProtocol, ProviderError> {
         request.validate()?;
+        if self.descriptor().requires_output_limit() && request.max_tokens.is_none() {
+            return Err(ProviderError::InvalidRequest("max_tokens is required"));
+        }
         let wire = self.descriptor().wire_protocol(&request.model)?;
         if wire == WireProtocol::AnthropicMessages {
+            if request
+                .messages
+                .iter()
+                .any(|message| message.role == Role::Developer)
+            {
+                return Err(ProviderError::UnsupportedCapability {
+                    capability: "developer messages for Anthropic Messages",
+                });
+            }
             // The current adapter accepts one optional leading system message.
             // Hoisting later instructions or joining messages would change the
             // supplied context without an explicit conversion policy.
@@ -202,6 +246,7 @@ pub trait ProviderClient: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     System,
+    Developer,
     User,
     Assistant,
 }
@@ -211,6 +256,7 @@ impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::System => "system",
+            Self::Developer => "developer",
             Self::User => "user",
             Self::Assistant => "assistant",
         }
@@ -244,10 +290,11 @@ pub struct ChatRequest {
     /// Opaque model id, validated against the provider catalog at send time.
     pub model: String,
     pub messages: Vec<ChatMessage>,
-    /// Upper bound for generated tokens (per-request, not a billing cap).
-    pub max_tokens: u32,
-    /// Stable per-conversation id sent as `x-opencode-session` for routing
-    /// and prompt caching. One conversation keeps one id.
+    /// Optional generated-token limit (not a billing cap). Each authenticated
+    /// adapter validates whether a limit is supported or required.
+    pub max_tokens: Option<u32>,
+    /// Stable per-conversation id for provider routing/cache hints. OpenCode
+    /// sends `x-opencode-session`; Codex sends `prompt_cache_key`.
     pub session_id: String,
 }
 
@@ -284,7 +331,10 @@ impl ChatRequest {
                 detail: "request content exceeds byte bound",
             });
         }
-        if self.max_tokens == 0 || self.max_tokens > Self::MAX_TOKENS_LIMIT {
+        if self
+            .max_tokens
+            .is_some_and(|limit| limit == 0 || limit > Self::MAX_TOKENS_LIMIT)
+        {
             return Err(ProviderError::InvalidRequest("max_tokens is out of range"));
         }
         if !is_valid_session_id(&self.session_id) {
@@ -397,13 +447,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_resolves_opencode_gateways() {
-        for id in [ProviderId::OpencodeGo, ProviderId::OpencodeZen] {
+    fn registry_resolves_implemented_providers() {
+        for id in [
+            ProviderId::OpencodeGo,
+            ProviderId::OpencodeZen,
+            ProviderId::Codex,
+        ] {
             assert_eq!(provider(id).unwrap().id(), id);
         }
         assert!(provider(ProviderId::OpenAi).is_none());
         assert!(provider(ProviderId::Anthropic).is_none());
-        assert!(provider(ProviderId::Codex).is_none());
     }
 
     #[test]
@@ -411,7 +464,7 @@ mod tests {
         let base = ChatRequest {
             model: "glm-5.3-flash".to_owned(),
             messages: vec![ChatMessage::user("hi")],
-            max_tokens: 64,
+            max_tokens: Some(64),
             session_id: "test-session_1".to_owned(),
         };
         base.validate().unwrap();
@@ -423,7 +476,7 @@ mod tests {
         assert!(empty.validate().is_err());
 
         let bad_tokens = ChatRequest {
-            max_tokens: 0,
+            max_tokens: Some(0),
             ..base.clone()
         };
         assert!(bad_tokens.validate().is_err());
@@ -440,7 +493,7 @@ mod tests {
         let base = ChatRequest {
             model: "glm-5.3-flash".to_owned(),
             messages: vec![ChatMessage::user("hi")],
-            max_tokens: 64,
+            max_tokens: Some(64),
             session_id: "s".to_owned(),
         };
         let many = ChatRequest {

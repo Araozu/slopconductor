@@ -1,4 +1,5 @@
-//! Shared native HTTP transport and bounded text decoders for OpenCode gateways.
+//! Shared native HTTP transport for OpenCode gateways and bounded text decoders
+//! reused by all compiled-in provider clients.
 //!
 //! Each adapter supplies its own identity, endpoint, credential variable, and
 //! verified catalog. HTTP redirects/retries are disabled, and upstream error
@@ -374,7 +375,7 @@ impl ProviderClient for OpencodeClient {
 
 /// Decoder failures have no service identity; the transport adds its descriptor.
 #[derive(Debug)]
-enum DecodeError {
+pub(super) enum DecodeError {
     InvalidResponse { detail: &'static str },
     UnsupportedCapability { capability: &'static str },
     TurnFailed,
@@ -382,7 +383,7 @@ enum DecodeError {
 }
 
 impl DecodeError {
-    fn for_provider(self, provider: ProviderId) -> ProviderError {
+    pub(super) fn for_provider(self, provider: ProviderId) -> ProviderError {
         match self {
             Self::InvalidResponse { detail } => ProviderError::InvalidResponse { provider, detail },
             Self::UnsupportedCapability { capability } => {
@@ -394,7 +395,7 @@ impl DecodeError {
     }
 }
 
-fn is_event_stream(response: &reqwest::Response) -> bool {
+pub(super) fn is_event_stream(response: &reqwest::Response) -> bool {
     response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -406,7 +407,7 @@ fn is_event_stream(response: &reqwest::Response) -> bool {
 ///
 /// CR/LF bytes cannot appear inside a multi-byte UTF-8 sequence. Decode only
 /// complete lines, accepting LF, CRLF and CR even across network chunks.
-struct SseStream {
+pub(super) struct SseStream {
     pending: Vec<u8>,
     event_data: Vec<String>,
     event_bytes: usize,
@@ -414,7 +415,7 @@ struct SseStream {
 }
 
 impl SseStream {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             pending: Vec::new(),
             event_data: Vec::new(),
@@ -424,7 +425,7 @@ impl SseStream {
     }
 
     /// Feed one network chunk; dispatch only blank-line-terminated events.
-    fn push(&mut self, chunk: &[u8]) -> Result<Vec<String>, DecodeError> {
+    pub(super) fn push(&mut self, chunk: &[u8]) -> Result<Vec<String>, DecodeError> {
         self.total = self.total.saturating_add(chunk.len());
         if self.total > MAX_STREAM_BYTES {
             return Err(DecodeError::LimitExceeded {
@@ -499,7 +500,7 @@ impl SseStream {
     }
 
     /// EOF cannot dispatch an unterminated event as a completed response.
-    fn finish(&mut self) -> Result<Vec<String>, DecodeError> {
+    pub(super) fn finish(&mut self) -> Result<Vec<String>, DecodeError> {
         let events = self.drain_lines(true)?;
         if self.pending.is_empty() && self.event_data.is_empty() {
             return Ok(events);
@@ -555,7 +556,7 @@ fn to_anthropic_parts(messages: &[super::ChatMessage]) -> (Option<String>, Vec<V
     let mut rest = Vec::new();
     for m in messages {
         match m.role {
-            Role::System => system.push(m.content.clone()),
+            Role::System | Role::Developer => system.push(m.content.clone()),
             Role::User | Role::Assistant => rest.push(serde_json::json!({
                 "role": m.role.as_str(),
                 "content": m.content,
@@ -571,7 +572,7 @@ fn to_anthropic_parts(messages: &[super::ChatMessage]) -> (Option<String>, Vec<V
 }
 
 /// Parse the OpenAI-style model list into advertised ids.
-fn parse_models_list(body: &str) -> Result<Vec<String>, DecodeError> {
+pub(super) fn parse_models_list(body: &str) -> Result<Vec<String>, DecodeError> {
     let value: Value = serde_json::from_str(body).map_err(|_| DecodeError::InvalidResponse {
         detail: "model list is not JSON",
     })?;
@@ -613,7 +614,7 @@ fn invalid_terminal(detail: &'static str) -> DecodeError {
     DecodeError::InvalidResponse { detail }
 }
 
-fn reported_model(value: &Value) -> Result<Option<String>, DecodeError> {
+pub(super) fn reported_model(value: &Value) -> Result<Option<String>, DecodeError> {
     let model = value
         .get("model")
         .or_else(|| {
@@ -657,7 +658,9 @@ fn messages_outcome(stop_reason: Option<&str>) -> Result<TurnOutcome, DecodeErro
 }
 
 /// Parse a Chat Completions response into `(text, usage, outcome)`.
-fn parse_chat_response(body: &Value) -> Result<(String, Usage, TurnOutcome), DecodeError> {
+pub(super) fn parse_chat_response(
+    body: &Value,
+) -> Result<(String, Usage, TurnOutcome), DecodeError> {
     let invalid = |detail| DecodeError::InvalidResponse { detail };
     if has_content(body.get("error")) {
         return Err(DecodeError::TurnFailed);
@@ -692,7 +695,9 @@ fn parse_chat_response(body: &Value) -> Result<(String, Usage, TurnOutcome), Dec
 /// is an error, never an empty success; `incomplete` (usually
 /// `max_output_tokens` too small for the model's reasoning effort) keeps its
 /// reason alongside partial text and usage.
-fn parse_responses_response(body: &Value) -> Result<(String, Usage, TurnOutcome), DecodeError> {
+pub(super) fn parse_responses_response(
+    body: &Value,
+) -> Result<(String, Usage, TurnOutcome), DecodeError> {
     let invalid = |detail| DecodeError::InvalidResponse { detail };
     match body.get("status").and_then(Value::as_str) {
         Some("failed") => {
@@ -747,7 +752,9 @@ fn parse_responses_response(body: &Value) -> Result<(String, Usage, TurnOutcome)
 }
 
 /// Parse an Anthropic Messages response into `(text, usage, outcome)`.
-fn parse_messages_response(body: &Value) -> Result<(String, Usage, TurnOutcome), DecodeError> {
+pub(super) fn parse_messages_response(
+    body: &Value,
+) -> Result<(String, Usage, TurnOutcome), DecodeError> {
     let invalid = |detail| DecodeError::InvalidResponse { detail };
     if body.get("type").and_then(Value::as_str) == Some("error") {
         return Err(DecodeError::TurnFailed);
@@ -933,16 +940,16 @@ fn validate_stream_content(value: &Value, wire: WireProtocol) -> Result<(), Deco
 /// Shared by the async streaming loop and the synchronous test driver so both
 /// enforce the same terminal, error, usage, and bound behavior.
 #[derive(Debug, Default)]
-struct StreamFold {
-    text: String,
-    resolved_model: Option<String>,
-    usage: Usage,
+pub(super) struct StreamFold {
+    pub(super) text: String,
+    pub(super) resolved_model: Option<String>,
+    pub(super) usage: Usage,
     stop_reason: Option<String>,
-    terminal: Option<TurnOutcome>,
+    pub(super) terminal: Option<TurnOutcome>,
 }
 
 impl StreamFold {
-    fn feed(
+    pub(super) fn feed(
         &mut self,
         line: &str,
         wire: WireProtocol,

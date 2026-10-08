@@ -5,7 +5,7 @@ design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
 **Status as of 2026-10-08:** milestone M0 is a repository/bootstrap foundation,
-with runtime-only OpenCode Go and Zen provider integrations added afterward.
+with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The live API contains only the health endpoint. Commands, schemas, and workflows
 marked proposed describe future work.
 
@@ -18,6 +18,7 @@ marked proposed describe future work.
 | [Architecture](architecture.md) | System layers, crate dependencies, and ownership |
 | [Clients](clients.md) | How the CLI, TUI, web, and Electron evolve independently |
 | [Protocol](protocol.md) | Proposed commands, responses, events, and compatibility |
+| [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |
 | [Shared provider interface](provider-interface.md) | Proposed adapter contract, common client surface, and conformance criteria |
 | [Storage](storage.md) | Durable local records, events, artifacts, and recovery |
