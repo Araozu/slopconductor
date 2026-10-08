@@ -22,7 +22,7 @@ fn request(model: &str, text: &str, max_tokens: u32) -> ChatRequest {
     ChatRequest {
         model: model.to_owned(),
         messages: vec![ChatMessage::user(text)],
-        max_tokens,
+        max_tokens: Some(max_tokens),
         session_id: format!("slop-live-{}", model.replace('.', "-")),
     }
 }

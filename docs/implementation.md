@@ -8,8 +8,10 @@ renders human or JSON status. The protocol has no session API yet.
 
 `slop-core` contains domain identities (including the static provider/model
 identity used by the runtime registry) and `slop-runtime` contains the provider
-registry with the first OpenCode Go integration (model catalog, API-key client,
-non-streaming and streaming inference, usage reporting). A shared object-safe
+registry with OpenCode Go and headless Codex integrations (model catalogs,
+authenticated clients, collected/streaming inference, usage reporting). Codex
+adds native ChatGPT registration, signed ID-token validation, protected
+credential storage and serialized renewal; see [Codex connection](codex-connection.md). A shared object-safe
 `ProviderClient` now covers the text-only one-turn operations, with terminal
 validation, safe diagnostics and optional usage. Neither crate implements an
 agent loop yet. SQLite, session persistence, tool supervision, worktrees, batch

@@ -6,12 +6,22 @@ publish.workspace = true
 description = "Native agent execution and scheduling for Slop Conductor"
 
 [dependencies]
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["form"] }
 serde.workspace = true
 serde_json.workspace = true
 slop-core.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync"] }
+
+base64 = "0.23"
+getrandom = "0.4"
+sha2 = "0.10"
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+tempfile = "3"
+
+[dev-dependencies]
+axum.workspace = true
+rsa = "0.9"
 
 [lints]
 workspace = true

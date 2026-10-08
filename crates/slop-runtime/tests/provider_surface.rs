@@ -56,7 +56,7 @@ fn request(model: &str) -> ChatRequest {
     ChatRequest {
         model: model.to_owned(),
         messages: vec![ChatMessage::user("fixture prompt")],
-        max_tokens: 64,
+        max_tokens: Some(64),
         session_id: "fixture-session".to_owned(),
     }
 }

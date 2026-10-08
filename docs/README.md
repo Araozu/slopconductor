@@ -18,6 +18,7 @@ marked proposed describe future work.
 | [Architecture](architecture.md) | System layers, crate dependencies, and ownership |
 | [Clients](clients.md) | How the CLI, TUI, web, and Electron evolve independently |
 | [Protocol](protocol.md) | Proposed commands, responses, events, and compatibility |
+| [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |
 | [Shared provider interface](provider-interface.md) | Proposed adapter contract, common client surface, and conformance criteria |
 | [Storage](storage.md) | Durable local records, events, artifacts, and recovery |

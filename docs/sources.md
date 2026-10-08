@@ -53,14 +53,21 @@ version has been claimed yet.
   documented third-party plan-usage flow and its intended app categories.
 - [Direct model inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference):
   supported Responses API route for the documented plan-usage flow.
+- [Registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in):
+  dynamic client registration, loopback callback, PKCE and ID-token validation.
+- [Accounts and sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions):
+  issued client identity and rotating refresh-token lifecycle.
+- [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations):
+  stream/store requirements and unsupported inference settings.
 - [Codex app-server](https://learn.chatgpt.com/docs/app-server):
   context for official agent integration; this project does not select that
   runtime as its own execution backend.
 
 A documented flow is not a guarantee that every provider, account, app category,
 or deployment is eligible. Store the integration's checked assumptions and
-availability with implementation. The repository contains no provider login or
-inference code yet.
+availability with implementation. The repository implements OpenCode Go inference and a native Codex connection
+using the documented direct ChatGPT plan-usage flow. See
+[Codex connection](codex-connection.md) for checked assumptions and limitations.
 
 ## CI
 

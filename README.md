@@ -20,8 +20,10 @@ Implemented:
 - A native CLI that checks daemon identity, API version, and capabilities.
 - Human-readable and JSON status output.
 - A daemon/CLI smoke check and a Linux/Windows CI workflow.
+- Shared runtime provider clients for OpenCode Go and headless Codex, including
+  [ChatGPT subscription login](docs/codex-connection.md).
 
-Planned: session persistence, direct model integrations, coding tools, worktrees,
+Planned: session persistence, daemon inference endpoints, coding tools, worktrees,
 batch execution, child tasks, event replay, remote control, additional clients,
 browser tools, and session migration. See the [roadmap](docs/roadmap.md).
 

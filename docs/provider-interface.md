@@ -38,9 +38,14 @@ The repository currently contains:
 - A [concrete OpenCode Go client](../crates/slop-runtime/src/providers/opencode_go.rs)
   with live model listing, non-streaming inference, and SSE text streaming over
   three wire shapes. Credentials are supplied explicitly or from the environment.
+- A [headless Codex client](../crates/slop-runtime/src/providers/codex.rs)
+  through the public Responses API, with native ChatGPT subscription login,
+  protected credential records and serialized token refresh. Platform API keys
+  are also supported. See [Codex connection](codex-connection.md) for setup and
+  the implemented restrictions.
 - An object-safe `ProviderClient` execution trait for validation, model listing,
   non-streaming and streaming one-turn inference. Its boxed futures are `Send`
-  and use the shared runtime; the concrete OpenCode Go client implements it.
+  and use the shared runtime; both concrete clients implement it.
 - Small neutral types for string messages, requests, responses, text/reasoning
   deltas, explicit completed/incomplete outcomes, optional token counters with
   total provenance, and separate requested/reported model identifiers.
@@ -59,8 +64,14 @@ UTF-8/SSE framing. HTTP redirects and transport retries are disabled; HTTP error
 bodies are excluded from diagnostics. These changes bring the one-turn subset
 closer to the target contract without claiming a complete daemon execution API.
 
-Direct OpenAI, Anthropic, and Codex identity variants are reserved, with no
-registered implementation. The daemon's only live route remains
+Direct OpenAI and Anthropic identity variants remain reserved. Codex is
+registered alongside OpenCode Go. Authentication modes are exposed through the
+shared descriptor/client interfaces. `ChatRequest.max_tokens` is optional:
+OpenCode Go requires `Some(limit)`; ChatGPT plan usage requires `None` and rejects
+an explicit cap. Developer messages retain their role on Responses/Chat and
+are rejected for Anthropic Messages. Subscription requests reject system
+messages instead of changing their priority; use an explicit developer role.
+The daemon's only live route remains
 `GET /v1/health`; a runtime integration is not evidence of a usable session API.
 
 ## Boundaries and ownership
