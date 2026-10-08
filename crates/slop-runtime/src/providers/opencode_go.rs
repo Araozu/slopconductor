@@ -12,8 +12,8 @@
 //!   (`slopconductor/<version>`) and sends a stable per-conversation
 //!   `x-opencode-session` id for routing and prompt caching.
 //!
-//! Secrets travel in headers only and never appear in errors, logs, or usage
-//! records.
+//! Secrets travel in headers only. Upstream body excerpts stored in errors are
+//! sanitized against the configured key and truncated at a character boundary.
 
 use std::time::Duration;
 
@@ -21,8 +21,8 @@ use serde_json::Value;
 use slop_core::provider::ProviderId;
 
 use super::{
-    ChatRequest, ChatResponse, Provider, ProviderError, ProviderModel, Role, StreamDelta, Usage,
-    WireProtocol, is_valid_session_id,
+    ChatRequest, ChatResponse, Provider, ProviderError, ProviderModel, Role, StreamDelta,
+    TurnOutcome, Usage, WireProtocol, is_valid_session_id,
 };
 
 /// Base URL for all OpenCode Go endpoints.
@@ -35,6 +35,17 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 pub const SESSION_HEADER: &str = "x-opencode-session";
 /// This client's identifier; Go asks clients not to use a generic SDK name.
 pub const USER_AGENT: &str = concat!("slopconductor/", env!("CARGO_PKG_VERSION"));
+
+/// Cap for blocking response bodies, enforced while reading.
+pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+/// Cap for one SSE line; longer lines are rejected instead of buffered.
+pub const MAX_SSE_LINE_BYTES: usize = 256 * 1024;
+/// Cap for assembled streamed text.
+pub const MAX_STREAM_TEXT_BYTES: usize = 1024 * 1024;
+/// Cap for total streamed bytes per request.
+pub const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
+/// Visible length of sanitized upstream excerpts in errors.
+pub const ERROR_EXCERPT_CHARS: usize = 500;
 
 /// Static model catalog from the Go endpoints table.
 ///
@@ -158,6 +169,8 @@ impl Provider for OpencodeGoProvider {
 
 /// Authenticated OpenCode Go client. Owns no execution state; one client can
 /// serve many sessions from the daemon's shared runtime.
+///
+/// Deliberately has no `Debug` impl so the key cannot leak through logs.
 pub struct OpencodeGoClient {
     http: reqwest::Client,
     api_key: String,
@@ -192,6 +205,37 @@ impl OpencodeGoClient {
         }
     }
 
+    /// Replace occurrences of the configured key so reflected credentials
+    /// cannot escape through error text.
+    fn redact(&self, text: &str) -> String {
+        text.replace(&self.api_key, "[REDACTED]")
+    }
+
+    fn status_error(&self, status: u16, body: &str) -> ProviderError {
+        ProviderError::UnexpectedStatus {
+            provider: ProviderId::OpencodeGo,
+            status,
+            body: truncate_text(&self.redact(body), ERROR_EXCERPT_CHARS),
+        }
+    }
+
+    /// Read a response body with a byte cap enforced while reading.
+    async fn read_body_limited(
+        &self,
+        mut response: reqwest::Response,
+    ) -> Result<String, ProviderError> {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
+                return Err(ProviderError::LimitExceeded {
+                    detail: "response body exceeds byte bound",
+                });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     /// Fetch the live model list (`GET /models`). Returns advertised ids.
     pub async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
         let response = self
@@ -201,7 +245,12 @@ impl OpencodeGoClient {
             .header(SESSION_HEADER, "slop-model-discovery")
             .send()
             .await?;
-        check_status(ProviderId::OpencodeGo, response).await
+        let status = response.status();
+        let body = self.read_body_limited(response).await?;
+        if !status.is_success() {
+            return Err(self.status_error(status.as_u16(), &body));
+        }
+        parse_models_list(&body)
     }
 
     /// One blocking inference turn, dispatching on the model's wire shape.
@@ -217,7 +266,8 @@ impl OpencodeGoClient {
     }
 
     /// Streaming inference. Calls `on_delta` per SSE delta and returns the
-    /// assembled turn (text joined from text deltas, best-effort usage).
+    /// assembled turn. EOF before the wire's terminal event is an error, never
+    /// a silent partial success.
     pub async fn complete_streaming(
         &self,
         request: &ChatRequest,
@@ -276,45 +326,61 @@ impl OpencodeGoClient {
         let mut response = req.send().await?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProviderError::UnexpectedStatus {
-                provider: ProviderId::OpencodeGo,
-                status,
-                body: truncate_body(&body),
-            });
+            let body = self.read_body_limited(response).await?;
+            return Err(self.status_error(status, &body));
         }
-        let mut buffer = String::new();
-        let mut text = String::new();
-        let mut usage = Usage::default();
+        if !is_event_stream(&response) {
+            // The gateway answered 200 with plain JSON instead of SSE (it
+            // ignored `stream: true`). Parse it as a blocking turn rather
+            // than failing or misreading it as deltas.
+            let body = self.read_body_limited(response).await?;
+            let value: Value =
+                serde_json::from_str(&body).map_err(|_| ProviderError::InvalidResponse {
+                    provider: ProviderId::OpencodeGo,
+                    detail: "response body is not JSON",
+                })?;
+            return self.blocking_from_value(wire, &request.model, &value);
+        }
+        let mut stream = SseStream::new();
+        let mut fold = StreamFold::default();
         while let Some(chunk) = response.chunk().await? {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some((line, rest)) = split_line(&buffer) {
-                buffer = rest;
-                if let Some(delta) = parse_sse_line(&line, wire) {
-                    if !delta.text.is_empty() {
-                        text.push_str(&delta.text);
-                    }
-                    on_delta(delta);
-                }
-                if let Some(seen) = parse_sse_usage(&line) {
-                    usage = seen;
-                }
+            for line in stream.push(&chunk)? {
+                fold.feed(&line, wire, &mut on_delta)?;
             }
         }
-        if let Some(delta) = parse_sse_line(&buffer, wire) {
-            if !delta.text.is_empty() {
-                text.push_str(&delta.text);
-            }
-            on_delta(delta);
+        for line in stream.finish()? {
+            fold.feed(&line, wire, &mut on_delta)?;
         }
-        if let Some(seen) = parse_sse_usage(&buffer) {
-            usage = seen;
-        }
+        let outcome = fold.terminal.ok_or(ProviderError::InvalidResponse {
+            provider: ProviderId::OpencodeGo,
+            detail: "stream ended before terminal event",
+        })?;
         Ok(ChatResponse {
             model: request.model.clone(),
+            text: fold.text,
+            usage: fold.usage,
+            wire,
+            outcome,
+        })
+    }
+
+    fn blocking_from_value(
+        &self,
+        wire: WireProtocol,
+        model: &str,
+        value: &Value,
+    ) -> Result<ChatResponse, ProviderError> {
+        let (text, usage, outcome) = match wire {
+            WireProtocol::OpenAiChatCompletions => parse_chat_response(value)?,
+            WireProtocol::OpenAiResponses => parse_responses_response(value)?,
+            WireProtocol::AnthropicMessages => parse_messages_response(value)?,
+        };
+        Ok(ChatResponse {
+            model: model.to_owned(),
             text,
             usage,
             wire,
+            outcome,
         })
     }
 
@@ -330,12 +396,13 @@ impl OpencodeGoClient {
                 }),
             )
             .await?;
-        let (text, usage) = parse_chat_response(&body)?;
+        let (text, usage, outcome) = parse_chat_response(&body)?;
         Ok(ChatResponse {
             model: request.model.clone(),
             text,
             usage,
             wire: WireProtocol::OpenAiChatCompletions,
+            outcome,
         })
     }
 
@@ -354,12 +421,13 @@ impl OpencodeGoClient {
                 }),
             )
             .await?;
-        let (text, usage) = parse_responses_response(&body)?;
+        let (text, usage, outcome) = parse_responses_response(&body)?;
         Ok(ChatResponse {
             model: request.model.clone(),
             text,
             usage,
             wire: WireProtocol::OpenAiResponses,
+            outcome,
         })
     }
 
@@ -383,12 +451,13 @@ impl OpencodeGoClient {
                 payload,
             )
             .await?;
-        let (text, usage) = parse_messages_response(&body)?;
+        let (text, usage, outcome) = parse_messages_response(&body)?;
         Ok(ChatResponse {
             model: request.model.clone(),
             text,
             usage,
             wire: WireProtocol::AnthropicMessages,
+            outcome,
         })
     }
 
@@ -413,13 +482,9 @@ impl OpencodeGoClient {
             .send()
             .await?;
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let body = self.read_body_limited(response).await?;
         if !status.is_success() {
-            return Err(ProviderError::UnexpectedStatus {
-                provider: ProviderId::OpencodeGo,
-                status: status.as_u16(),
-                body: truncate_body(&body),
-            });
+            return Err(self.status_error(status.as_u16(), &body));
         }
         serde_json::from_str(&body).map_err(|_| ProviderError::InvalidResponse {
             provider: ProviderId::OpencodeGo,
@@ -435,20 +500,83 @@ fn validate_session(session_id: &str) -> Result<(), ProviderError> {
     Ok(())
 }
 
-async fn check_status(
-    provider: ProviderId,
-    response: reqwest::Response,
-) -> Result<Vec<String>, ProviderError> {
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(ProviderError::UnexpectedStatus {
-            provider,
-            status: status.as_u16(),
-            body: truncate_body(&body),
-        });
+fn is_event_stream(response: &reqwest::Response) -> bool {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|content_type| content_type.contains("text/event-stream"))
+}
+
+/// Byte accumulator for SSE that never splits UTF-8 across decodes.
+///
+/// A `\n` byte (0x0A) cannot appear inside a multi-byte UTF-8 sequence, so
+/// every `\n`-terminated prefix is a valid character boundary. Only complete
+/// lines are decoded; the unterminated tail stays buffered as bytes.
+struct SseStream {
+    pending: Vec<u8>,
+    total: usize,
+}
+
+impl SseStream {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+            total: 0,
+        }
     }
-    parse_models_list(&body)
+
+    /// Feed one network chunk; returns newly completed lines.
+    fn push(&mut self, chunk: &[u8]) -> Result<Vec<String>, ProviderError> {
+        self.total = self.total.saturating_add(chunk.len());
+        if self.total > MAX_STREAM_BYTES {
+            return Err(ProviderError::LimitExceeded {
+                detail: "stream exceeds byte bound",
+            });
+        }
+        self.pending.extend_from_slice(chunk);
+        if self.pending.len() > MAX_STREAM_BYTES {
+            return Err(ProviderError::LimitExceeded {
+                detail: "stream exceeds byte bound",
+            });
+        }
+        self.drain_lines()
+    }
+
+    /// Drain complete lines, rejecting overlong lines instead of buffering
+    /// them without bound.
+    fn drain_lines(&mut self) -> Result<Vec<String>, ProviderError> {
+        let mut lines = Vec::new();
+        while let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
+            let raw: Vec<u8> = self.pending.drain(..=end).collect();
+            if raw.len() > MAX_SSE_LINE_BYTES {
+                return Err(ProviderError::LimitExceeded {
+                    detail: "stream line exceeds byte bound",
+                });
+            }
+            lines.push(String::from_utf8_lossy(&raw).into_owned());
+        }
+        if self.pending.len() > MAX_SSE_LINE_BYTES {
+            return Err(ProviderError::LimitExceeded {
+                detail: "stream line exceeds byte bound",
+            });
+        }
+        Ok(lines)
+    }
+
+    /// Flush the unterminated tail after EOF.
+    fn finish(&mut self) -> Result<Vec<String>, ProviderError> {
+        if self.pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.pending.len() > MAX_SSE_LINE_BYTES {
+            return Err(ProviderError::LimitExceeded {
+                detail: "stream line exceeds byte bound",
+            });
+        }
+        let tail = std::mem::take(&mut self.pending);
+        Ok(vec![String::from_utf8_lossy(&tail).into_owned()])
+    }
 }
 
 /// Translate neutral messages to OpenAI Chat `messages`.
@@ -464,19 +592,27 @@ fn to_openai_messages(messages: &[super::ChatMessage]) -> Vec<Value> {
         .collect()
 }
 
-/// Translate neutral messages to a Responses `input` string.
+/// Translate neutral messages to a Responses `input` value.
 ///
-/// Single user turn passes through unchanged; multi-message context joins as
-/// labeled lines so the model still sees role boundaries.
-fn to_responses_input(messages: &[super::ChatMessage]) -> String {
-    if messages.len() == 1 {
-        return messages[0].content.clone();
+/// A single user turn passes through as a plain string (the shape verified
+/// live). Anything with roles the string form cannot express — system
+/// instructions, assistant history, multi-turn context — becomes the
+/// structured message array so role boundaries survive.
+fn to_responses_input(messages: &[super::ChatMessage]) -> Value {
+    if messages.len() == 1 && messages[0].role == Role::User {
+        return Value::String(messages[0].content.clone());
     }
-    messages
-        .iter()
-        .map(|m| format!("{}: {}", m.role.as_str(), m.content))
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    Value::Array(
+        messages
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "role": m.role.as_str(),
+                    "content": m.content,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Split neutral messages into Anthropic `system` plus `messages`.
@@ -531,8 +667,30 @@ fn parse_models_list(body: &str) -> Result<Vec<String>, ProviderError> {
     Ok(ids)
 }
 
-/// Parse a Chat Completions response into `(text, usage)`.
-fn parse_chat_response(body: &Value) -> Result<(String, Usage), ProviderError> {
+fn incomplete(reason: Option<&str>) -> TurnOutcome {
+    TurnOutcome::Incomplete {
+        reason: reason.unwrap_or("unknown").to_owned(),
+    }
+}
+
+fn chat_outcome(finish_reason: Option<&str>) -> TurnOutcome {
+    match finish_reason {
+        None | Some("stop") => TurnOutcome::Completed,
+        Some("length") => incomplete(Some("max_tokens")),
+        Some(other) => incomplete(Some(other)),
+    }
+}
+
+fn messages_outcome(stop_reason: Option<&str>) -> TurnOutcome {
+    match stop_reason {
+        None | Some("end_turn") | Some("stop_sequence") => TurnOutcome::Completed,
+        Some("max_tokens") => incomplete(Some("max_tokens")),
+        Some(other) => incomplete(Some(other)),
+    }
+}
+
+/// Parse a Chat Completions response into `(text, usage, outcome)`.
+fn parse_chat_response(body: &Value) -> Result<(String, Usage, TurnOutcome), ProviderError> {
     let invalid = |detail| ProviderError::InvalidResponse {
         provider: ProviderId::OpencodeGo,
         detail,
@@ -552,21 +710,31 @@ fn parse_chat_response(body: &Value) -> Result<(String, Usage), ProviderError> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    Ok((text, parse_openai_usage(body)))
+    let finish = choice.get("finish_reason").and_then(Value::as_str);
+    Ok((text, parse_openai_usage(body), chat_outcome(finish)))
 }
 
-/// Parse a Responses response into `(text, usage)`.
+/// Parse a Responses response into `(text, usage, outcome)`.
 ///
 /// Text comes from `message` items' `output_text` parts; reasoning items and
-/// encrypted continuation blobs are intentionally ignored. An `incomplete`
-/// status with an empty `output` array (usually `max_output_tokens` too small
-/// for the model's reasoning effort) yields empty text rather than an error so
-/// the caller can record usage and retry with a larger bound.
-fn parse_responses_response(body: &Value) -> Result<(String, Usage), ProviderError> {
+/// encrypted continuation blobs are intentionally ignored. A `failed` status
+/// is an error, never an empty success; `incomplete` (usually
+/// `max_output_tokens` too small for the model's reasoning effort) keeps its
+/// reason alongside partial text and usage.
+fn parse_responses_response(body: &Value) -> Result<(String, Usage, TurnOutcome), ProviderError> {
     let invalid = |detail| ProviderError::InvalidResponse {
         provider: ProviderId::OpencodeGo,
         detail,
     };
+    match body.get("status").and_then(Value::as_str) {
+        Some("failed") => {
+            return Err(ProviderError::TurnFailed {
+                provider: ProviderId::OpencodeGo,
+            });
+        }
+        Some("completed" | "incomplete") | None => {}
+        Some(_) => return Err(invalid("unexpected responses status")),
+    }
     let output = body
         .get("output")
         .and_then(Value::as_array)
@@ -589,15 +757,28 @@ fn parse_responses_response(body: &Value) -> Result<(String, Usage), ProviderErr
             }
         }
     }
-    Ok((text, parse_openai_usage(body)))
+    let outcome = match body.get("status").and_then(Value::as_str) {
+        Some("incomplete") => incomplete(
+            body.get("incomplete_details")
+                .and_then(|d| d.get("reason"))
+                .and_then(Value::as_str),
+        ),
+        _ => TurnOutcome::Completed,
+    };
+    Ok((text, parse_openai_usage(body), outcome))
 }
 
-/// Parse an Anthropic Messages response into `(text, usage)`.
-fn parse_messages_response(body: &Value) -> Result<(String, Usage), ProviderError> {
+/// Parse an Anthropic Messages response into `(text, usage, outcome)`.
+fn parse_messages_response(body: &Value) -> Result<(String, Usage, TurnOutcome), ProviderError> {
     let invalid = |detail| ProviderError::InvalidResponse {
         provider: ProviderId::OpencodeGo,
         detail,
     };
+    if body.get("type").and_then(Value::as_str) == Some("error") {
+        return Err(ProviderError::TurnFailed {
+            provider: ProviderId::OpencodeGo,
+        });
+    }
     let content = body
         .get("content")
         .and_then(Value::as_array)
@@ -620,6 +801,7 @@ fn parse_messages_response(body: &Value) -> Result<(String, Usage), ProviderErro
         .and_then(|u| u.get("output_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let outcome = messages_outcome(body.get("stop_reason").and_then(Value::as_str));
     Ok((
         text,
         Usage {
@@ -627,6 +809,7 @@ fn parse_messages_response(body: &Value) -> Result<(String, Usage), ProviderErro
             output_tokens: output,
             total_tokens: input.saturating_add(output),
         },
+        outcome,
     ))
 }
 
@@ -654,121 +837,307 @@ fn parse_openai_usage(body: &Value) -> Usage {
     }
 }
 
-/// Split one `\n`-terminated line off the SSE buffer.
-fn split_line(buffer: &str) -> Option<(String, String)> {
-    let end = buffer.find('\n')?;
-    let (line, rest) = buffer.split_at(end + 1);
-    Some((line.to_owned(), rest.to_owned()))
+/// Incremental fold of SSE lines into text, usage, and terminal outcome.
+///
+/// Shared by the async streaming loop and the synchronous test driver so both
+/// enforce the same terminal, error, usage, and bound behavior.
+#[derive(Debug, Default)]
+struct StreamFold {
+    text: String,
+    usage: Usage,
+    stop_reason: Option<String>,
+    terminal: Option<TurnOutcome>,
+}
+
+impl StreamFold {
+    fn feed(
+        &mut self,
+        line: &str,
+        wire: WireProtocol,
+        on_delta: &mut impl FnMut(StreamDelta),
+    ) -> Result<(), ProviderError> {
+        if sse_stream_error(line, wire) {
+            return Err(ProviderError::TurnFailed {
+                provider: ProviderId::OpencodeGo,
+            });
+        }
+        if let Some(reason) = sse_stop_reason(line) {
+            self.stop_reason = Some(reason);
+        }
+        if let Some(delta) = parse_sse_line(line, wire) {
+            if self.text.len().saturating_add(delta.text.len()) > MAX_STREAM_TEXT_BYTES {
+                return Err(ProviderError::LimitExceeded {
+                    detail: "streamed text exceeds byte bound",
+                });
+            }
+            if !delta.text.is_empty() {
+                self.text.push_str(&delta.text);
+            }
+            on_delta(delta);
+        }
+        merge_sse_usage(&mut self.usage, line);
+        if let Some(outcome) = sse_terminal(line, wire, self.stop_reason.as_deref()) {
+            self.terminal = Some(outcome);
+        }
+        Ok(())
+    }
+}
+
+/// Extract one SSE `data:` payload as JSON, if present.
+fn sse_data(line: &str) -> Option<Value> {
+    for raw in line.split('\n') {
+        // `event:` lines carry no payload; only `data:` lines do.
+        if raw.trim_start().starts_with("event:") {
+            continue;
+        }
+        let data = raw
+            .strip_prefix("data:")
+            .map(str::trim)
+            .unwrap_or(raw.trim());
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(data) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Whether one SSE line reports a provider-side failure.
+///
+/// Server error text is deliberately not propagated: the fixed
+/// [`ProviderError::TurnFailed`] carries no upstream excerpt, so reflected
+/// credentials cannot escape through streaming errors either.
+fn sse_stream_error(line: &str, wire: WireProtocol) -> bool {
+    let Some(value) = sse_data(line) else {
+        return false;
+    };
+    match wire {
+        WireProtocol::OpenAiChatCompletions => value.get("error").is_some(),
+        WireProtocol::AnthropicMessages => {
+            value.get("type").and_then(Value::as_str) == Some("error")
+        }
+        WireProtocol::OpenAiResponses => matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("response.failed")
+        ),
+    }
+}
+
+/// Capture a stop/finish reason carried by one SSE line, if any.
+fn sse_stop_reason(line: &str) -> Option<String> {
+    let value = sse_data(line)?;
+    value
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("finish_reason")?
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            value
+                .get("delta")?
+                .get("stop_reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+/// Whether one SSE line is the wire's terminal event, with its outcome.
+fn sse_terminal(line: &str, wire: WireProtocol, stop_reason: Option<&str>) -> Option<TurnOutcome> {
+    if line.trim() == "data: [DONE]" {
+        return Some(TurnOutcome::Completed);
+    }
+    let value = sse_data(line)?;
+    match wire {
+        WireProtocol::OpenAiChatCompletions => {
+            let finish = value
+                .get("choices")?
+                .as_array()?
+                .first()?
+                .get("finish_reason")
+                .and_then(Value::as_str);
+            // A null finish reason marks an in-progress delta, not a terminal
+            // event; only an explicit reason string terminates the stream.
+            finish.is_some().then(|| chat_outcome(finish))
+        }
+        WireProtocol::AnthropicMessages => {
+            if value.get("type").and_then(Value::as_str) == Some("message_stop") {
+                Some(messages_outcome(stop_reason))
+            } else {
+                None
+            }
+        }
+        WireProtocol::OpenAiResponses => match value.get("type").and_then(Value::as_str) {
+            Some("response.completed") => Some(TurnOutcome::Completed),
+            Some("response.incomplete") => Some(incomplete(
+                value
+                    .get("response")?
+                    .get("incomplete_details")?
+                    .get("reason")?
+                    .as_str(),
+            )),
+            _ => None,
+        },
+    }
 }
 
 /// Extract a streaming text/reasoning delta from one SSE line.
 fn parse_sse_line(line: &str, wire: WireProtocol) -> Option<StreamDelta> {
-    for raw in line.split('\n') {
-        let data = raw.strip_prefix("data:").map(str::trim).unwrap_or("");
-        if data.is_empty() || data == "[DONE]" {
-            continue;
+    let value = sse_data(line)?;
+    match wire {
+        WireProtocol::OpenAiChatCompletions => {
+            let delta = value.get("choices")?.as_array()?.first()?.get("delta")?;
+            let text = delta
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let reasoning = delta
+                .get("reasoning_content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if text.is_empty() && reasoning.is_empty() {
+                return None;
+            }
+            Some(StreamDelta { text, reasoning })
         }
-        let value: Value = serde_json::from_str(data).ok()?;
-        match wire {
-            WireProtocol::OpenAiChatCompletions => {
-                let delta = value.get("choices")?.as_array()?.first()?.get("delta")?;
-                let text = delta
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let reasoning = delta
-                    .get("reasoning_content")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                if text.is_empty() && reasoning.is_empty() {
-                    continue;
-                }
-                return Some(StreamDelta { text, reasoning });
+        WireProtocol::AnthropicMessages => {
+            if value.get("type").and_then(Value::as_str) != Some("content_block_delta") {
+                return None;
             }
-            WireProtocol::AnthropicMessages => {
-                if value.get("type").and_then(Value::as_str) != Some("content_block_delta") {
-                    continue;
-                }
-                let text = value
-                    .get("delta")?
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                if text.is_empty() {
-                    continue;
-                }
-                return Some(StreamDelta {
-                    text,
-                    reasoning: String::new(),
-                });
+            let text = value
+                .get("delta")?
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if text.is_empty() {
+                return None;
             }
-            WireProtocol::OpenAiResponses => {
-                if value.get("type").and_then(Value::as_str) != Some("response.output_text.delta") {
-                    continue;
-                }
-                let text = value
-                    .get("delta")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                if text.is_empty() {
-                    continue;
-                }
-                return Some(StreamDelta {
-                    text,
-                    reasoning: String::new(),
-                });
+            Some(StreamDelta {
+                text,
+                reasoning: String::new(),
+            })
+        }
+        WireProtocol::OpenAiResponses => {
+            if value.get("type").and_then(Value::as_str) != Some("response.output_text.delta") {
+                return None;
             }
+            let text = value
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if text.is_empty() {
+                return None;
+            }
+            Some(StreamDelta {
+                text,
+                reasoning: String::new(),
+            })
         }
     }
-    None
 }
 
-/// Extract best-effort usage from one SSE line's terminal event.
-fn parse_sse_usage(line: &str) -> Option<Usage> {
-    for raw in line.split('\n') {
-        let data = raw.strip_prefix("data:").map(str::trim).unwrap_or("");
-        if data.is_empty() || data == "[DONE]" {
-            continue;
-        }
-        let value: Value = serde_json::from_str(data).ok()?;
-        // Chat chunks carry a final `usage`; Anthropic sends `message_delta`
-        // with `usage`; Responses sends `response.completed` with a full body.
-        if let Some(usage) = value.get("usage")
-            && (usage.get("input_tokens").and_then(Value::as_u64).is_some()
-                || usage.get("prompt_tokens").and_then(Value::as_u64).is_some())
+/// Merge best-effort usage from one SSE line into the running totals.
+///
+/// Standard Anthropic streams announce input tokens in `message_start` and
+/// cumulative output in `message_delta`; Chat chunks and Responses terminal
+/// events carry their own `usage`. Nonzero fields win so a later partial
+/// update cannot zero a known count.
+fn merge_sse_usage(usage: &mut Usage, line: &str) {
+    let Some(value) = sse_data(line) else {
+        return;
+    };
+    if value.get("type").and_then(Value::as_str) == Some("message_start") {
+        if let Some(input) = value
+            .get("message")
+            .and_then(|m| m.get("usage"))
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(Value::as_u64)
         {
-            return Some(parse_openai_usage(&value));
+            usage.input_tokens = input;
+            usage.total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
         }
-        if let Some(response) = value.get("response").and_then(|r| r.get("usage")) {
-            let input = response
-                .get("input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let output = response
-                .get("output_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            return Some(Usage {
-                input_tokens: input,
-                output_tokens: output,
-                total_tokens: input.saturating_add(output),
-            });
-        }
+        return;
     }
-    None
+    if let Some(seen) = value.get("usage") {
+        let input = seen
+            .get("input_tokens")
+            .or_else(|| seen.get("prompt_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let output = seen
+            .get("output_tokens")
+            .or_else(|| seen.get("completion_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if input != 0 {
+            usage.input_tokens = input;
+        }
+        if output != 0 {
+            usage.output_tokens = output;
+        }
+        usage.total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
+        return;
+    }
+    if let Some(response) = value.get("response").and_then(|r| r.get("usage")) {
+        let input = response
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let output = response
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if input != 0 {
+            usage.input_tokens = input;
+        }
+        if output != 0 {
+            usage.output_tokens = output;
+        }
+        usage.total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
+    }
 }
 
-fn truncate_body(body: &str) -> String {
-    const LIMIT: usize = 500;
-    let trimmed = body.trim();
-    if trimmed.len() <= LIMIT {
-        return trimmed.to_owned();
+/// Truncate to a character (not byte) boundary so multibyte text cannot panic.
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
     }
-    format!("{}…", trimmed[..LIMIT].trim_end())
+    let end = text
+        .char_indices()
+        .take(max_chars)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    format!("{}…", text[..end].trim_end())
+}
+
+/// Synchronous SSE driver over a complete body, mirroring the async loop's
+/// per-line logic. Used by tests to cover terminal, error, usage, and bound
+/// behavior without HTTP.
+#[cfg(test)]
+fn process_sse_body(
+    body: &str,
+    wire: WireProtocol,
+) -> Result<(String, Usage, TurnOutcome), ProviderError> {
+    let mut stream = SseStream::new();
+    let mut lines = stream.push(body.as_bytes())?;
+    lines.extend(stream.finish()?);
+    let mut fold = StreamFold::default();
+    for line in &lines {
+        fold.feed(line, wire, &mut |_| {})?;
+    }
+    fold.terminal
+        .map(|outcome| (fold.text, fold.usage, outcome))
+        .ok_or(ProviderError::InvalidResponse {
+            provider: ProviderId::OpencodeGo,
+            detail: "stream ended before terminal event",
+        })
 }
 
 #[cfg(test)]
@@ -842,15 +1211,24 @@ mod tests {
     }
 
     #[test]
-    fn provider_errors_never_contain_the_key() {
-        let secret = "oc_sk_test_secret_value";
-        let err = ProviderError::UnexpectedStatus {
-            provider: ProviderId::OpencodeGo,
-            status: 401,
-            body: "unauthorized".to_owned(),
+    fn upstream_errors_redact_a_reflected_key() {
+        let secret = "oc_sk_synthetic_secret_123";
+        let client = OpencodeGoClient::new(secret).expect("client builds");
+        let err = client.status_error(401, &format!("bad key {secret} rejected"));
+        for rendered in [err.to_string(), format!("{err:?}")] {
+            assert!(!rendered.contains(secret), "{rendered}");
+            assert!(rendered.contains("[REDACTED]"), "{rendered}");
         }
-        .to_string();
-        assert!(!err.contains(secret));
+    }
+
+    #[test]
+    fn truncation_stops_at_a_character_boundary() {
+        // Byte 500 lands inside `é`; slicing there would panic.
+        let body = format!("{}{}", "a".repeat(499), "é".repeat(10));
+        let out = truncate_text(&body, 500);
+        assert!(out.starts_with(&"a".repeat(499)));
+        assert!(out.contains('é'));
+        assert!(out.ends_with('…'));
     }
 
     #[test]
@@ -859,13 +1237,34 @@ mod tests {
             "id": "chatcmpl-test",
             "choices": [{
                 "index": 0,
+                "finish_reason": "stop",
                 "message": {"role": "assistant", "content": "Hi there!"},
             }],
             "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
         });
-        let (text, usage) = parse_chat_response(&body).unwrap();
+        let (text, usage, outcome) = parse_chat_response(&body).unwrap();
         assert_eq!(text, "Hi there!");
         assert_eq!(usage.total_tokens, 25);
+        assert_eq!(outcome, TurnOutcome::Completed);
+    }
+
+    #[test]
+    fn chat_length_finish_maps_to_incomplete() {
+        let body = serde_json::json!({
+            "choices": [{
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": null},
+            }],
+            "usage": {"prompt_tokens": 19, "completion_tokens": 32, "total_tokens": 51},
+        });
+        let (text, _, outcome) = parse_chat_response(&body).unwrap();
+        assert_eq!(text, "");
+        assert_eq!(
+            outcome,
+            TurnOutcome::Incomplete {
+                reason: "max_tokens".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -878,32 +1277,76 @@ mod tests {
             }],
             "usage": {"input_tokens": 12, "output_tokens": 175, "total_tokens": 187},
         });
-        let (text, usage) = parse_responses_response(&body).unwrap();
+        let (text, usage, outcome) = parse_responses_response(&body).unwrap();
         assert_eq!(text, "ok");
         assert_eq!(usage.total_tokens, 187);
+        assert_eq!(outcome, TurnOutcome::Completed);
     }
 
     #[test]
-    fn incomplete_responses_yields_empty_text_with_usage() {
+    fn incomplete_responses_keep_reason_with_usage() {
         let body = serde_json::json!({
             "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
             "output": [],
             "usage": {"input_tokens": 14, "output_tokens": 64, "total_tokens": 78},
         });
-        let (text, usage) = parse_responses_response(&body).unwrap();
+        let (text, usage, outcome) = parse_responses_response(&body).unwrap();
         assert_eq!(text, "");
         assert_eq!(usage.total_tokens, 78);
+        assert_eq!(
+            outcome,
+            TurnOutcome::Incomplete {
+                reason: "max_output_tokens".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn failed_responses_are_errors_not_empty_success() {
+        let body = serde_json::json!({"status": "failed", "output": []});
+        assert!(matches!(
+            parse_responses_response(&body),
+            Err(ProviderError::TurnFailed { .. })
+        ));
     }
 
     #[test]
     fn parses_live_messages_shape() {
         let body = serde_json::json!({
+            "stop_reason": "end_turn",
             "content": [{"type": "text", "text": "Hello!"}],
             "usage": {"input_tokens": 18, "output_tokens": 14},
         });
-        let (text, usage) = parse_messages_response(&body).unwrap();
+        let (text, usage, outcome) = parse_messages_response(&body).unwrap();
         assert_eq!(text, "Hello!");
         assert_eq!(usage.total_tokens, 32);
+        assert_eq!(outcome, TurnOutcome::Completed);
+    }
+
+    #[test]
+    fn messages_max_tokens_maps_to_incomplete() {
+        let body = serde_json::json!({
+            "stop_reason": "max_tokens",
+            "content": [{"type": "text", "text": "partial"}],
+            "usage": {"input_tokens": 18, "output_tokens": 64},
+        });
+        let (_, _, outcome) = parse_messages_response(&body).unwrap();
+        assert_eq!(
+            outcome,
+            TurnOutcome::Incomplete {
+                reason: "max_tokens".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn messages_error_envelope_is_a_failure() {
+        let body = serde_json::json!({"type": "error", "error": {"message": "bad"}});
+        assert!(matches!(
+            parse_messages_response(&body),
+            Err(ProviderError::TurnFailed { .. })
+        ));
     }
 
     #[test]
@@ -913,6 +1356,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ids, vec!["glm-5.3-flash", "muse-spark-1.3-contributor"]);
+    }
+
+    #[test]
+    fn responses_input_preserves_roles() {
+        use super::super::{ChatMessage, Role};
+        let single = to_responses_input(&[ChatMessage::user("hi")]);
+        assert_eq!(single, Value::String("hi".to_owned()));
+
+        let multi = to_responses_input(&[
+            ChatMessage {
+                role: Role::System,
+                content: "be brief".to_owned(),
+            },
+            ChatMessage::user("hi"),
+        ]);
+        assert_eq!(
+            multi,
+            serde_json::json!([
+                {"role": "system", "content": "be brief"},
+                {"role": "user", "content": "hi"},
+            ])
+        );
     }
 
     #[test]
@@ -946,6 +1411,107 @@ mod tests {
         assert_eq!(resp.text, "ok");
 
         assert!(parse_sse_line("data: [DONE]\n", WireProtocol::OpenAiChatCompletions).is_none());
+    }
+
+    #[test]
+    fn truncated_streams_are_errors_per_shape() {
+        // No terminal event in any of these bodies.
+        let chat = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n";
+        let err = process_sse_body(chat, WireProtocol::OpenAiChatCompletions).unwrap_err();
+        assert!(matches!(
+            err,
+            ProviderError::InvalidResponse { detail, .. }
+            if detail == "stream ended before terminal event"
+        ));
+
+        let msg = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n";
+        assert!(process_sse_body(msg, WireProtocol::AnthropicMessages).is_err());
+
+        let resp = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n";
+        assert!(process_sse_body(resp, WireProtocol::OpenAiResponses).is_err());
+    }
+
+    #[test]
+    fn in_stream_provider_errors_fail_per_shape() {
+        let chat = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\ndata: {\"error\":{\"message\":\"boom\"}}\n";
+        assert!(matches!(
+            process_sse_body(chat, WireProtocol::OpenAiChatCompletions),
+            Err(ProviderError::TurnFailed { .. })
+        ));
+
+        let msg = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"x\",\"message\":\"boom\"}}\n";
+        assert!(matches!(
+            process_sse_body(msg, WireProtocol::AnthropicMessages),
+            Err(ProviderError::TurnFailed { .. })
+        ));
+
+        let resp = "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{}}\n";
+        assert!(matches!(
+            process_sse_body(resp, WireProtocol::OpenAiResponses),
+            Err(ProviderError::TurnFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn complete_native_sequences_resolve() {
+        let chat = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n";
+        let (text, _, outcome) =
+            process_sse_body(chat, WireProtocol::OpenAiChatCompletions).unwrap();
+        assert_eq!(text, "ok");
+        assert_eq!(outcome, TurnOutcome::Completed);
+
+        let msg = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":18,\"output_tokens\":0}}}\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n",
+        );
+        let (text, usage, outcome) =
+            process_sse_body(msg, WireProtocol::AnthropicMessages).unwrap();
+        assert_eq!(text, "ok");
+        assert_eq!(usage.input_tokens, 18);
+        assert_eq!(usage.output_tokens, 4);
+        assert_eq!(usage.total_tokens, 22);
+        assert_eq!(outcome, TurnOutcome::Completed);
+
+        let resp = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":5,\"total_tokens\":16}}}\n",
+        );
+        let (text, usage, outcome) = process_sse_body(resp, WireProtocol::OpenAiResponses).unwrap();
+        assert_eq!(text, "ok");
+        assert_eq!(usage.total_tokens, 16);
+        assert_eq!(outcome, TurnOutcome::Completed);
+    }
+
+    #[test]
+    fn stream_accumulator_survives_split_unicode() {
+        let line = "data: {\"choices\":[{\"delta\":{\"content\":\"héllo\"}}]}\n";
+        for split in 0..line.len() {
+            let (head, tail) = line.as_bytes().split_at(split);
+            let mut stream = SseStream::new();
+            let mut lines = stream.push(head).unwrap();
+            lines.extend(stream.push(tail).unwrap());
+            lines.extend(stream.finish().unwrap());
+            let joined = lines.concat();
+            assert!(joined.contains("héllo"), "split at {split}");
+        }
+    }
+
+    #[test]
+    fn oversized_stream_line_is_rejected() {
+        let mut stream = SseStream::new();
+        let big = vec![b'x'; MAX_SSE_LINE_BYTES + 1];
+        assert!(matches!(
+            stream.push(&big),
+            Err(ProviderError::LimitExceeded { .. })
+        ));
     }
 
     #[test]

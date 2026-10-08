@@ -58,12 +58,18 @@ async fn live_chat_completions_turn() {
     let Some(client) = live_client() else {
         return;
     };
+    // Reasoning models can spend a small budget on thinking before producing
+    // visible text; 512 tokens leaves room for both.
     let response = client
-        .complete(&request("glm-5.3-flash", "Reply with exactly: ok", 64))
+        .complete(&request("glm-5.3-flash", "Reply with exactly: ok", 512))
         .await
         .expect("chat completion");
     assert!(!response.text.trim().is_empty());
     assert!(response.usage.total_tokens > 0);
+    assert_eq!(
+        response.outcome,
+        slop_runtime::providers::TurnOutcome::Completed
+    );
 }
 
 #[tokio::test]
@@ -100,7 +106,7 @@ async fn live_chat_streaming_assembles_text() {
     let mut deltas = 0;
     let response = client
         .complete_streaming(
-            &request("glm-5.3-flash", "Reply with exactly: ok", 64),
+            &request("glm-5.3-flash", "Reply with exactly: ok", 512),
             |_| deltas += 1,
         )
         .await

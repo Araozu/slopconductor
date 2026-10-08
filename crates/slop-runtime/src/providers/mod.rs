@@ -66,7 +66,8 @@ pub struct ProviderModel {
 
 /// Errors for provider configuration, validation, and inference.
 ///
-/// Never contains API keys: keys travel in headers only and are never
+/// Never contains API keys: keys travel in headers only, upstream body text is
+/// sanitized against the configured key before storage, and is never
 /// interpolated into messages.
 #[derive(Debug, Error)]
 pub enum ProviderError {
@@ -82,6 +83,7 @@ pub enum ProviderError {
     UnexpectedStatus {
         provider: ProviderId,
         status: u16,
+        /// Sanitized (key-redacted) and truncated upstream excerpt.
         body: String,
     },
     #[error("provider {provider} returned an unrecognized response: {detail}")]
@@ -89,6 +91,10 @@ pub enum ProviderError {
         provider: ProviderId,
         detail: &'static str,
     },
+    #[error("provider {provider} reported a failed turn")]
+    TurnFailed { provider: ProviderId },
+    #[error("request or response exceeded a bound: {detail}")]
+    LimitExceeded { detail: &'static str },
     #[error("provider request failed: {0}")]
     Http(#[from] reqwest::Error),
 }
@@ -191,6 +197,11 @@ impl ChatRequest {
     /// Bounds for `max_tokens`: large enough for reasoning models, small
     /// enough to catch misconfiguration before spending budget.
     pub const MAX_TOKENS_LIMIT: u32 = 65_536;
+    /// Cap on turns per request so one oversized context cannot exhaust the
+    /// shared daemon's memory.
+    pub const MAX_MESSAGES: usize = 256;
+    /// Cap on aggregate UTF-8 input bytes per request.
+    pub const MAX_REQUEST_BYTES: usize = 1_000_000;
 
     pub fn validate(&self) -> Result<(), ProviderError> {
         if !is_valid_model_id(&self.model) {
@@ -199,10 +210,21 @@ impl ChatRequest {
         if self.messages.is_empty() {
             return Err(ProviderError::InvalidRequest("messages must not be empty"));
         }
+        if self.messages.len() > Self::MAX_MESSAGES {
+            return Err(ProviderError::LimitExceeded {
+                detail: "too many messages",
+            });
+        }
         if self.messages.iter().any(|m| m.content.is_empty()) {
             return Err(ProviderError::InvalidRequest(
                 "message content must not be empty",
             ));
+        }
+        let bytes: usize = self.messages.iter().map(|m| m.content.len()).sum();
+        if bytes > Self::MAX_REQUEST_BYTES {
+            return Err(ProviderError::LimitExceeded {
+                detail: "request content exceeds byte bound",
+            });
         }
         if self.max_tokens == 0 || self.max_tokens > Self::MAX_TOKENS_LIMIT {
             return Err(ProviderError::InvalidRequest("max_tokens is out of range"));
@@ -233,6 +255,17 @@ pub struct Usage {
     pub total_tokens: u64,
 }
 
+/// Provider-neutral terminal outcome for a turn.
+///
+/// Reasoning models can exhaust `max_tokens` on thinking before producing
+/// visible text; that `Incomplete` state is recorded with the provider's
+/// reason instead of masquerading as success.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnOutcome {
+    Completed,
+    Incomplete { reason: String },
+}
+
 /// Provider-neutral completed turn with the recorded usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatResponse {
@@ -240,6 +273,7 @@ pub struct ChatResponse {
     pub text: String,
     pub usage: Usage,
     pub wire: WireProtocol,
+    pub outcome: TurnOutcome,
 }
 
 /// One streaming delta from an inference request.
@@ -292,5 +326,35 @@ mod tests {
             ..base.clone()
         };
         assert!(bad_session.validate().is_err());
+    }
+
+    #[test]
+    fn chat_request_memory_bounds() {
+        let base = ChatRequest {
+            model: "glm-5.3-flash".to_owned(),
+            messages: vec![ChatMessage::user("hi")],
+            max_tokens: 64,
+            session_id: "s".to_owned(),
+        };
+        let many = ChatRequest {
+            messages: vec![ChatMessage::user("hi"); ChatRequest::MAX_MESSAGES + 1],
+            ..base.clone()
+        };
+        assert!(matches!(
+            many.validate(),
+            Err(ProviderError::LimitExceeded { .. })
+        ));
+
+        let big = ChatRequest {
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: "x".repeat(ChatRequest::MAX_REQUEST_BYTES + 1),
+            }],
+            ..base.clone()
+        };
+        assert!(matches!(
+            big.validate(),
+            Err(ProviderError::LimitExceeded { .. })
+        ));
     }
 }
