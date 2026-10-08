@@ -536,8 +536,18 @@ shared OpenCode implementation, and
 [local HTTP fixtures](../crates/slop-runtime/src/providers/opencode/http_tests.rs)
 exercise both concrete adapters with the same consumer. Live checks also use
 the shared trait and are ignored by default; their documented opt-in command requires a credential and
-names the request/output-token bounds. No live inference was performed for this
-review.
+names the request/output-token bounds.
+
+Live OpenCode Go verification on 2026-10-08 passed all seven opt-in checks using
+the supplied temporary credential through `Box<dyn ProviderClient>`: model discovery and both
+non-streaming and streaming turns for `glm-5.3-flash` (Chat Completions),
+`claude-haiku-5-5` (Messages), and `gpt-6-luna` (Responses). Checks assert the
+requested model, expected wire shape, completed outcome and nonempty text;
+non-streaming turns also require reported/derived token usage, while streaming
+turns verify that visible deltas reproduce the assembled text. This verifies the
+runtime adapter; the daemon still exposes only `GET /v1/health`.
+
+Zen live checks remain opt-in and have not been run.
 
 | Criteria | Current evidence and remaining gap |
 | --- | --- |
@@ -546,7 +556,7 @@ review.
 | C05–C08 | Text-only parsers reject unsupported structured output, missing/unknown terminal evidence, malformed JSON/UTF-8, contradictory outcomes and post-terminal text. Regression fixtures cover trailing end markers, incomplete stop reasons, multiline framing, and chunk splits. Structured blocks and tool dispatch remain planned. |
 | C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Explicit cancellation commands, supervisor retry budgets, and durable request identities remain planned. |
 | C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Required unsupported continuation is rejected. Detailed counters, per-counter completeness, durable continuation and restart recovery remain planned. |
-| C13–C15 | Common synthetic and HTTP consumers verify both adapters' streaming/non-streaming results, incomplete outcomes, wire translation, and `Send` futures. Opt-in Go/Zen live checks are present but were not run for this addition. Durable replay and public client fixtures remain planned. |
+| C13–C15 | Common synthetic and HTTP consumers verify both adapters' streaming/non-streaming results, incomplete outcomes, wire translation, and `Send` futures. Separately budgeted Go live checks passed across all three wire shapes through the shared trait; Zen live checks remain opt-in and unverified. Durable replay and public client fixtures remain planned. |
 
 ## Decoder references
 

@@ -20,12 +20,14 @@ Implemented:
 - A native CLI that checks daemon identity, API version, and capabilities.
 - Human-readable and JSON status output.
 - A daemon/CLI smoke check and a Linux/Windows CI workflow.
-- Runtime-only OpenCode Go and Zen adapters implementing the shared text-only
-  provider interface, with model validation and blocking/SSE inference.
+- Runtime-only OpenCode Go and Zen integrations through the shared
+  `ProviderClient` interface, with model discovery and streaming/non-streaming text turns across
+  Chat Completions, Responses, and Messages. The daemon does not expose inference.
 
-Planned: session persistence, daemon-owned model execution, coding tools, worktrees,
-batch execution, child tasks, event replay, remote control, additional clients,
-browser tools, and session migration. See the [roadmap](docs/roadmap.md).
+Planned: session persistence, daemon-owned model execution, more providers,
+coding tools, worktrees, batch execution, child tasks, event replay, remote
+control, additional clients, browser tools, and session migration. See the
+[roadmap](docs/roadmap.md).
 
 ## Run the bootstrap
 
@@ -71,6 +73,12 @@ python3 scripts/smoke.py
 
 On Windows, use `python` or `py -3` for the smoke script. Python is only a
 development verification dependency.
+
+The [OpenCode Go live checks](crates/slop-runtime/tests/opencode_go_live.rs)
+require `OPENCODE_GO_API_KEY` and an explicit opt-in; normal workspace tests skip
+them. They use the shared provider interface and document their request/token
+bounds. See the [provider conformance review](docs/provider-interface.md#conformance-review-of-the-current-slice)
+for verified behavior and the remaining daemon/API work.
 
 Building the CLI does not build the daemon, its execution layer, or a frontend.
 Browser and Electron projects will have their own builds when introduced.
