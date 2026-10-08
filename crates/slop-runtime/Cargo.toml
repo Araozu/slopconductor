@@ -21,6 +21,7 @@ tempfile = "3"
 
 [dev-dependencies]
 axum.workspace = true
+futures-util.workspace = true
 rsa = "0.9"
 
 [lints]

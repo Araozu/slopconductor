@@ -95,6 +95,7 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "bytes",
+ "form_urlencoded",
  "futures-util",
  "http",
  "http-body",
@@ -110,6 +111,7 @@ dependencies = [
  "serde_core",
  "serde_json",
  "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tower",
@@ -1818,6 +1820,7 @@ name = "slop-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "serde",
  "serde_json",
  "slop-client",
  "slop-protocol",
@@ -1829,7 +1832,9 @@ name = "slop-client"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "getrandom 0.4.3",
  "reqwest",
+ "serde",
  "serde_json",
  "slop-protocol",
  "tempfile",
@@ -1848,11 +1853,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "futures-util",
  "getrandom 0.4.3",
  "rusqlite",
  "rustix",
  "serde",
  "serde_json",
+ "slop-core",
  "slop-protocol",
  "slop-runtime",
  "subtle",
@@ -1875,6 +1882,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
+ "futures-util",
  "getrandom 0.4.3",
  "jsonwebtoken",
  "reqwest",

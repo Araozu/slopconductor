@@ -39,9 +39,12 @@ with multiple asynchronous sessions and supervised tool processes.
 
 The domain contains provider identities and the runtime contains native provider
 adapters. The protocol, daemon, client, and CLI implement health/status plus an
-authenticated persisted node-identity query. The daemon also owns XDG-aware
+authenticated persisted node-identity query, plus the [durable text-chat slice](text-chat.md).
+The daemon also owns XDG-aware
 configuration, an exclusive data-directory lock, a bounded SQLite worker, and
-local API credential initialization. Agent/session execution remains planned.
+local API credential initialization. A bounded native supervisor executes Go
+text turns independently of client lifetime. Tools and general task/run
+orchestration remain planned.
 
 ```mermaid
 flowchart TD
@@ -50,6 +53,7 @@ flowchart TD
     Client --> Protocol
     Daemon[slop-daemon] --> Protocol
     Daemon --> Runtime[slop-runtime]
+    Daemon --> Core[slop-core]
     Runtime --> Core[slop-core]
 ```
 
@@ -120,13 +124,14 @@ with distinct data directories and ports.
 Startup implements configuration validation, private data-directory ownership,
 schema checks/migration, durable identity loading, and private local API token
 publication before readiness. Linux follows XDG config/data directories and
-Windows uses local application data. Registered-project scans and interrupted
-execution handling are later work. It must not implicitly resume every recorded
-command.
+Windows uses local application data. Startup also reconciles in-flight text
+turns as interrupted; queued, undispatched turns remain eligible for admission.
+Registered-project scans are later work. It must not implicitly resume every
+recorded command.
 
 Shutdown handles Ctrl-C and Unix SIGTERM, stops HTTP admissions, and drains the
-database worker under a configured deadline. Active-run checkpointing and tool
-cleanup remain planned. Interrupted thinking will be discarded. Unfinished tool
+database worker under a configured deadline. Chat inference is stopped before
+storage closes. Tool cleanup remains planned. Interrupted thinking is discarded. Unfinished tool
 calls will be failed due to daemon/process failure without restoring or replaying
 them; the agent decides its next action, with uncertain effects disclosed.
 

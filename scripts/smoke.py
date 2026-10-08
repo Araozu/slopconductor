@@ -15,6 +15,8 @@ import time
 import urllib.error
 import urllib.request
 
+from chat_smoke import check_chat_lifecycle
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -152,10 +154,10 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
         health = json.loads(status.stdout)
         if health["service"] != "slopconductor-daemon":
             raise RuntimeError(f"wrong daemon identity: {health}")
-        if health["api_version"] != 1 or health["capabilities"] != ["health", "node"]:
+        if health["api_version"] < 1 or not {"health", "node"}.issubset(health["capabilities"]):
             raise RuntimeError(f"unexpected bootstrap capabilities: {health}")
         human = run([str(cli_binary), "--daemon", endpoint, "status"], env=cli_env)
-        if "Capabilities: health, node" not in human.stdout:
+        if "Capabilities: " not in human.stdout or "health" not in human.stdout or "node" not in human.stdout:
             raise RuntimeError("human-readable status is missing capabilities")
 
         status_code, body = http_json(endpoint + "/v1/node")
@@ -185,7 +187,7 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
             stored_id = database.execute(
                 "SELECT node_id FROM node_identity WHERE singleton = 1"
             ).fetchone()[0]
-        if journal != "wal" or schema_version != 1 or stored_id != node["node_id"]:
+        if journal != "wal" or schema_version != 2 or stored_id != node["node_id"]:
             raise RuntimeError(
                 f"unexpected SQLite state: journal={journal}, schema={schema_version}, node={stored_id}"
             )
@@ -348,7 +350,7 @@ def check_api_mismatch(cli_binary, root):
             [str(cli_binary), "--daemon", "https://example.com", "node"],
             cwd=ROOT, env=env, capture_output=True, text=True, timeout=15
         )
-        if remote_credentials.returncode == 0 or "remote node queries require an explicit --token-file" not in remote_credentials.stderr:
+        if remote_credentials.returncode == 0 or "remote authentication requires an explicit --token-file" not in remote_credentials.stderr:
             raise RuntimeError("CLI silently selected local token-file credentials for a remote endpoint")
     finally:
         server.shutdown()
@@ -382,8 +384,10 @@ def main():
         if remote.returncode == 0 or "only supports loopback" not in remote.stderr:
             raise RuntimeError("bootstrap daemon accepted a non-loopback listener")
 
-    print("Smoke check passed: client boundaries, auth, compatibility, stable identity, "
-          "startup ownership, isolated paths, SQLite settings, and loopback restriction.")
+        check_chat_lifecycle(daemon_binary, cli_binary, root / "durable-chat")
+
+    print("Smoke check passed: bootstrap ownership/authentication, chat durability/replay, "
+          "command idempotency, cancellation, client boundaries, and offline provider execution.")
 
 
 if __name__ == "__main__":

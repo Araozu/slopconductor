@@ -7,12 +7,12 @@ Use HTTP/JSON for commands and queries, with a streaming transport for events.
 The first streaming proposal is NDJSON over HTTP; a WebSocket transport can be
 added without changing event meaning.
 
-**Implemented:** `GET /v1/health` remains anonymous and advertises `health` and
-`node`. `GET /v1/node` requires the local API bearer token and returns
-`NodeResponse { node_id, name, os }`. Node identity is persisted in SQLite.
-Availability/resource fields, sessions, commands, and events remain proposed.
-The node route uses `ErrorResponse { code, message }` for safe authorization
-and storage errors; the larger command error envelope below is still proposed.
+**Implemented:** anonymous health, authenticated node identity, and the
+[text-chat surface](text-chat.md#public-surface): models, sessions, messages,
+history, event replay/follow, and turn inspection/cancellation. The wire structs
+are in `slop_protocol::chat`. Mutations use explicit command IDs and return
+durable acceptance receipts. Errors use `ErrorResponse { code, message }`.
+Resource summaries and the larger command/error envelope below remain proposed.
 
 The native client currently accepts an HTTP(S) origin without path, query,
 fragment, or embedded credentials. It applies connect/request timeouts, avoids
@@ -43,7 +43,13 @@ the same canonical public surface.
 Generated schema files and SDKs are release artifacts. Do not generate an SDK
 from runtime-private structures. Rust clients use `slop-protocol` directly.
 
-## Proposed command envelope
+## Command identity and proposed broader envelope
+
+The implemented text requests carry `command_id` directly, with
+`expected_revision` available on message submission. `CommandReceipt` contains
+the original command/session IDs, optional turn/message IDs, revision, and event
+sequence. SQLite stores a canonical serialized request together with its scope
+and receipt. The envelopes below describe the broader future task API.
 
 Every mutating operation carries an opaque command ID, generated once by the
 caller, and an optional expected entity revision. The owner persists the ID and
@@ -93,14 +99,16 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/health | Implemented: anonymous service identity/capabilities |
 | GET /v1/node | Implemented: authenticated durable node ID, name, and OS; resource summary remains proposed |
 | GET /v1/capabilities | Available tools, providers, settings, and policy capabilities |
-| GET /v1/models | Account-specific available model identifiers |
+| GET /v1/models | Implemented: known Go models and local credential readiness; account entitlement is not probed |
 | GET, POST /v1/projects | Register/list logical projects and local mappings |
 | GET /v1/workspaces | Inspect active worktree and exclusive workspace reservations |
-| GET, POST /v1/sessions | List/create conversations owned by this node |
-| GET /v1/sessions/{id} | Snapshot with revision and event watermark |
-| GET /v1/sessions/{id}/messages | Paginated durable conversation |
-| POST /v1/sessions/{id}/messages | Append or steer an existing active task |
-| GET /v1/sessions/{id}/events | Catch up and optionally follow session events |
+| GET, POST /v1/sessions | Implemented: list/create conversations owned by this node |
+| GET /v1/sessions/{id} | Implemented: snapshot with revision and event watermark |
+| GET /v1/sessions/{id}/messages | Implemented: paginated durable conversation |
+| POST /v1/sessions/{id}/messages | Implemented: accept a user message and queue one text turn |
+| GET /v1/sessions/{id}/events | Implemented: catch up and optionally follow NDJSON session events |
+| GET /v1/turns/{id} | Implemented: text-turn status, message IDs, model, and usage |
+| POST /v1/turns/{id}/cancel | Implemented: durable text-turn cancellation |
 | GET, POST /v1/tasks | List/create queued work, optionally creating a session |
 | GET /v1/tasks/{id} | Goal, status, attempts, and outputs |
 | POST /v1/tasks/{id}/cancel | Request cancellation of pending/active work |
@@ -116,11 +124,17 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET, POST /v1/peers | Configure and inspect trusted peer endpoints |
 | POST /v1/transfers | Future handoff preparation; unavailable before M6 |
 
-Route spelling is a proposal and should stabilize with M1. Listing endpoints
+Routes marked implemented are available now; other spelling is a proposal.
+Listing endpoints
 are paginated and filterable. Task creation returns task/session IDs immediately;
 a run ID appears when an execution attempt is admitted.
 
 ## Event contract
+
+Implemented `EventResponse` contains session ID, sequence, kind, optional
+turn/message IDs, and revision. `EventFrame` is tagged by `type` as `durable`,
+`delta`, or `heartbeat`. Durable events refer to canonical records; deltas do not
+advance the cursor. The richer envelope below remains proposed.
 
 Durable events have an envelope containing event ID, session ID, owner ID,
 ownership epoch, monotonically increasing session sequence, entity revision,
@@ -168,6 +182,10 @@ tool outputs are streamed artifacts or chunk references, with bounded previews.
 
 ## Steering semantics
 
+Text chat currently queues complete user messages in acceptance order, with one
+active turn per session. It does not modify a request already in flight. Explicit
+turn cancellation is supported. The richer steering modes below are proposals.
+
 `append_only` records context without starting work. `queue_for_next_boundary`
 targets the active task and applies the message before an appropriate model turn.
 `interrupt_and_apply` requests interruption, waits for tool reconciliation, and
@@ -199,7 +217,8 @@ do not change daemon ownership.
 
 ## Authentication and remote forwarding
 
-Local bearer-token authentication is implemented for the node query. The daemon
+Local bearer-token authentication is implemented for node and text-chat queries
+and mutations. The daemon
 still binds loopback only. Pairing and authorization for privileged tools remain
 future work. M3 adds authenticated access over Tailscale, with separate
 read/write capabilities. Network membership alone is not the entire application

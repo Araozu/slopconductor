@@ -6,10 +6,13 @@ publish.workspace = true
 description = "Reusable daemon API client for native Slop Conductor frontends"
 
 [dependencies]
+getrandom.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 slop-protocol.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "io-util"] }
 url.workspace = true
 
 [dev-dependencies]

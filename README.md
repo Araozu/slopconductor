@@ -11,33 +11,35 @@ TUI, a browser interface, and an optional Electron desktop interface.
 
 ## Current state
 
-This repository is an **initial scaffold**, not a working coding agent.
-
 Implemented:
 
 - Six separate Rust workspace crates with enforced dependency boundaries.
-- A loopback-only daemon exposing anonymous `GET /v1/health` and authenticated
-  `GET /v1/node`.
+- A loopback-only daemon exposing anonymous health and authenticated node,
+  model, session, message, event, and turn APIs.
 - XDG-aware configuration/data paths, exclusive daemon ownership, SQLite node
   identity with atomic migrations and FULL WAL synchronization, private local
   API credentials, and bounded shutdown.
-- A native CLI that checks service/API compatibility and inspects persistent
-  node identity through the authenticated public API.
+- Durable text chats with atomic command receipts, ordered history/events,
+  visible checkpoints, terminal replies/usage, and restart reconciliation.
+- Daemon-owned OpenCode Go inference with bounded concurrency, one active turn
+  per session, and explicit cancellation. CLI exit leaves accepted work alive.
+- A consumer CLI with interactive and one-shot chat, session inspection,
+  stdin/file prompts, event following, and JSON output through the public API.
 - Human-readable and JSON status output.
 - A daemon/CLI smoke check and a Linux/Windows CI workflow.
-- Runtime-only OpenCode Go and Zen integrations through the shared
+- OpenCode Go and Zen integrations through the shared
   `ProviderClient` interface, with model discovery and streaming/non-streaming text turns across
-  Chat Completions, Responses, and Messages. The daemon does not expose inference.
+  Chat Completions, Responses, and Messages. Go is wired through the daemon;
+  Zen remains a runtime adapter.
 - A native headless Codex connection through the same interface, with ChatGPT
   subscription login, protected credentials and serialized refresh. See the
   [Codex setup guide](docs/codex-connection.md). Platform API keys are also supported.
 
-Planned: session persistence, daemon-owned model execution, more providers,
-coding tools, worktrees, batch execution, child tasks, event replay, remote
+Planned: more daemon provider options, coding tools, worktrees, batch execution, child tasks, remote
 control, additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
 
-## Run the bootstrap
+## Run local text chat
 
 Install a current stable Rust toolchain. The repository requests rustfmt and
 Clippy through `rust-toolchain.toml`.
@@ -53,7 +55,12 @@ In another:
 ```sh
 cargo run -- status
 cargo run -- --json status
-cargo run -- --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
+cargo run -- --json node
+cargo run -- models
+cargo run -- chat --prompt "Reply with a short greeting."
+cargo run -- chat --session SESSION_ID
+cargo run -- --json session history SESSION_ID
+cargo run -- turn cancel TURN_ID
 ```
 
 The CLI is the default workspace member, so plain `cargo build` and `cargo run`
@@ -70,14 +77,29 @@ On Linux, configuration defaults to
 to `$XDG_DATA_HOME/slopconductor` (`~/.local/share/...`). No separate directory
 is added directly under the user's home. Windows uses
 `%LOCALAPPDATA%/slopconductor`. The daemon creates a private local API token at
-`<data-dir>/credentials/local-api-token`. `slop node` requires `--token-file`;
-`SLOP_TOKEN_FILE` can supply it for loopback endpoints.
+`<data-dir>/credentials/local-api-token`. For loopback endpoints the CLI discovers
+that token using the platform data directory; `--token-file` or `SLOP_TOKEN_FILE`
+can override it. Explicit daemon data-directory overrides require the matching
+CLI token-file override. Other origins require an explicit `--token-file`.
+
+Set `OPENCODE_GO_API_KEY` in the daemon's environment to enable inference. The
+CLI does not read provider credentials or call the provider. The default model
+is `opencode-go/glm-5.3-flash`; select another verified Go model with
+`chat --model opencode-go/MODEL`. `--prompt-file PATH` and piped stdin are also
+supported. One-shot chat waits for completion unless `--detach` is supplied.
+Ctrl-C while following detaches; cancellation is an explicit command.
+
+Use `--command-id ID` for a script's stable mutation identity. After uncertain
+delivery, retry the same operation with the same ID and input. Completed history
+survives daemon restart. Interrupted thinking is discarded and in-flight turns
+are marked interrupted without automatically repeating the provider request.
+See [text chat](docs/text-chat.md) for API and recovery details.
 
 `SLOP_LISTEN` and `SLOP_DAEMON_URL` provide the equivalent endpoint settings.
 Use `--config`/`SLOP_CONFIG`, `--data-dir`/`SLOP_DATA_DIR`, and
 `--name`/`SLOP_NODE_NAME` for startup overrides. See the
 [startup guide](docs/daemon-startup-plan.md) for config settings, Windows path
-restrictions, and the accepted future chat durability/recovery rules.
+restrictions, and the chat durability/recovery rules.
 The bootstrap accepts loopback listeners only. Authenticated remote control is a
 planned milestone; requiring Tailscale does not mean that feature is implemented.
 

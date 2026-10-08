@@ -17,8 +17,10 @@ The same interface now includes headless Codex access through the public
 Responses API, with native ChatGPT subscription login or Platform API keys;
 see [Codex connection](codex-connection.md). All three clients share bounded
 wire decoders. Responses preserve terminal outcomes, optional usage/provenance,
-and requested/reported model IDs. The agent loop, scheduler, tools, and remaining
-sections below are still proposed for M1 and M2.
+and requested/reported model IDs. The daemon now composes Go with a bounded
+text-turn supervisor, durable repository port, session serialization, visible
+checkpoints, and cancellation. See [text chat](text-chat.md). Zen/Codex daemon
+selection, structured tools, and the general loop below remain proposed.
 
 ## Agent loop
 
@@ -66,7 +68,9 @@ runtime operations, capability validation, structured content, terminal outcomes
 and conformance criteria. It also defines the daemon's mapping to a common public
 surface for every client. The registry `Provider` trait implements metadata;
 `ProviderClient` implements the text-only execution subset. Capability discovery,
-structured blocks, cancellation and the broader public surface remain proposed.
+structured blocks and the broader public surface remain proposed. The text-chat
+API exposes Go model metadata/local credential readiness, normalized text/usage,
+and durable cancellation; it does not expose raw provider events.
 
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.

@@ -7,17 +7,25 @@ use std::{fmt, path::Path, time::Duration};
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use slop_protocol::{
     API_VERSION, ErrorResponse, HEALTH_PATH, HealthResponse, NODE_PATH, NodeResponse, SERVICE_NAME,
+    chat::{
+        CancelTurnRequest, CommandReceipt, CreateSessionRequest, EventFrame, MessageResponse,
+        ModelResponse, Page, SendMessageRequest, SessionResponse, TurnResponse,
+    },
 };
 use thiserror::Error;
 use url::Url;
 
 const MAX_TOKEN_FILE_BYTES: u64 = 66;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
+const MAX_EVENT_FRAME_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("invalid daemon URL: {0}")]
     InvalidUrl(#[from] url::ParseError),
+    #[error("identifier must contain only ASCII letters, digits, hyphens, or underscores")]
+    InvalidIdentifier,
     #[error("daemon URL must use http or https")]
     UnsupportedScheme,
     #[error("daemon URL must be an origin without a path, query, fragment, or credentials")]
@@ -42,11 +50,22 @@ pub enum ClientError {
     },
     #[error("daemon returned an invalid or oversized response")]
     InvalidResponse,
+    #[error("daemon request body exceeds the configured size limit")]
+    RequestTooLarge,
+    #[error("daemon event stream returned an invalid or oversized frame")]
+    InvalidEventFrame,
+    #[error("could not generate a unique command ID")]
+    CommandId,
+    #[error("daemon event stream was idle beyond its heartbeat deadline")]
+    StreamTimeout,
+    #[error("mutation delivery outcome is unknown: {0}")]
+    DeliveryUncertain(String),
 }
 
 #[derive(Clone)]
 pub struct DaemonClient {
     http: reqwest::Client,
+    stream_http: reqwest::Client,
     endpoint: Url,
     token: Option<HeaderValue>,
 }
@@ -105,9 +124,19 @@ impl DaemonClient {
             .retry(reqwest::retry::never())
             .no_proxy()
             .build()?;
+        // Event streams can legitimately stay open for the whole lifetime of a
+        // client. Keep the connect bound, but do not apply the regular request
+        // timeout to this independent pool.
+        let stream_http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .build()?;
 
         Ok(Self {
             http,
+            stream_http,
             endpoint,
             token,
         })
@@ -155,6 +184,304 @@ impl DaemonClient {
         }
         serde_json::from_slice(&body).map_err(|_| ClientError::InvalidResponse)
     }
+
+    pub fn token_is_configured(&self) -> bool {
+        self.token.is_some()
+    }
+
+    pub async fn create_session(
+        &self,
+        request: &CreateSessionRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.post_json(self.endpoint.join("/v1/sessions")?, request)
+            .await
+    }
+
+    pub async fn list_sessions(
+        &self,
+        after: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<Page<SessionResponse>, ClientError> {
+        self.get_json(query_url(
+            &self.endpoint,
+            "/v1/sessions",
+            after,
+            limit,
+            None,
+        )?)
+        .await
+    }
+
+    pub async fn session(&self, session_id: &str) -> Result<SessionResponse, ClientError> {
+        self.get_json(session_url(&self.endpoint, session_id, None)?)
+            .await
+    }
+
+    pub async fn history(
+        &self,
+        session_id: &str,
+        after: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<Page<MessageResponse>, ClientError> {
+        let mut url = session_url(&self.endpoint, session_id, Some("messages"))?;
+        append_page_query(&mut url, after, limit);
+        self.get_json(url).await
+    }
+
+    pub async fn send_message(
+        &self,
+        session_id: &str,
+        request: &SendMessageRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.post_json(
+            session_url(&self.endpoint, session_id, Some("messages"))?,
+            request,
+        )
+        .await
+    }
+
+    pub async fn events(
+        &self,
+        session_id: &str,
+        after: u64,
+        follow: bool,
+    ) -> Result<EventStream, ClientError> {
+        self.health().await?;
+        let mut url = session_url(&self.endpoint, session_id, Some("events"))?;
+        url.query_pairs_mut()
+            .append_pair("after", &after.to_string())
+            .append_pair("follow", if follow { "true" } else { "false" });
+        let mut request = self.stream_http.get(url);
+        if let Some(token) = &self.token {
+            request = request.header(AUTHORIZATION, token.clone());
+        }
+        let response = request.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_bounded(response).await?;
+            return Err(api_error(status.as_u16(), &body, self.token.as_ref()));
+        }
+        Ok(EventStream {
+            response,
+            buffer: Vec::new(),
+            finished: false,
+        })
+    }
+
+    pub async fn turn(&self, turn_id: &str) -> Result<TurnResponse, ClientError> {
+        self.get_json(id_url(&self.endpoint, "/v1/turns", turn_id, None)?)
+            .await
+    }
+
+    pub async fn cancel_turn(
+        &self,
+        turn_id: &str,
+        request: &CancelTurnRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.post_json(
+            id_url(&self.endpoint, "/v1/turns", turn_id, Some("cancel"))?,
+            request,
+        )
+        .await
+    }
+
+    pub async fn models(&self) -> Result<Vec<ModelResponse>, ClientError> {
+        self.get_json(self.endpoint.join("/v1/models")?).await
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, ClientError> {
+        self.health().await?;
+        let response = self.authorized(self.http.get(url)).send().await?;
+        self.decode_json(response).await
+    }
+
+    async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        url: Url,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let body = serde_json::to_vec(body).map_err(|_| ClientError::InvalidResponse)?;
+        if body.len() > MAX_JSON_BYTES {
+            return Err(ClientError::RequestTooLarge);
+        }
+        self.health().await?;
+        let response = self
+            .authorized(
+                self.http
+                    .post(url)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body),
+            )
+            .send()
+            .await
+            .map_err(|error| ClientError::DeliveryUncertain(error.to_string()))?;
+        let status = response.status();
+        let body =
+            read_bounded_to(response, MAX_JSON_BYTES)
+                .await
+                .map_err(|error| match error {
+                    ClientError::Request(request) => {
+                        ClientError::DeliveryUncertain(request.to_string())
+                    }
+                    other => other,
+                })?;
+        if !status.is_success() {
+            return Err(api_error(status.as_u16(), &body, self.token.as_ref()));
+        }
+        serde_json::from_slice(&body).map_err(|_| {
+            ClientError::DeliveryUncertain(
+                "daemon accepted a mutation but returned an invalid response".to_owned(),
+            )
+        })
+    }
+
+    fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(token) = &self.token {
+            request.header(AUTHORIZATION, token.clone())
+        } else {
+            request
+        }
+    }
+
+    async fn decode_json<T: serde::de::DeserializeOwned>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<T, ClientError> {
+        let status = response.status();
+        let body = read_bounded_to(response, MAX_JSON_BYTES).await?;
+        if !status.is_success() {
+            return Err(api_error(status.as_u16(), &body, self.token.as_ref()));
+        }
+        serde_json::from_slice(&body).map_err(|_| ClientError::InvalidResponse)
+    }
+}
+
+/// A bounded NDJSON decoder for the daemon's reconnectable event endpoint.
+pub struct EventStream {
+    response: reqwest::Response,
+    buffer: Vec<u8>,
+    finished: bool,
+}
+
+impl EventStream {
+    pub async fn next_frame(&mut self) -> Result<Option<EventFrame>, ClientError> {
+        loop {
+            if let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
+                if newline > MAX_EVENT_FRAME_BYTES {
+                    return Err(ClientError::InvalidEventFrame);
+                }
+                let mut line: Vec<u8> = self.buffer.drain(..=newline).collect();
+                line.pop();
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                if line.is_empty() {
+                    continue;
+                }
+                return serde_json::from_slice(&line)
+                    .map(Some)
+                    .map_err(|_| ClientError::InvalidEventFrame);
+            }
+            if self.buffer.len() > MAX_EVENT_FRAME_BYTES {
+                return Err(ClientError::InvalidEventFrame);
+            }
+            if self.finished {
+                return Ok(None);
+            }
+            match tokio::time::timeout(Duration::from_secs(45), self.response.chunk())
+                .await
+                .map_err(|_| ClientError::StreamTimeout)??
+            {
+                Some(chunk) => {
+                    self.buffer.extend_from_slice(&chunk);
+                }
+                None => {
+                    self.finished = true;
+                    if self.buffer.is_empty() {
+                        return Ok(None);
+                    }
+                    let line = std::mem::take(&mut self.buffer);
+                    if line.len() > MAX_EVENT_FRAME_BYTES {
+                        return Err(ClientError::InvalidEventFrame);
+                    }
+                    return serde_json::from_slice(&line)
+                        .map(Some)
+                        .map_err(|_| ClientError::InvalidEventFrame);
+                }
+            }
+        }
+    }
+}
+
+/// Generate one globally unique opaque command identifier. Call once per
+/// intended mutation and reuse its result for any explicit retry.
+pub fn new_command_id() -> Result<String, ClientError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| ClientError::CommandId)?;
+    let mut value = String::with_capacity(32);
+    for byte in bytes {
+        use fmt::Write as _;
+        let _ = write!(&mut value, "{byte:02x}");
+    }
+    Ok(value)
+}
+
+fn session_url(endpoint: &Url, id: &str, suffix: Option<&str>) -> Result<Url, ClientError> {
+    id_url(endpoint, "/v1/sessions", id, suffix)
+}
+
+fn id_url(endpoint: &Url, base: &str, id: &str, suffix: Option<&str>) -> Result<Url, ClientError> {
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(ClientError::InvalidIdentifier);
+    }
+    let mut url = endpoint.join(base)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| ClientError::InvalidOrigin)?;
+        segments.pop_if_empty().push(id);
+        if let Some(suffix) = suffix {
+            segments.push(suffix);
+        }
+    }
+    Ok(url)
+}
+
+fn query_url(
+    endpoint: &Url,
+    path: &str,
+    after: Option<u64>,
+    limit: Option<u32>,
+    extra: Option<(&str, &str)>,
+) -> Result<Url, ClientError> {
+    let mut url = endpoint.join(path)?;
+    {
+        let mut query = url.query_pairs_mut();
+        if let Some(after) = after {
+            query.append_pair("after", &after.to_string());
+        }
+        if let Some(limit) = limit {
+            query.append_pair("limit", &limit.to_string());
+        }
+        if let Some((key, value)) = extra {
+            query.append_pair(key, value);
+        }
+    }
+    Ok(url)
+}
+
+fn append_page_query(url: &mut Url, after: Option<u64>, limit: Option<u32>) {
+    let mut query = url.query_pairs_mut();
+    if let Some(after) = after {
+        query.append_pair("after", &after.to_string());
+    }
+    if let Some(limit) = limit {
+        query.append_pair("limit", &limit.to_string());
+    }
 }
 
 fn read_token_file(path: &Path) -> Result<String, ClientError> {
@@ -193,10 +520,17 @@ fn read_token_file(path: &Path) -> Result<String, ClientError> {
     String::from_utf8(bytes).map_err(|_| ClientError::InvalidTokenFile)
 }
 
-async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, ClientError> {
+async fn read_bounded(response: reqwest::Response) -> Result<Vec<u8>, ClientError> {
+    read_bounded_to(response, MAX_RESPONSE_BYTES).await
+}
+
+async fn read_bounded_to(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ClientError> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
-        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(ClientError::InvalidResponse);
         }
         body.extend_from_slice(&chunk);
@@ -241,7 +575,7 @@ mod tests {
         Json, Router,
         extract::State,
         http::{HeaderMap, StatusCode, header::AUTHORIZATION},
-        routing::get,
+        routing::{any, get},
     };
     use slop_protocol::{API_VERSION, ErrorResponse, HealthResponse, NodeResponse};
 
@@ -292,6 +626,18 @@ mod tests {
                 })),
             )
         }
+        async fn protected(
+            State(state): State<Arc<TestState>>,
+            headers: HeaderMap,
+        ) -> Json<serde_json::Value> {
+            let authorization = headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            state.seen.lock().unwrap().push(authorization);
+            Json(serde_json::json!({}))
+        }
 
         let state = Arc::new(TestState {
             api_version,
@@ -301,6 +647,7 @@ mod tests {
         let app = Router::new()
             .route(HEALTH_PATH, get(health))
             .route(NODE_PATH, get(node))
+            .route("/v1/{*path}", any(protected))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -378,6 +725,164 @@ mod tests {
             Err(ClientError::IncompatibleApi { .. })
         ));
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn all_protected_chat_calls_check_compatibility_before_authentication() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = server(API_VERSION + 1, Arc::clone(&seen), false).await;
+        let file = token_file(TOKEN);
+        let client = DaemonClient::new_with_token_file(&endpoint, file.path()).unwrap();
+        let incompatible = |result: Result<(), ClientError>| {
+            matches!(result, Err(ClientError::IncompatibleApi { .. }))
+        };
+
+        assert!(incompatible(client.models().await.map(|_| ())));
+        assert!(incompatible(
+            client.list_sessions(None, None).await.map(|_| ())
+        ));
+        assert!(incompatible(client.session("session-1").await.map(|_| ())));
+        assert!(incompatible(
+            client.history("session-1", None, None).await.map(|_| ())
+        ));
+        assert!(incompatible(client.turn("turn-1").await.map(|_| ())));
+        assert!(incompatible(
+            client.events("session-1", 0, false).await.map(|_| ())
+        ));
+        assert!(incompatible(
+            client
+                .create_session(&CreateSessionRequest {
+                    command_id: "command-create".into(),
+                    title: None,
+                    provider: "opencode-go".into(),
+                    model: "glm-5.3-flash".into(),
+                    max_tokens: None,
+                })
+                .await
+                .map(|_| ())
+        ));
+        assert!(incompatible(
+            client
+                .send_message(
+                    "session-1",
+                    &SendMessageRequest {
+                        command_id: "command-send".into(),
+                        text: "hello".into(),
+                        expected_revision: None,
+                    }
+                )
+                .await
+                .map(|_| ())
+        ));
+        assert!(incompatible(
+            client
+                .cancel_turn(
+                    "turn-1",
+                    &CancelTurnRequest {
+                        command_id: "command-cancel".into(),
+                    }
+                )
+                .await
+                .map(|_| ())
+        ));
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "protected routes received a credential before compatibility was checked"
+        );
+    }
+
+    #[test]
+    fn chat_identifiers_are_single_safe_path_segments() {
+        let endpoint = Url::parse("http://127.0.0.1:7331").unwrap();
+        let url = session_url(&endpoint, "abc-123_def", Some("messages")).unwrap();
+        assert_eq!(url.path(), "/v1/sessions/abc-123_def/messages");
+        assert!(matches!(
+            session_url(&endpoint, "../other?token=x", Some("messages")),
+            Err(ClientError::InvalidIdentifier)
+        ));
+    }
+
+    async fn chunked_body(chunks: Vec<Vec<u8>>) -> Url {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut part = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let size = socket.read(&mut part).await.unwrap();
+                if size == 0 {
+                    break;
+                }
+                request.extend_from_slice(&part[..size]);
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await.unwrap();
+            for chunk in chunks {
+                socket
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .await
+                    .unwrap();
+                socket.write_all(&chunk).await.unwrap();
+                socket.write_all(b"\r\n").await.unwrap();
+            }
+            socket.write_all(b"0\r\n\r\n").await.unwrap();
+        });
+        Url::parse(&format!("http://{address}/events")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn event_stream_handles_split_utf8_crlf_and_final_partial_frame() {
+        let event = EventFrame::Delta {
+            session_id: "session-1".into(),
+            turn_id: "turn-1".into(),
+            text: "snowman ☃".into(),
+        };
+        let mut first = serde_json::to_vec(&event).unwrap();
+        first.extend_from_slice(b"\r\n");
+        let split = first
+            .windows(3)
+            .position(|window| window == "☃".as_bytes())
+            .unwrap()
+            + 1;
+        let final_frame = serde_json::to_vec(&EventFrame::Heartbeat).unwrap();
+        let url = chunked_body(vec![
+            first[..split].to_vec(),
+            first[split..].to_vec(),
+            final_frame,
+        ])
+        .await;
+        let response = reqwest::Client::new().get(url).send().await.unwrap();
+        let mut stream = EventStream {
+            response,
+            buffer: Vec::new(),
+            finished: false,
+        };
+        match stream.next_frame().await.unwrap().unwrap() {
+            EventFrame::Delta { text, .. } => assert_eq!(text, "snowman ☃"),
+            other => panic!("unexpected frame: {other:?}"),
+        }
+        assert!(matches!(
+            stream.next_frame().await.unwrap(),
+            Some(EventFrame::Heartbeat)
+        ));
+        assert!(stream.next_frame().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn event_stream_rejects_oversized_frames() {
+        let oversized = vec![b'x'; MAX_EVENT_FRAME_BYTES + 1];
+        let url = chunked_body(vec![oversized]).await;
+        let response = reqwest::Client::new().get(url).send().await.unwrap();
+        let mut stream = EventStream {
+            response,
+            buffer: Vec::new(),
+            finished: false,
+        };
+        assert!(matches!(
+            stream.next_frame().await,
+            Err(ClientError::InvalidEventFrame)
+        ));
     }
 
     #[tokio::test]

@@ -1,16 +1,16 @@
 # Daemon startup and chat durability contract
 
-Status: startup foundation implemented, 2026-10-08. The chat transaction and
-recovery rules below are accepted design for subsequent work. The daemon exposes
-health and authenticated node identity; no session store, execution supervisor,
-or tool service exists yet.
+Status: startup foundation and durable text chat implemented, 2026-10-08.
+The daemon exposes health, authenticated node identity, and the
+[text-chat slice](text-chat.md) with its session store and execution supervisor.
+Tools and general task execution remain planned.
 
 ## Implemented scope
 
 Startup implements ownership, configuration, local authentication, bounded
-shutdown, and SQLite initialization for persistent node identity. The transaction
-and recovery contract for future chat execution is defined now; chats and
-automatic resumption remain unimplemented.
+shutdown, and SQLite initialization for persistent node identity and chats.
+Text turns use the transaction and recovery contract below; interrupted thinking
+is not automatically resumed. Tool and artifact parts remain accepted design.
 
 ### Directories
 
@@ -53,6 +53,8 @@ CLI flags take precedence over their environment equivalents:
 | `--data-dir` | `SLOP_DATA_DIR` | Select an absolute private data directory |
 | `--listen` | `SLOP_LISTEN` | Override the loopback listener |
 | `--name` | `SLOP_NODE_NAME` | Override the persisted display name |
+| `--default-model` | `SLOP_DEFAULT_MODEL` | Override the Go model used for new chats |
+| `--provider-base-url` | `SLOP_PROVIDER_BASE_URL` | Select an explicitly trusted provider destination |
 
 All TOML keys are optional; unknown keys are rejected and files are capped at
 64 KiB. The display name is limited to 128 UTF-8 bytes without control characters.
@@ -65,12 +67,16 @@ An omitted name preserves existing identity/name on restart.
 | `database_queue_capacity` | `128` | 1–4096 requests |
 | `database_busy_timeout_ms` | `5000` | 1–60000 ms |
 | `shutdown_timeout_ms` | `10000` | 100–300000 ms |
+| `default_model` | `opencode-go/glm-5.3-flash` | Verified Go catalog model |
+| `max_output_tokens` | `4096` | 1–65536 tokens, frozen in each created session |
+| `execution_concurrency` | `4` | 1–64 concurrent turns globally |
+| `provider_base_url` | Official Go endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
 
 ### Exclusive startup and stable identity
 
 1. Read and validate bounded configuration before admitting requests. Initially
    configure only settings that have implemented behavior: listener, node name,
-   database queue/busy limits, and shutdown deadline.
+   database queue/busy limits, shutdown deadline, and bounded chat settings.
 2. Create the private application data directory and resolve its canonical path.
 3. Hold an exclusive OS-backed lock on `daemon.lock` for the daemon's lifetime,
    before opening/migrating the database or initializing credentials. A second
@@ -138,7 +144,8 @@ slop --json status
 slop --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
 ```
 
-The CLI accepts `SLOP_TOKEN_FILE` for loopback node queries. Other origins require
+The CLI discovers the default token in the platform data directory for loopback
+queries and accepts `SLOP_TOKEN_FILE` as an override. Other origins require
 an explicit `--token-file`, so a changed endpoint does not silently select a
 local credential. `slop status` never sends that token. Client debug/error output
 redacts it, and the token-file client checks service/API compatibility before
@@ -151,11 +158,12 @@ the directory lock. Report an incomplete shutdown instead of claiming every
 write drained. Crash recovery must depend on committed SQLite records, not on
 this shutdown path executing.
 
-## Transaction contract for the following session/runtime work
+## Transaction contract for session/runtime work
 
-This section is a design commitment to guide later implementation. Startup
-foundation alone cannot record chat activity because the repository has no
-session/task execution surface yet.
+The [text-chat slice](text-chat.md) now implements session/message acceptance,
+provider intent, visible checkpoints, terminal outcomes, and cancellation using
+this contract. Structured reasoning/continuation, tools, artifacts, and the
+broader task/run surface remain future work.
 
 | Boundary | Records to commit atomically before advancing |
 | --- | --- |
@@ -172,10 +180,10 @@ publishing them. Repeated command IDs return the original acceptance result;
 different payloads under the same ID conflict. Publish notifications after
 commit; durable replay fills a crash gap between commit and notification.
 
-Use provisional streaming deltas for responsive display. Target partial
-visible-text checkpoints every 250 ms or 16 KiB, with bounded buffers and an
-immediate final commit; benchmark the cadence before treating it as a latency
-guarantee. A crash
+Use provisional streaming deltas for responsive display. The text supervisor
+checks for changed visible content every 250 ms and commits final outcomes
+immediately. Transient frames contain at most 16 KiB of visible text. Benchmark
+the cadence before treating it as a latency guarantee. A crash
 can lose the uncommitted streaming tail. A displayed provisional delta is not
 proof of completion. Interrupted thinking is discarded; do not checkpoint it
 as recoverable completed context. Persist supported completed reasoning with
@@ -196,7 +204,7 @@ effects atomic with a transaction. Record intent before dispatch and the known
 outcome afterward. If persistence fails, do not proceed to another dependent
 tool/model step or acknowledge success.
 
-On a future restart, reuse committed completed steps and reconstruct their next
+On restart, preserve committed completed chat steps and reconstruct their next
 checkpoint. Preserve partial visible text as interrupted and discard interrupted
 thinking. Retain paused/canceled
 states. Queued work with no external operation can be admitted according to the
@@ -209,9 +217,9 @@ that failure result to decide whether to inspect effects or make a new call;
 failed execution does not imply absence of changes. Interrupted thinking is
 discarded rather than restored. A new inference requires an explicit bounded
 policy and may consume quota again.
-Startup restores facts and identifies interruptions; it does not silently resume
-all work. Actual resume commands and supervisor reconciliation arrive with the
-session/runtime slice.
+Startup restores facts and identifies chat interruptions; it does not silently
+resume thinking. Continue a session with a new message. Explicit task/run resume
+commands remain future work.
 
 ## Validation and documentation
 

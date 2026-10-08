@@ -1,8 +1,16 @@
+mod api;
 mod auth;
 mod config;
 mod storage;
 
-use std::{process::ExitCode, sync::Arc, time::Instant};
+use std::{
+    process::ExitCode,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 
 use axum::{
     Json, Router,
@@ -59,19 +67,37 @@ async fn run(args: Args) -> Result<()> {
     )
     .await?;
     let token = auth::LocalToken::from_data_dir(&config.data_dir)?;
-    let state = Arc::new(AppState {
-        store: store.client(),
-        token,
-    });
-
-    // Config validation, exclusive ownership, database initialization, and
-    // credential publication all complete before the listener is opened.
+    let token = Arc::new(token);
+    let store_client = store.client();
+    // Bind first so a port/configuration failure cannot start queued inference
+    // without a service that can acknowledge or observe it.
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
+    let chat_runtime = slop_runtime::chat::start(
+        Arc::new(store_client.clone()),
+        std::env::var(slop_runtime::providers::opencode_go::ENV_KEY_VAR).ok(),
+        config.provider_base_url.clone(),
+        config.execution_concurrency,
+        Some(config.default_model.clone()),
+        Some(config.max_output_tokens),
+    );
+    let accepting = Arc::new(AtomicBool::new(true));
+    let state = Arc::new(api::chat::AppState {
+        store: store_client.clone(),
+        token,
+        runtime: chat_runtime.clone(),
+        accepting: Arc::clone(&accepting),
+        event_subscribers: Arc::new(tokio::sync::Semaphore::new(128)),
+    });
+
+    // Config validation, exclusive ownership, database initialization,
+    // credential publication, runtime startup, and binding complete before
+    // the listener begins serving requests.
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
         .route(NODE_PATH, get(node))
-        .with_state(state);
+        .merge(api::chat::router(Arc::clone(&state.token)))
+        .with_state(state.clone());
     eprintln!("Listening on http://{address}");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -97,6 +123,7 @@ async fn run(args: Args) -> Result<()> {
             false
         },
     };
+    accepting.store(false, Ordering::Release);
     if !server_ended {
         let _ = shutdown_tx.send(());
     }
@@ -119,6 +146,16 @@ async fn run(args: Args) -> Result<()> {
                 server.abort();
                 let _ = server.await;
             }
+        }
+    }
+
+    // Stop provider futures and durably mark interrupted turns before the DB
+    // worker closes. The shared deadline also bounds graceful supervisor drain.
+    match timeout(remaining(deadline), state.runtime.shutdown()).await {
+        Ok(()) => {}
+        Err(_) => {
+            eprintln!("slopd: chat supervisor shutdown deadline elapsed");
+            complete = false;
         }
     }
 
@@ -154,21 +191,24 @@ fn remaining(deadline: Instant) -> std::time::Duration {
     deadline.saturating_duration_since(Instant::now())
 }
 
-struct AppState {
-    store: storage::StoreClient,
-    token: auth::LocalToken,
-}
-
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         service: SERVICE_NAME.to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         api_version: API_VERSION,
-        capabilities: vec!["health".to_owned(), "node".to_owned()],
+        capabilities: vec![
+            "health".to_owned(),
+            "node".to_owned(),
+            "sessions".to_owned(),
+            "text-chat".to_owned(),
+        ],
     })
 }
 
-async fn node(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
+async fn node(
+    State(state): State<Arc<api::chat::AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     if !authorized(&headers, &state.token) {
         return (
             StatusCode::UNAUTHORIZED,

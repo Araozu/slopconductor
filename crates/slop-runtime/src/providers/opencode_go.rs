@@ -147,10 +147,27 @@ pub struct OpencodeGoClient {
 }
 
 impl OpencodeGoClient {
+    /// Validate and normalize a trusted endpoint override. HTTP is loopback-only.
+    pub fn validate_base_url(base_url: &str) -> Result<String, ProviderError> {
+        super::opencode::validate_base_url(base_url)
+    }
+
     /// Build from an explicit API key, never logged or included in diagnostics.
     pub fn new(api_key: &str) -> Result<Self, ProviderError> {
         Ok(Self {
             inner: super::opencode::OpencodeClient::new(OpencodeGoProvider::instance(), api_key)?,
+        })
+    }
+
+    /// Build with an explicitly trusted endpoint override. Plain HTTP is
+    /// accepted only for localhost or a numeric loopback address.
+    pub fn new_with_base_url(api_key: &str, base_url: &str) -> Result<Self, ProviderError> {
+        Ok(Self {
+            inner: super::opencode::OpencodeClient::new_with_base_url(
+                OpencodeGoProvider::instance(),
+                api_key,
+                Some(base_url),
+            )?,
         })
     }
 

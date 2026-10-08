@@ -16,17 +16,30 @@ agent runtime.
 The CLI is both an interactive human entry point and a scriptable control tool.
 It should ship useful local execution before the TUI, web, or Electron exists.
 
-The implemented commands are `slop status` and `slop node`, optionally with
-`--json` and `--daemon`. The node query requires `--token-file` or
-`SLOP_TOKEN_FILE`; status remains anonymous. These work after building/installing
-the CLI or through Cargo:
+The implemented commands are `status`, `node`, `models`, `chat`, `session`
+(list/show/history/send/follow), and `turn` (show/cancel), optionally with
+`--json` and `--daemon`. Status remains anonymous. For loopback endpoints the
+CLI discovers the token in the platform data directory; `--token-file` and
+`SLOP_TOKEN_FILE` override it. Other origins require an explicit token file.
+These work after building/installing the CLI or through Cargo:
 
 ```sh
 cargo run -p slop-cli -- --json status
 cargo run -p slop-cli -- --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
+cargo run -p slop-cli -- chat --prompt "Reply briefly."
+cargo run -p slop-cli -- chat --session SESSION_ID --prompt-file prompt.md
+cargo run -p slop-cli -- --json session history SESSION_ID
+cargo run -p slop-cli -- turn cancel TURN_ID
 ```
 
-The proposed later command groups are:
+Text chat supports interactive input, one-shot prompts, files, and piped stdin.
+One-shot requests follow their accepted turn by default; `--detach` returns its
+receipt immediately. JSON chat emits NDJSON receipts/events/terminal records.
+Closing a client or pressing Ctrl-C while following detaches without canceling.
+`turn cancel` is explicit. Interactive `/exit` exits; `/cancel TURN_ID` submits
+the same cancellation command.
+
+The proposed broader command groups are:
 
 | Group | Examples of responsibilities |
 | --- | --- |
@@ -76,8 +89,9 @@ Windows. Do not depend on shell expansion to create matrices or serialize JSON.
 ## Native client library
 
 `slop-client` owns daemon request/response transport, API compatibility checks,
-structured error interpretation, retry policies for safe operations, and future
-event replay/deduplication helpers. It is UI-agnostic.
+structured error interpretation, bounded NDJSON decoding, and typed chat
+operations. It is UI-agnostic. Clients replay events from durable cursors and
+reconcile canonical messages; they do not repeat inference on reconnect.
 
 A future `slop-tui` depends on this library and the protocol. It need not depend
 on the CLI's argument parser or terminal output renderer. Share domain-neutral

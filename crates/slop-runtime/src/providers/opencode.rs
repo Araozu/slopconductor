@@ -44,11 +44,25 @@ pub(super) struct OpencodeClient {
 impl OpencodeClient {
     /// Build from an explicit key (never logged or included in errors).
     pub fn new(provider: &'static dyn Provider, api_key: &str) -> Result<Self, ProviderError> {
+        Self::new_with_base_url(provider, api_key, None)
+    }
+
+    /// Build with an explicitly trusted base URL, for controlled gateways and
+    /// local provider fixtures. HTTP is limited to loopback hosts.
+    pub fn new_with_base_url(
+        provider: &'static dyn Provider,
+        api_key: &str,
+        base_url: Option<&str>,
+    ) -> Result<Self, ProviderError> {
         if api_key.trim().is_empty() {
             return Err(ProviderError::EmptyApiKey {
                 env_var: provider.env_key_var(),
             });
         }
+        let base_url = match base_url {
+            Some(value) => validate_base_url(value)?,
+            None => provider.base_url().to_owned(),
+        };
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .redirect(reqwest::redirect::Policy::none())
@@ -58,7 +72,7 @@ impl OpencodeClient {
             .build()?;
         Ok(Self {
             provider,
-            base_url: provider.base_url().to_owned(),
+            base_url,
             http,
             api_key: api_key.to_owned(),
         })
@@ -349,6 +363,41 @@ impl OpencodeClient {
             detail: "response body is not JSON",
         })
     }
+}
+
+pub(super) fn validate_base_url(value: &str) -> Result<String, ProviderError> {
+    use std::net::IpAddr;
+
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| ProviderError::InvalidRequest("provider endpoint must be an absolute URL"))?;
+    let host = url.host_str().ok_or(ProviderError::InvalidRequest(
+        "provider endpoint must include a host",
+    ))?;
+    let is_local = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    let authority_has_userinfo = value
+        .split_once("://")
+        .and_then(|(_, remainder)| remainder.split(['/', '?', '#']).next())
+        .is_some_and(|authority| authority.contains('@'));
+    if url.username() != ""
+        || url.password().is_some()
+        || authority_has_userinfo
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || (url.scheme() != "https" && !(url.scheme() == "http" && is_local))
+        || (url.scheme() == "https" && host.is_empty())
+    {
+        return Err(ProviderError::InvalidRequest(
+            "provider endpoint URL is not allowed",
+        ));
+    }
+    let mut base = url.to_string();
+    while base.ends_with('/') {
+        base.pop();
+    }
+    Ok(base)
 }
 
 impl ProviderClient for OpencodeClient {

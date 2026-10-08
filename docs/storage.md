@@ -9,7 +9,8 @@ over a network mount.
 
 The daemon implements a SQLite startup store for node identity, a schema
 migration, an exclusive data-directory lock, and one bounded database worker.
-Session, command, message, tool, and event storage remain planned. The worker
+Schema version 2 adds sessions, text turns, ordered messages, command receipts,
+and semantic events. Tool and artifact storage remain planned. The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,
 and a bounded busy timeout. Node identity and display-name changes commit in a
 transaction before startup is announced.
@@ -25,7 +26,7 @@ linked version and relevant fixes when updating the binding.
 ```text
 <data-dir>/
   daemon.lock               # OS-backed directory ownership lock
-  state.sqlite3             # currently node identity/schema; sessions are planned
+  state.sqlite3             # node identity, sessions, turns, messages, commands, events
   state.sqlite3-wal          # SQLite-managed when WAL is enabled
   state.sqlite3-shm          # SQLite-managed when WAL is enabled
   credentials/
@@ -86,8 +87,9 @@ change local state, and append the resulting durable events. Commit before
 returning an accepted acknowledgement. Publishing committed events can follow
 the transaction; reconnect replay fills any notification gap.
 
-The following session/runtime write protocol is accepted design, not an
-implemented session API. An external tool invocation cannot be atomic with a
+The [text-chat slice](text-chat.md) implements atomic session/message acceptance,
+deduplication, provider intent, visible checkpoints, and terminal outcomes.
+The following tool/artifact protocol remains accepted design. An external tool invocation cannot be atomic with a
 SQLite transaction. Record its intent first, then launch it, then persist the
 known result. On daemon/process failure, an unfinished call is marked failed
 with that cause and any uncertainty about effects. It is not restored or
@@ -138,8 +140,10 @@ At startup, classify work using recorded state:
 | Outgoing committed handoff | Source remains deactivated for that session |
 | Incoming prepared handoff | Do not activate without valid handoff evidence |
 
-These execution recovery behaviors are planned; current startup restores node
-identity only. A future durable outbox for peer replication contains committed
+Current startup restores node identity and chat history, marks running text turns
+interrupted without reissuing inference, and leaves undispatched queued turns
+eligible for admission. Tool, pause, and handoff recovery remain planned.
+A future durable outbox for peer replication contains committed
 application records.
 Its backpressure does not prevent ordinary local execution indefinitely.
 

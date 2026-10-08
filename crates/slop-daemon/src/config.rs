@@ -9,6 +9,8 @@ use std::{
 
 use clap::Args;
 use serde::Deserialize;
+use slop_core::provider::ProviderModelRef;
+use slop_runtime::providers::opencode_go::{MODELS, OpencodeGoClient};
 use thiserror::Error;
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -28,6 +30,12 @@ pub struct StartupArgs {
     /// Persistent application data directory.
     #[arg(long, env = "SLOP_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
+    /// Explicit trusted OpenCode Go-compatible endpoint, mainly for gateways
+    /// operated by the user and controlled local fixtures.
+    #[arg(long, env = "SLOP_PROVIDER_BASE_URL")]
+    pub provider_base_url: Option<String>,
+    #[arg(long, env = "SLOP_DEFAULT_MODEL")]
+    pub default_model: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +46,10 @@ pub struct Config {
     pub database_busy_timeout: Duration,
     pub shutdown_timeout: Duration,
     pub data_dir: PathBuf,
+    pub provider_base_url: Option<String>,
+    pub default_model: String,
+    pub max_output_tokens: u32,
+    pub execution_concurrency: usize,
 }
 
 #[derive(Debug, Error)]
@@ -61,6 +73,10 @@ struct FileConfig {
     database_queue_capacity: Option<usize>,
     database_busy_timeout_ms: Option<u64>,
     shutdown_timeout_ms: Option<u64>,
+    provider_base_url: Option<String>,
+    default_model: Option<String>,
+    max_output_tokens: Option<u32>,
+    execution_concurrency: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -174,6 +190,42 @@ pub fn load_with_environment_and_name(
     let shutdown_timeout_ms = file
         .shutdown_timeout_ms
         .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_MS);
+    let provider_base_url = args.provider_base_url.or(file.provider_base_url);
+    if let Some(base_url) = provider_base_url.as_deref() {
+        OpencodeGoClient::validate_base_url(base_url).map_err(|_| {
+            ConfigError::Invalid("provider_base_url is not an allowed endpoint".into())
+        })?;
+    }
+    let default_model = args
+        .default_model
+        .or(file.default_model)
+        .unwrap_or_else(|| slop_runtime::chat::DEFAULT_MODEL.to_owned());
+    let model_ref = default_model.parse::<ProviderModelRef>().map_err(|_| {
+        ConfigError::Invalid("default_model must be a supported opencode-go/model id".into())
+    })?;
+    if model_ref.provider().as_str() != "opencode-go"
+        || !MODELS.iter().any(|model| model.id == model_ref.model())
+    {
+        return Err(ConfigError::Invalid(
+            "default_model must be in the OpenCode Go catalog".into(),
+        ));
+    }
+    let max_output_tokens = file
+        .max_output_tokens
+        .unwrap_or(slop_runtime::chat::DEFAULT_OUTPUT_TOKENS);
+    if !(1..=65_536).contains(&max_output_tokens) {
+        return Err(ConfigError::Invalid(
+            "max_output_tokens must be between 1 and 65536".into(),
+        ));
+    }
+    let execution_concurrency = file
+        .execution_concurrency
+        .unwrap_or(slop_runtime::chat::DEFAULT_CONCURRENCY);
+    if !(1..=64).contains(&execution_concurrency) {
+        return Err(ConfigError::Invalid(
+            "execution_concurrency must be between 1 and 64".into(),
+        ));
+    }
     if !(1..=4_096).contains(&queue_capacity) {
         return Err(ConfigError::Invalid(
             "database_queue_capacity must be between 1 and 4096".into(),
@@ -206,6 +258,10 @@ pub fn load_with_environment_and_name(
         database_busy_timeout: Duration::from_millis(busy_timeout_ms),
         shutdown_timeout: Duration::from_millis(shutdown_timeout_ms),
         data_dir,
+        provider_base_url,
+        default_model,
+        max_output_tokens,
+        execution_concurrency,
     })
 }
 
@@ -307,6 +363,8 @@ mod tests {
                 listen: None,
                 config: None,
                 data_dir: None,
+                provider_base_url: None,
+                default_model: None,
             },
             &env,
         )
@@ -320,6 +378,8 @@ mod tests {
                 listen: None,
                 config: None,
                 data_dir: Some("relative".into()),
+                provider_base_url: None,
+                default_model: None,
             },
             &env,
         )
@@ -337,7 +397,9 @@ mod tests {
                 StartupArgs {
                     listen: None,
                     config: Some(missing),
-                    data_dir: None
+                    data_dir: None,
+                    provider_base_url: None,
+                    default_model: None
                 },
                 &environment
             )
@@ -350,7 +412,9 @@ mod tests {
                 StartupArgs {
                     listen: None,
                     config: Some(config_path),
-                    data_dir: None
+                    data_dir: None,
+                    provider_base_url: None,
+                    default_model: None
                 },
                 &environment
             )
@@ -369,6 +433,8 @@ mod tests {
                 listen: None,
                 config: Some(config_path),
                 data_dir: Some(temp.path().join("data")),
+                provider_base_url: None,
+                default_model: None,
             },
             &environment,
         )
@@ -387,7 +453,9 @@ mod tests {
                     StartupArgs {
                         listen: None,
                         config: None,
-                        data_dir: None
+                        data_dir: None,
+                        provider_base_url: None,
+                        default_model: None
                     },
                     &environment
                 )

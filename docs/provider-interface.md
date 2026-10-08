@@ -103,7 +103,9 @@ they use Messages on Go. The adapter keeps these mappings separate. Advertised
 IDs outside the execution catalog remain visible in `list_models`, but fail
 validation before dispatch. Zen's Gemini/Google and Jev/System One formats are
 unsupported. Account-scoped capabilities, tools, structured output,
-continuation, cancellation, and public daemon execution remain proposed.
+continuation, and Zen daemon execution remain proposed. Go now supplies the
+daemon's [durable text-chat slice](text-chat.md), including cancellation and
+public history/event replay.
 
 Local HTTP fixtures exercise both adapters through `dyn ProviderClient` across
 all three wires, including terminal/incomplete results, auth and session
@@ -562,8 +564,10 @@ non-streaming and streaming turns for `glm-5.3-flash` (Chat Completions),
 requested model, expected wire shape, completed outcome and nonempty text;
 non-streaming turns also require reported/derived token usage, while streaming
 turns verify that visible deltas reproduce the assembled text. This verifies the
-runtime adapter; the daemon exposes `GET /v1/health` and authenticated
-`GET /v1/node`, without a session or inference API.
+runtime adapter. The daemon now exposes authenticated durable Go text chat,
+session/history/event queries, and cancellation through the same native adapter.
+The bounded Go streaming check was repeated for this slice with the supplied
+temporary credential.
 
 Zen live checks remain opt-in and have not been run. Codex local HTTP/auth
 fixtures cover both authentication modes, subscription request restrictions,
@@ -572,12 +576,12 @@ live Codex login or inference was performed; see [Codex connection](codex-connec
 
 | Criteria | Current evidence and remaining gap |
 | --- | --- |
-| C01–C02 | Shared object-safe execution interface, three concrete adapters, local HTTP fixture consumers, and independent client dependencies. A persisted supervisor remains planned. |
+| C01–C02 | Shared object-safe execution interface, three concrete adapters, local HTTP fixture consumers, independent client dependencies, and a persisted bounded Go text-turn supervisor. |
 | C03–C04 | Static model validation, bounded requests, requested/reported model identities, and rejection of multiple/non-leading Messages system instructions. Account-scoped discovery and general setting descriptors remain planned. |
 | C05–C08 | Text-only parsers reject unsupported structured output, missing/unknown terminal evidence, malformed JSON/UTF-8, contradictory outcomes and post-terminal text. Regression fixtures cover trailing end markers, incomplete stop reasons, multiline framing, and chunk splits. Structured blocks and tool dispatch remain planned. |
-| C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Explicit cancellation commands, supervisor retry budgets, and durable request identities remain planned. |
-| C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Required unsupported continuation is rejected. Detailed counters, per-counter completeness, durable continuation and restart recovery remain planned. |
-| C13–C15 | Common synthetic and HTTP consumers verify both adapters' streaming/non-streaming results, incomplete outcomes, wire translation, and `Send` futures. Separately budgeted Go live checks passed across all three wire shapes through the shared trait; Zen and Codex live checks remain opt-in and unverified. Durable replay and public client fixtures remain planned. |
+| C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Go chat has durable turn intent and explicit cancellation; interrupted requests are not automatically retried. Tools and broader retry policies remain planned. |
+| C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Go chat persists counters/provenance and reconciles interrupted turns on restart. Required unsupported continuation is rejected. Detailed counters and durable continuation remain planned. |
+| C13–C15 | Common synthetic and HTTP consumers verify adapter results, terminal outcomes, wire translation, and `Send` futures. The real daemon/CLI fixture verifies Go chat detach, durable replay, command deduplication, cancellation, and restart history. Separately budgeted Go live adapter checks passed across all three wire shapes; Zen and Codex live checks remain opt-in and unverified. Structured-block replay remains planned. |
 
 ## Decoder references
 

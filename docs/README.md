@@ -8,9 +8,10 @@ start with a useful CLI and daemon without first building graphical clients.
 with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
-shutdown. The live API contains anonymous health and an authenticated node query.
-Sessions and execution are still planned. Commands, schemas, and workflows marked
-proposed describe future work.
+shutdown. Durable text chat now adds sessions, idempotent message acceptance,
+paginated history/events, daemon-owned Go inference, cancellation, and a consumer
+CLI. Coding tools and general task orchestration remain planned. Commands,
+schemas, and workflows marked proposed describe future work.
 
 ## Reading order
 
@@ -21,6 +22,7 @@ proposed describe future work.
 | [Architecture](architecture.md) | System layers, crate dependencies, and ownership |
 | [Clients](clients.md) | How the CLI, TUI, web, and Electron evolve independently |
 | [Protocol](protocol.md) | Proposed commands, responses, events, and compatibility |
+| [Text chat](text-chat.md) | Implemented local chat ownership, API, durability, and recovery |
 | [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |
 | [Shared provider interface](provider-interface.md) | Proposed adapter contract, common client surface, and conformance criteria |
@@ -59,9 +61,9 @@ clients share the wire contract and can generate their own SDK.
 ## Current repository entry points
 
 - [Root manifest](../Cargo.toml): virtual Rust workspace and shared dependency versions.
-- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node DTOs and API constants.
-- [Client library](../crates/slop-client/src/lib.rs): bounded health/node requests, token files, and compatibility checks.
+- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node and text-chat DTOs.
+- [Client library](../crates/slop-client/src/lib.rs): bounded requests, event streams, token files, and compatibility checks.
 - [Daemon](../crates/slop-daemon/src/main.rs): loopback HTTP service.
-- [CLI](../crates/slop-cli/src/main.rs): independent status and node client.
+- [CLI](../crates/slop-cli/src/main.rs): independent status, node, session, turn, and chat client.
 - [Client placeholder directory](../clients/README.md): future frontend locations.
 - [Smoke script](../scripts/smoke.py): checks the real daemon and CLI together.

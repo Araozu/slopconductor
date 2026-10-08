@@ -1,13 +1,14 @@
 # Implementation plan
 
-## Current scaffold
+## Current implementation
 
 The workspace has six crates. `slopd` serves anonymous loopback health and an
-authenticated node query. `slop` calls these through `slop-client`, checks
+authenticated node and text-chat APIs. `slop` calls these through `slop-client`, checks
 identity/version, and renders human or JSON output. The daemon implements
 XDG-aware startup config, exclusive directory ownership, SQLite schema/node
 identity, private local bearer credentials, and bounded shutdown. The protocol
-has no session API yet.
+includes durable session/message receipts, paginated history/events, models,
+and turn inspection/cancellation.
 
 `slop-core` contains domain identities (including the static provider/model
 identity used by the runtime registry) and `slop-runtime` contains the provider
@@ -17,9 +18,11 @@ Codex adds native ChatGPT registration, signed ID-token validation, protected
 credential storage and serialized renewal; see [Codex connection](codex-connection.md).
 A shared object-safe `ProviderClient` covers all three adapters' text-only
 one-turn operations, with terminal validation, safe diagnostics and optional
-usage. Neither crate implements an
-agent loop yet. Session persistence, tool supervision, worktrees, batch execution,
-and peer control are next-stage work. SQLite currently stores node identity only.
+usage. A bounded daemon-owned supervisor now runs Go text turns, serializes each
+session, checkpoints visible output, and commits terminal replies/usage.
+SQLite stores node identity, sessions, turns, messages, commands, and events.
+Tool supervision, worktrees, batch execution, and peer control remain next-stage
+work.
 
 ## Suggested module growth
 
@@ -99,6 +102,10 @@ data directory, and configuration errors are actionable without revealing secret
 
 ## Step 2: domain state and durable repository
 
+**Implemented text subset:** schema 2 stores sessions, turns, ordered messages,
+canonical command payloads/receipts, and per-session events through the existing
+bounded database worker. General tasks/runs and artifacts remain proposed.
+
 Implement session/task/run IDs and transition functions in `slop-core`. Keep
 errors and invariants domain-specific. Decide run creation/admission semantics
 and implement one-primary-task-per-session initially.
@@ -117,6 +124,11 @@ entities; a restart reconstructs committed state; a conflicting payload cannot
 reuse a command ID.
 
 ## Step 3: public API and native client expansion
+
+**Implemented text subset:** authenticated sessions/messages/history/events,
+turn inspection/cancellation, model metadata, the native client, and consumer
+chat CLI. [Text chat](text-chat.md) specifies the actual routes and recovery
+behavior; the broader task/command-status surface below remains proposed.
 
 Translate domain objects into protocol DTOs in the service/API layer. Keep API
 handlers short: authenticate, validate, invoke an operation, render its result.
@@ -137,8 +149,8 @@ a lagging/disconnected client cannot stop unrelated execution.
 Use the [shared provider interface](provider-interface.md) as the adapter and
 public-surface contract, including its conformance criteria. The current OpenCode
 Go and Zen clients implement the shared text-only `ProviderClient` subset; expand them
-toward the target adapter contract. Standalone one-turn operations do not yet
-provide this daemon vertical slice.
+toward the target adapter contract. Go now supplies the daemon's durable text-chat
+vertical slice. Other adapter wiring and structured tools remain planned.
 
 Implement provider capability validation and API-key account references. Add a
 direct streaming request adapter and preserve response/tool-call metadata.

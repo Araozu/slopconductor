@@ -13,6 +13,10 @@ pub const HEALTH_PATH: &str = "/v1/health";
 /// Authenticated query for the daemon's stable node identity.
 pub const NODE_PATH: &str = "/v1/node";
 
+/// Session and durable text chat routes.
+pub const SESSIONS_PATH: &str = "/v1/sessions";
+pub const MODELS_PATH: &str = "/v1/models";
+
 /// Local development endpoint; remote authentication is a later milestone.
 pub const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7331";
 
@@ -41,4 +45,127 @@ pub struct NodeResponse {
 pub struct ErrorResponse {
     pub code: String,
     pub message: String,
+}
+
+/// Durable text-chat wire objects. These types intentionally contain no
+/// provider SDK or runtime implementation details.
+pub mod chat {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct SessionResponse {
+        pub id: String,
+        pub owner_node_id: String,
+        pub title: Option<String>,
+        pub provider: String,
+        pub model: String,
+        pub max_tokens: Option<u32>,
+        pub revision: u64,
+        pub last_event_sequence: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct CreateSessionRequest {
+        pub command_id: String,
+        pub title: Option<String>,
+        pub provider: String,
+        pub model: String,
+        pub max_tokens: Option<u32>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct SendMessageRequest {
+        pub command_id: String,
+        pub text: String,
+        pub expected_revision: Option<u64>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct CancelTurnRequest {
+        pub command_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct CommandReceipt {
+        pub command_id: String,
+        pub session_id: String,
+        pub turn_id: Option<String>,
+        pub message_id: Option<String>,
+        pub revision: u64,
+        pub event_sequence: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct MessageResponse {
+        pub id: String,
+        pub session_id: String,
+        pub turn_id: String,
+        pub role: String,
+        pub text: String,
+        pub status: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct UsageResponse {
+        pub input_tokens: Option<u64>,
+        pub output_tokens: Option<u64>,
+        pub total_tokens: Option<u64>,
+        #[serde(default)]
+        pub total_source: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct TurnResponse {
+        pub id: String,
+        pub session_id: String,
+        pub user_message_id: String,
+        pub assistant_message_id: Option<String>,
+        pub status: String,
+        pub requested_model: String,
+        pub resolved_model: Option<String>,
+        pub usage: Option<UsageResponse>,
+        pub error_code: Option<String>,
+        pub error_message: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct Page<T> {
+        pub items: Vec<T>,
+        pub next_after: Option<u64>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct EventResponse {
+        pub session_id: String,
+        pub sequence: u64,
+        pub kind: String,
+        pub turn_id: Option<String>,
+        pub message_id: Option<String>,
+        pub revision: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct ModelResponse {
+        pub id: String,
+        pub provider: String,
+        pub model: String,
+        pub display_name: String,
+        pub ready: bool,
+        pub is_default: bool,
+        pub reason: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    pub enum EventFrame {
+        Durable {
+            event: EventResponse,
+        },
+        Delta {
+            session_id: String,
+            turn_id: String,
+            text: String,
+        },
+        Heartbeat,
+    }
 }
