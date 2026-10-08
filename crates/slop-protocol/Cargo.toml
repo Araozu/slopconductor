@@ -1,0 +1,12 @@
+[package]
+name = "slop-protocol"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Versioned public API types for Slop Conductor clients"
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

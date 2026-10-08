@@ -1,0 +1,11 @@
+[package]
+name = "slop-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Transport-independent domain rules for Slop Conductor"
+
+[dependencies]
+
+[lints]
+workspace = true

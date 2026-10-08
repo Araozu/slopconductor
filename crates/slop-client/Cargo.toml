@@ -1,0 +1,15 @@
+[package]
+name = "slop-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Reusable daemon API client for native Slop Conductor frontends"
+
+[dependencies]
+reqwest.workspace = true
+slop-protocol.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "slop-runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Native agent execution and scheduling for Slop Conductor"
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slop-core.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
