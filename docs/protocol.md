@@ -7,14 +7,19 @@ Use HTTP/JSON for commands and queries, with a streaming transport for events.
 The first streaming proposal is NDJSON over HTTP; a WebSocket transport can be
 added without changing event meaning.
 
-**Implemented at M0:** only `GET /v1/health`, returning the
-[HealthResponse](../crates/slop-protocol/src/lib.rs) DTO. All other routes and
-envelopes below are proposed. Bootstrap errors are ordinary HTTP/client errors;
-the proposed structured error format is not yet implemented.
+**Implemented:** `GET /v1/health` remains anonymous and advertises `health` and
+`node`. `GET /v1/node` requires the local API bearer token and returns
+`NodeResponse { node_id, name, os }`. Node identity is persisted in SQLite.
+Availability/resource fields, sessions, commands, and events remain proposed.
+The node route uses `ErrorResponse { code, message }` for safe authorization
+and storage errors; the larger command error envelope below is still proposed.
 
 The native client currently accepts an HTTP(S) origin without path, query,
 fragment, or embedded credentials. It applies connect/request timeouts, avoids
-redirects and proxy routing, and checks service identity and API version.
+redirects, retries, and proxy routing, and checks service identity and API
+version. A token-file client checks health before sending its credential to the
+node route. Health identifies compatibility; it is not authenticated proof of a
+server's identity. The caller must select a trusted origin and token file.
 
 ## Versioning and capability discovery
 
@@ -85,8 +90,8 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 
 | Method and route | Purpose |
 | --- | --- |
-| GET /v1/health | Current bootstrap identity/capabilities |
-| GET /v1/node | Durable node identity, OS, availability, and resource summary |
+| GET /v1/health | Implemented: anonymous service identity/capabilities |
+| GET /v1/node | Implemented: authenticated durable node ID, name, and OS; resource summary remains proposed |
 | GET /v1/capabilities | Available tools, providers, settings, and policy capabilities |
 | GET /v1/models | Account-specific available model identifiers |
 | GET, POST /v1/projects | Register/list logical projects and local mappings |
@@ -141,6 +146,11 @@ Streaming token deltas are transient frames with a stream ID and chunk index.
 They do not advance durable cursors. Periodic partial-message checkpoints and the
 final message establish recoverable text; clients reconcile transient display
 with those canonical records.
+Interrupted thinking is discarded. An unfinished tool after daemon/process
+failure is represented as a failed tool result with its invocation ID, failure
+cause, and any uncertainty about external effects. This is a planned semantic
+event, not an implemented tool endpoint. The daemon never restores or replays
+that call; the agent chooses its next action.
 
 ## Replay, gaps, and backpressure
 
@@ -189,8 +199,9 @@ do not change daemon ownership.
 
 ## Authentication and remote forwarding
 
-M1 should implement local credential/pairing semantics before adding privileged
-tool execution. M3 adds authenticated access over Tailscale, with separate
+Local bearer-token authentication is implemented for the node query. The daemon
+still binds loopback only. Pairing and authorization for privileged tools remain
+future work. M3 adds authenticated access over Tailscale, with separate
 read/write capabilities. Network membership alone is not the entire application
 authorization policy.
 

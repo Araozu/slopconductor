@@ -37,8 +37,11 @@ with multiple asynchronous sessions and supervised tool processes.
 | `slop-client` | Native API transport, compatibility, command/event convenience methods | Agent execution |
 | `slop-cli` | Argument parsing, terminal formatting, script exit behavior | Scheduler, model calls, database access |
 
-The domain and runtime crates are boundary scaffolds at M0. The protocol,
-daemon, client, and CLI contain only the health/status vertical slice.
+The domain contains provider identities and the runtime contains native provider
+adapters. The protocol, daemon, client, and CLI implement health/status plus an
+authenticated persisted node-identity query. The daemon also owns XDG-aware
+configuration, an exclusive data-directory lock, a bounded SQLite worker, and
+local API credential initialization. Agent/session execution remains planned.
 
 ```mermaid
 flowchart TD
@@ -109,17 +112,23 @@ The daemon eventually starts at login or boot according to installation policy:
 a Linux service/user service and a Windows service or user startup integration.
 M0 runs in the foreground; service installation is planned.
 
-Only one daemon should own a given data directory. A later startup lock uses
-OS-backed exclusivity rather than trusting a stale PID file. Multiple development
-instances may run with distinct data directories and ports.
+One daemon owns a data directory through an implemented OS-backed exclusive file
+lock, held until its database worker closes. The lock file is not unlinked on
+exit; termination releases the OS lock. Multiple development instances may run
+with distinct data directories and ports.
 
-Startup eventually performs identity loading, schema checks, repository scans
-limited to registered projects, and interrupted-run reconciliation. It must not
-implicitly resume every recorded command.
+Startup implements configuration validation, private data-directory ownership,
+schema checks/migration, durable identity loading, and private local API token
+publication before readiness. Linux follows XDG config/data directories and
+Windows uses local application data. Registered-project scans and interrupted
+execution handling are later work. It must not implicitly resume every recorded
+command.
 
-Shutdown stops new admissions, requests active runs to checkpoint or interrupt,
-drains bounded writes, and records remaining uncertain work. Tool cleanup is
-bounded; inability to stop a process is reported rather than hidden.
+Shutdown handles Ctrl-C and Unix SIGTERM, stops HTTP admissions, and drains the
+database worker under a configured deadline. Active-run checkpointing and tool
+cleanup remain planned. Interrupted thinking will be discarded. Unfinished tool
+calls will be failed due to daemon/process failure without restoring or replaying
+them; the agent decides its next action, with uncertain effects disclosed.
 
 ## Data and artifact flow
 

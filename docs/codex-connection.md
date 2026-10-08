@@ -2,7 +2,7 @@
 
 **Implemented runtime slice, 2026-10-08.** Codex implements the same
 `ProviderClient` as OpenCode Go: validation, model listing, collected completion
-and incremental text completion. The daemon still exposes only its health route;
+and incremental text completion. The daemon exposes health and an authenticated node query;
 session execution and public provider/account endpoints remain proposed in the
 [shared provider interface](provider-interface.md).
 

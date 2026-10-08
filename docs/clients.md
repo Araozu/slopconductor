@@ -16,11 +16,14 @@ agent runtime.
 The CLI is both an interactive human entry point and a scriptable control tool.
 It should ship useful local execution before the TUI, web, or Electron exists.
 
-At M0, the only command is `slop status`, optionally with `--json` and
-`--daemon`. These work after building/installing the CLI or through Cargo:
+The implemented commands are `slop status` and `slop node`, optionally with
+`--json` and `--daemon`. The node query requires `--token-file` or
+`SLOP_TOKEN_FILE`; status remains anonymous. These work after building/installing
+the CLI or through Cargo:
 
 ```sh
 cargo run -p slop-cli -- --json status
+cargo run -p slop-cli -- --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
 ```
 
 The proposed later command groups are:
@@ -59,9 +62,9 @@ Stdout contains requested output; stderr contains diagnostics. JSON mode has a
 stable schema with IDs, origin, status, and error details. Human progress bars,
 color, and prompts are disabled or explicitly selected in noninteractive mode.
 
-Define exit codes separately for acceptance failure, unreachable daemon,
+Define future exit codes separately for acceptance failure, unreachable daemon,
 compatibility/auth failure, and a terminal task failure when waiting. The exact
-future code table is open; M0 uses success/failure.
+future code table is open; implemented commands use success/failure.
 
 A script generates/persists a command ID before submitting mutations. If delivery
 is uncertain, it retries with the same ID. CLI timeout or Ctrl-C while following

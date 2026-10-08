@@ -41,7 +41,7 @@ not a substitute for application authorization. The initial remote deployment
 does not require a public Funnel endpoint.
 
 M0 listens on loopback only. Remote privileged API access must wait for pairing
-and capability enforcement. A private HTTPS proxy to the health-only service can
+and capability enforcement. A private HTTPS proxy to the health/node service can
 be explored independently without implying task control exists.
 
 ## Aggregate views

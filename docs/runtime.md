@@ -55,6 +55,9 @@ future, open socket, process handle, or in-memory continuation.
 Failures are classified by whether they are retryable and whether retry can
 repeat a side effect. An incomplete provider response remains incomplete even
 if it emitted plausible text or a partial tool-call JSON fragment.
+Interrupted thinking is discarded, rather than resumed or used as completed
+context. Completed reasoning content is retained only when the adapter supports
+it and the corresponding completed turn has committed.
 
 ## Provider boundary
 
@@ -184,8 +187,13 @@ must reattach to the same child IDs rather than spawning duplicates.
 ## Recovery and measurement
 
 After daemon restart, reconcile recorded steps with tool/process facts and
-provider outcomes where available. Known completed results can be reused. Unknown
-side effects require reconciliation before execution advances.
+provider outcomes where available. Known completed results can be reused.
+Interrupted thinking is discarded. An unfinished tool call is recorded as
+failed due to daemon/process failure; the daemon does not restore or replay it.
+The failure record preserves the invocation ID and warns when its external
+effects are unknown. The agent decides whether to inspect those effects or issue
+a new call. This recovery behavior remains planned until a session supervisor
+and tool execution exist.
 
 Measure release-build baseline RSS, incremental active context and buffer memory,
 idle-session metadata cost, context assembly CPU, queue fairness, and tool

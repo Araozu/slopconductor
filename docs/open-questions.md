@@ -8,18 +8,23 @@ that needs them, and record consequential decisions in an ADR.
 1. **Installation scope:** one user-owned daemon per OS installation is the
    proposed initial scope. A machine-wide multi-user service would need separate
    authentication, filesystem ownership, and account isolation.
-2. **Data locations:** select Linux and Windows defaults, workspace-root overrides,
-   and clear backup/retention behavior.
+2. **Data locations:** Linux XDG config/data defaults and Windows local
+   application-data defaults are implemented. Workspace-root overrides and
+   backup/retention behavior remain open.
 3. **Credential store:** choose OS keyring integration and an explicit alternative
    for headless systems. Credentials remain separate from conversations.
 4. **Default execution policy:** define permitted file roots, shell/network
    capabilities, resource caps, and when a task waits for human input.
 5. **First provider:** choose based on a working API credential and useful model
    availability; do not hardcode a particular model into the domain.
-6. **SQLite binding:** evaluate packaging, backup support, and a bounded blocking
-   worker before adding the dependency.
-7. **Uncertain side effects:** define the first recovery UI/CLI operations and
-   what evidence makes a tool outcome safe to classify.
+6. **SQLite binding:** bundled `rusqlite` and one bounded database worker are
+   selected and implemented for node identity. Backup/export behavior remains
+   future work.
+7. **Uncertain side effects:** interrupted thinking is discarded, and unfinished
+   tools are failed due to daemon/process failure without restoration/replay.
+   The agent decides its next action, with possible unknown effects preserved.
+   Define the future recovery UI/CLI operations and evidence used to inspect
+   those effects.
 
 ## Before orchestration and remote delivery
 

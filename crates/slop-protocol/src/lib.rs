@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 /// Bootstrap API version. Compatibility is checked by native clients.
 pub const API_VERSION: u32 = 1;
 
-/// The only endpoint implemented by the bootstrap daemon.
+/// Anonymous health endpoint.
 pub const HEALTH_PATH: &str = "/v1/health";
+
+/// Authenticated query for the daemon's stable node identity.
+pub const NODE_PATH: &str = "/v1/node";
 
 /// Local development endpoint; remote authentication is a later milestone.
 pub const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7331";
@@ -23,4 +26,19 @@ pub struct HealthResponse {
     pub version: String,
     pub api_version: u32,
     pub capabilities: Vec<String>,
+}
+
+/// Stable node identity returned by the authenticated node query.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeResponse {
+    pub node_id: String,
+    pub name: String,
+    pub os: String,
+}
+
+/// Safe structured error returned by public API endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ErrorResponse {
+    pub code: String,
+    pub message: String,
 }

@@ -7,9 +7,16 @@ description = "Reusable daemon API client for native Slop Conductor frontends"
 
 [dependencies]
 reqwest.workspace = true
+serde_json.workspace = true
 slop-protocol.workspace = true
 thiserror.workspace = true
 url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

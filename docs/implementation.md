@@ -2,9 +2,12 @@
 
 ## Current scaffold
 
-The workspace is initialized with six crates. `slopd` serves a loopback health
-endpoint. `slop` calls it through `slop-client`, checks identity/version, and
-renders human or JSON status. The protocol has no session API yet.
+The workspace has six crates. `slopd` serves anonymous loopback health and an
+authenticated node query. `slop` calls these through `slop-client`, checks
+identity/version, and renders human or JSON output. The daemon implements
+XDG-aware startup config, exclusive directory ownership, SQLite schema/node
+identity, private local bearer credentials, and bounded shutdown. The protocol
+has no session API yet.
 
 `slop-core` contains domain identities (including the static provider/model
 identity used by the runtime registry) and `slop-runtime` contains the provider
@@ -15,8 +18,8 @@ credential storage and serialized renewal; see [Codex connection](codex-connecti
 A shared object-safe `ProviderClient` covers all three adapters' text-only
 one-turn operations, with terminal validation, safe diagnostics and optional
 usage. Neither crate implements an
-agent loop yet. SQLite, session persistence, tool supervision, worktrees, batch
-execution, and peer control are next-stage work.
+agent loop yet. Session persistence, tool supervision, worktrees, batch execution,
+and peer control are next-stage work. SQLite currently stores node identity only.
 
 ## Suggested module growth
 
@@ -73,17 +76,23 @@ crate when build isolation or reuse justifies the boundary.
 
 ## Step 1: identity, configuration, and exclusive startup
 
-Choose platform data/config paths and explicit overrides. Generate/persist an
-opaque node ID independent of its friendly name; retain physical-machine grouping
-as display metadata. Enforce one owner per data directory with an OS-backed lock.
+**Implemented startup foundation:** see [daemon startup](daemon-startup-plan.md)
+for actual paths, configuration, authentication, and the accepted recovery policy.
+Project registries, provider-account configuration, and remote pairing remain
+later extensions rather than placeholders in the startup config.
 
-Load bounded configuration for provider/account handles, resource limits,
-registered projects, and listener/auth settings. Do not scan the whole home
-directory or parse every repository at daemon startup.
+Platform config/data paths, explicit overrides, opaque node IDs, display names,
+and OS-backed exclusivity are implemented. Physical-machine grouping remains
+display metadata for future work.
 
-Define local API authentication/pairing and credential storage before exposing
-execution endpoints. Keep endpoint and credential configuration independently
-selectable for clients.
+The bounded startup config currently controls listener, name, database queue/busy
+limits, and shutdown deadline. Provider/account handles and registered projects
+will be added with their owning behavior; startup does not scan the home directory
+or parse repositories.
+
+Local bearer authentication and private credential publication are implemented.
+Pairing and execution authorization remain necessary before privileged tools are
+exposed. Endpoint and token-file selection are independent in the native client.
 
 Acceptance: restarts preserve identity, a second daemon cannot write the same
 data directory, and configuration errors are actionable without revealing secrets.
@@ -94,9 +103,10 @@ Implement session/task/run IDs and transition functions in `slop-core`. Keep
 errors and invariants domain-specific. Decide run creation/admission semantics
 and implement one-primary-task-per-session initially.
 
-Add SQLite schema/migrations and repository operations. Start with a bounded
-database worker; evaluate binding choices against Windows packaging, backup APIs,
-and async scheduling. Do not add a full ORM merely to create a few tables.
+Extend the existing SQLite schema/migrations and bounded database worker with
+session repository operations. The selected bundled `rusqlite` binding preserves
+native Windows packaging and has backup support; add backup behavior when needed.
+Do not add a full ORM merely to create a few tables.
 
 Implement command deduplication by identity/payload hash and transactional
 state/event commits. Add paginated snapshots/history, artifact registration, and
@@ -153,8 +163,10 @@ Start with file reads and validated patch/write operations. Add supervised shell
 commands with explicit cwd, argument/environment policy, output limits, timeout,
 and process-tree cancellation.
 
-Persist invocation intent and known outcome. Classify uncertain effects after a
-crash and require reconciliation. Implement next-boundary steering, interruption,
+Persist invocation intent and known outcome. Discard interrupted thinking after a
+crash. Mark unfinished tools failed due to daemon/process failure without
+restoring or replaying them, preserving possible unknown effects. The agent
+chooses its next action. Implement next-boundary steering, interruption,
 pause checkpoints, cancellation, and awaiting-input events.
 
 Acceptance: use failure injection around persistence/launch/completion to verify

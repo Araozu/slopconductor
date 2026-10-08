@@ -74,6 +74,10 @@ Clients observe committed facts, with separate transient deltas where useful.
 R03: Persist tool intent before launch and its known outcome afterward. Recovery
 must distinguish never started, running, completed, interrupted, and unknown.
 An external side effect cannot generally be made exactly-once by journaling it.
+Interrupted thinking is discarded. An unfinished tool call after daemon/process
+failure is recorded as failed with that cause, without restoring or replaying
+the call. The agent decides its next action from the durable failure record;
+failure does not imply that the tool made no external changes.
 
 R04: Each session has one execution owner. Peers and mirrors cannot independently
 resume an owned session. Future migration chooses a blocked state when ownership
@@ -88,6 +92,11 @@ not a fabricated failure or a claim that an instruction was applied.
 R07: Sleep, shutdown, and dual-boot transitions interrupt execution on that OS.
 Persisted history remains recoverable; resumption is explicit and capability
 dependent.
+
+R08: Linux configuration and durable data use XDG directories, with explicit
+overrides. Do not create a separate application directory directly under the
+user's home. Completed steps and their semantic events are committed atomically
+before acknowledgment or dependent execution.
 
 ## Resource and concurrency requirements
 

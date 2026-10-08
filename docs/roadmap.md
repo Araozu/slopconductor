@@ -29,6 +29,12 @@ and an unsupported non-loopback bootstrap listener.
 M0 does not include model access, sessions, tools, storage, authentication, or
 remote task control. Domain/runtime crates are reserved boundaries.
 
+Post-M0 additions implement runtime-only providers and the first M1 startup
+foundation: XDG-aware config, locked data-directory ownership, SQLite node
+identity, a local API bearer credential, authenticated node inspection, and
+bounded shutdown. Sessions, chat persistence, and daemon-owned inference remain
+unimplemented.
+
 ## M1 — Useful local native coding agent through the CLI
 
 **Goal:** submit a task, disconnect, and return to inspect or steer the same
@@ -40,8 +46,10 @@ Add local API credential/pairing policy before privileged tool execution.
 
 Integrate one cloud provider through API keys with direct streaming inference.
 Build a native context/tool loop with bounded file operations and supervised
-shell execution. Support known outcomes, interruption, budgets, and explicit
-recovery-required state.
+shell execution. Support known outcomes, interruption, and budgets. Discard
+interrupted thinking. Fail unfinished tools due to daemon/process failure without
+restoring or replaying them, and let the agent decide its next action while
+preserving uncertainty about external effects.
 
 Extend the CLI with session/task creation, history, following, sending instructions,
 pause/resume/cancel, and artifacts. Expose the same functions through the API.

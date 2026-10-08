@@ -7,24 +7,29 @@ records through the API. Peers receive replicated application records, never
 write directly into the owner's database, and never share an active database file
 over a network mount.
 
-Use SQLite as a proposed local store, with schema migrations and a bounded
-database execution path. No SQLite implementation exists in M0.
+The daemon implements a SQLite startup store for node identity, a schema
+migration, an exclusive data-directory lock, and one bounded database worker.
+Session, command, message, tool, and event storage remain planned. The worker
+uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,
+and a bounded busy timeout. Node identity and display-name changes commit in a
+transaction before startup is announced.
 
 SQLite WAL allows readers alongside a writer but has one writer at a time and
 requires same-host database access. It therefore fits a locally owned store with
 serialized writes. See [SQLite WAL documentation](https://sqlite.org/wal.html).
-Choose a current supported SQLite version and review its release/security notes
-when adding the binding.
+The bundled SQLite version includes the WAL-reset corruption fix. Verify the
+linked version and relevant fixes when updating the binding.
 
-## Proposed data layout
+## Data layout
 
 ```text
 <data-dir>/
-  node.json                 # durable node identity and display metadata
   daemon.lock               # OS-backed directory ownership lock
-  state.sqlite3             # owner records and replica projections
+  state.sqlite3             # currently node identity/schema; sessions are planned
   state.sqlite3-wal          # SQLite-managed when WAL is enabled
   state.sqlite3-shm          # SQLite-managed when WAL is enabled
+  credentials/
+    local-api-token         # persistent private local API credential
   artifacts/
     <content-hash>/...       # bounded files and metadata references
   workspaces/
@@ -33,9 +38,18 @@ when adding the binding.
     <transfer-id>/...        # validated future handoff packages
 ```
 
-The exact platform directories should follow Linux user-directory conventions
-and Windows local application-data conventions. A configured data directory is
-allowed. Workspace roots may be configured separately to control disk use.
+Only the lock, database, SQLite sidecars when needed, and local API credential
+are implemented. Artifact/workspace/transfer directories are future layout;
+startup does not create unused directories.
+
+Linux config is `$XDG_CONFIG_HOME/slopconductor/config.toml` (default
+`~/.config/slopconductor/config.toml`), and authoritative data is
+`$XDG_DATA_HOME/slopconductor` (default `~/.local/share/slopconductor`). Relative
+XDG values are ignored. Logs, when file logging is added, belong in
+`$XDG_STATE_HOME/slopconductor` (default `~/.local/state/slopconductor`). No
+separate application directory is created directly under the user's home.
+Windows uses `%LOCALAPPDATA%/slopconductor`. Explicit absolute config/data paths
+are supported. Workspace roots may be configured separately in future work.
 
 Credential references belong in the database; actual secrets belong in an
 OS credential store or explicitly chosen secure alternative. Logs are separate
@@ -72,12 +86,18 @@ change local state, and append the resulting durable events. Commit before
 returning an accepted acknowledgement. Publishing committed events can follow
 the transaction; reconnect replay fills any notification gap.
 
-An external tool invocation cannot be atomic with a SQLite transaction. Record
-its intent first, then launch it, then persist the known result. Recovery treats
-a missing result as uncertain rather than guessing it failed harmlessly.
+The following session/runtime write protocol is accepted design, not an
+implemented session API. An external tool invocation cannot be atomic with a
+SQLite transaction. Record its intent first, then launch it, then persist the
+known result. On daemon/process failure, an unfinished call is marked failed
+with that cause and any uncertainty about effects. It is not restored or
+automatically replayed. The agent receives that failure and chooses its next
+action; a failed record is not proof that nothing changed externally.
 
-A model stream is also external. Persist useful partial checkpoints and the
-terminal outcome. Do not turn partial tool arguments into executable operations.
+A model stream is also external. Persist bounded visible-text checkpoints and
+the completed turn/terminal outcome. Interrupted thinking is discarded; only
+completed supported reasoning and continuation are retained with the completed
+turn. Do not turn partial tool arguments into executable operations.
 
 Artifacts have their own write protocol: write a bounded temporary file, compute
 its content hash, complete/rename it, then register metadata and references.
@@ -86,12 +106,13 @@ that requires an artifact before the artifact is available.
 
 ## Database execution and retention
 
-Start with a dedicated bounded database worker and short write transactions.
-A synchronous binding can run there rather than block an async executor thread.
+The startup store uses a dedicated bounded database worker and short write
+transactions. Synchronous SQLite calls run there rather than on the async
+executor.
 Separate small reads can use a controlled pool if measurements justify it.
 
 Use foreign keys, schema versions, busy handling, and deliberate WAL checkpoint
-policy. Propose FULL synchronous durability for command/ownership transitions;
+policy. FULL synchronous durability is enabled for the startup store;
 any weaker durability setting must disclose the power-loss consequences.
 
 Retention is configurable for tool logs, transient checkpoints, completed
@@ -111,13 +132,15 @@ At startup, classify work using recorded state:
 | Queued task, no external operation | Eligible for normal admission |
 | Completed step with persisted result | Reuse recorded result |
 | Paused run with valid checkpoint | Remain paused until explicitly resumed |
-| Tool intent without confirmed launch | Reconcile launch evidence before retry |
-| Started tool without known completion | Inspect supervised process/outcome; otherwise require recovery |
-| Incomplete model request | Record interruption; retry only under its bounded request policy |
+| Unfinished tool intent/call after daemon/process failure | Record failure and possible unknown effects; no restoration/replay; agent decides next action |
+| Interrupted thinking | Discard incomplete thinking; never resume it as completed context |
+| Incomplete model request | Record interruption and discard interrupted thinking; a new request follows explicit policy |
 | Outgoing committed handoff | Source remains deactivated for that session |
 | Incoming prepared handoff | Do not activate without valid handoff evidence |
 
-A durable outbox for peer replication contains committed application records.
+These execution recovery behaviors are planned; current startup restores node
+identity only. A future durable outbox for peer replication contains committed
+application records.
 Its backpressure does not prevent ordinary local execution indefinitely.
 
 ## Backup, export, and replication

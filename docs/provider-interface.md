@@ -75,8 +75,9 @@ requires `None` and rejects an explicit cap. Developer messages retain their
 role on Responses/Chat and are rejected for Anthropic Messages. Subscription
 requests reject system messages instead of changing their priority; use an
 explicit developer role. All three clients share the bounded wire decoders.
-The daemon's only live route remains
-`GET /v1/health`; a runtime integration is not evidence of a usable session API.
+The daemon implements anonymous `GET /v1/health` and authenticated
+`GET /v1/node`. A runtime integration and node query are not evidence of a usable
+session API.
 
 ### Implemented OpenCode adapters
 
@@ -360,7 +361,8 @@ text but must not label it a complete answer.
 A completed outcome requires recognized upstream terminal evidence. EOF,
 HTTP success, plausible text, or valid-looking partial JSON is insufficient.
 If the stream closes without a terminal outcome, the supervisor synthesizes an
-interrupted result and retains known partial content. Unknown provider events
+interrupted result and retains known partial visible content while discarding
+interrupted thinking. Unknown provider events
 may be ignored only when known to be nonessential; unsupported content or an
 unrecognized completion shape fails explicitly.
 
@@ -405,10 +407,13 @@ to retry, using backoff, attempt/elapsed-time budgets, and admission limits. Eac
 retry has a new model-request ID and a link to the previous attempt. It does not
 create a second public command or blindly rerun completed tools.
 
-An unknown inference outcome may have consumed quota even when no local tool ran.
+Interrupted thinking is discarded. An unknown inference outcome may have
+consumed quota even when no local tool ran.
 Remote retrieval or idempotency is used only where the adapter explicitly supports
 it. If provider-side effects are possible, reconcile before retry. No unknown
-tool operation is automatically replayed.
+tool operation is automatically replayed. An unfinished tool after daemon/process
+failure is recorded as failed with that cause and any uncertainty about effects;
+it is not restored. The agent decides its next action using that recorded result.
 
 Cancellation is a daemon command: persist acceptance, signal the active request,
 stop admitting new work, and record the observed terminal state. Serialize the
@@ -557,7 +562,8 @@ non-streaming and streaming turns for `glm-5.3-flash` (Chat Completions),
 requested model, expected wire shape, completed outcome and nonempty text;
 non-streaming turns also require reported/derived token usage, while streaming
 turns verify that visible deltas reproduce the assembled text. This verifies the
-runtime adapter; the daemon still exposes only `GET /v1/health`.
+runtime adapter; the daemon exposes `GET /v1/health` and authenticated
+`GET /v1/node`, without a session or inference API.
 
 Zen live checks remain opt-in and have not been run. Codex local HTTP/auth
 fixtures cover both authentication modes, subscription request restrictions,

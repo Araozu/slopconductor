@@ -16,8 +16,13 @@ This repository is an **initial scaffold**, not a working coding agent.
 Implemented:
 
 - Six separate Rust workspace crates with enforced dependency boundaries.
-- A loopback-only daemon exposing `GET /v1/health`.
-- A native CLI that checks daemon identity, API version, and capabilities.
+- A loopback-only daemon exposing anonymous `GET /v1/health` and authenticated
+  `GET /v1/node`.
+- XDG-aware configuration/data paths, exclusive daemon ownership, SQLite node
+  identity with atomic migrations and FULL WAL synchronization, private local
+  API credentials, and bounded shutdown.
+- A native CLI that checks service/API compatibility and inspects persistent
+  node identity through the authenticated public API.
 - Human-readable and JSON status output.
 - A daemon/CLI smoke check and a Linux/Windows CI workflow.
 - Runtime-only OpenCode Go and Zen integrations through the shared
@@ -48,6 +53,7 @@ In another:
 ```sh
 cargo run -- status
 cargo run -- --json status
+cargo run -- --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
 ```
 
 The CLI is the default workspace member, so plain `cargo build` and `cargo run`
@@ -59,7 +65,19 @@ cargo run -p slop-daemon -- --listen 127.0.0.1:7441
 cargo run -p slop-cli -- --daemon http://127.0.0.1:7441 status
 ```
 
-`SLOP_LISTEN` and `SLOP_DAEMON_URL` provide the equivalent environment settings.
+On Linux, configuration defaults to
+`$XDG_CONFIG_HOME/slopconductor/config.toml` (`~/.config/...`) and durable data
+to `$XDG_DATA_HOME/slopconductor` (`~/.local/share/...`). No separate directory
+is added directly under the user's home. Windows uses
+`%LOCALAPPDATA%/slopconductor`. The daemon creates a private local API token at
+`<data-dir>/credentials/local-api-token`. `slop node` requires `--token-file`;
+`SLOP_TOKEN_FILE` can supply it for loopback endpoints.
+
+`SLOP_LISTEN` and `SLOP_DAEMON_URL` provide the equivalent endpoint settings.
+Use `--config`/`SLOP_CONFIG`, `--data-dir`/`SLOP_DATA_DIR`, and
+`--name`/`SLOP_NODE_NAME` for startup overrides. See the
+[startup guide](docs/daemon-startup-plan.md) for config settings, Windows path
+restrictions, and the accepted future chat durability/recovery rules.
 The bootstrap accepts loopback listeners only. Authenticated remote control is a
 planned milestone; requiring Tailscale does not mean that feature is implemented.
 
