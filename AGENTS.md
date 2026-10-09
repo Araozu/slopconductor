@@ -43,5 +43,5 @@ Keep `Cargo.lock` in version control. Do not commit credentials, provider
 responses containing secrets, local databases, worktrees, or build outputs.
 Do not add placeholder arithmetic tests or claim proposed endpoints work.
 
-There is currently no provider integration, persistent session store, remote
+There is currently no persistent session store, remote
 authentication, TUI, browser client, or Electron client.
