@@ -43,8 +43,9 @@ authenticated persisted node-identity query, plus the [durable text-chat slice](
 The daemon also owns XDG-aware
 configuration, an exclusive data-directory lock, a bounded SQLite worker, and
 local API credential initialization. A bounded native supervisor executes Go
-text turns independently of client lifetime. Tools and general task/run
-orchestration remain planned.
+turns independently of client lifetime. [Structured execution](structured-execution.md)
+adds a durable Go tool loop, explicit workspace leases, artifacts, and frozen
+per-turn model/settings. General task/run orchestration remains planned.
 
 The daemon also owns [runtime provider credential configuration](provider-credentials.md):
 private XDG records, API-key replacement, and a bounded ChatGPT login listener.
@@ -79,8 +80,9 @@ at service boundaries so changes to internal representations do not accidentally
 become protocol changes.
 
 The [shared provider interface](provider-interface.md) develops this boundary
-into a proposed execution contract and a separate public DTO projection, with
-capability discovery and criteria for adapter/client conformance.
+into a target execution contract and a separate public DTO projection.
+Structured inference, tools, and basic model capabilities are implemented;
+account-scoped discovery and the larger contract remain proposed.
 
 A workspace is a source organization choice, not a runtime deployment boundary.
 Several crates still compile into one daemon executable.
@@ -130,7 +132,9 @@ Startup implements configuration validation, private data-directory ownership,
 schema checks/migration, durable identity loading, and private local API token
 publication before readiness. Linux follows XDG config/data directories and
 Windows uses local application data. Startup also reconciles in-flight text
-turns as interrupted; queued, undispatched turns remain eligible for admission.
+turns and model requests as interrupted, and pairs unfinished tools with failure
+results without replaying effects; queued, undispatched turns remain eligible
+for admission.
 Registered-project scans are later work. It must not implicitly resume every
 recorded command.
 

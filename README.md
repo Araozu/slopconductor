@@ -140,6 +140,9 @@ them. They use the shared provider interface and document their request/token
 bounds. See the [provider conformance review](docs/provider-interface.md#conformance-review-of-the-current-slice)
 for verified behavior and the remaining daemon/API work.
 
+For a walkthrough of daemon concepts and the implemented request, persistence,
+streaming, cancellation, and restart flows, see the [slop-daemon guide](crates/slop-daemon/slop-daemon-guide.md).
+
 Building the CLI does not build the daemon, its execution layer, or a frontend.
 Browser and Electron projects will have their own builds when introduced.
 

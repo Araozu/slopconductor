@@ -34,8 +34,10 @@ foundation: XDG-aware config, locked data-directory ownership, SQLite node
 identity, a local API bearer credential, authenticated node inspection, and
 bounded shutdown. The next slice implements durable text sessions, idempotent
 message commands, paginated history/events, daemon-owned Go inference, explicit
-cancellation, and a consumer chat CLI. See [text chat](text-chat.md). M1's coding
-tools, general task/run lifecycle, and workspace policy remain unfinished.
+cancellation, and a consumer chat CLI. [Structured execution](structured-execution.md)
+now implements file/shell tools, explicit workspace policy/leases, artifacts,
+structured streaming, frozen per-turn model/settings, and no-replay recovery.
+General task/run lifecycle and native Windows validation remain unfinished.
 
 ## M1 — Useful local native coding agent through the CLI
 
@@ -44,7 +46,9 @@ persisted session on one machine.
 
 **Partial implementation:** local text chat covers durable acceptance, CLI detach,
 event reconnect, completed history after restart, command deduplication, and
-model-turn cancellation. This does not yet satisfy the coding-tool exit gate.
+model-turn cancellation. File/shell execution and recovery now have offline
+real-binary checks on Linux. General task controls, live tool validation, and
+native Windows scenarios remain before the full M1 exit gate.
 
 Implement durable node/session/task/run identities, local SQLite storage and
 schema migrations, a command inbox, event journal, and interrupted-step records.

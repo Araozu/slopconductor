@@ -30,6 +30,13 @@ pub enum Command {
     Node,
     /// Discover available models.
     Models,
+    /// Show structured execution and registered tool capabilities.
+    Capabilities,
+    /// Inspect or download durable tool output.
+    Artifact {
+        #[command(subcommand)]
+        command: ArtifactCommand,
+    },
     /// Configure daemon-owned provider credentials.
     Provider {
         #[command(subcommand)]
@@ -98,6 +105,12 @@ pub enum SessionCommand {
         command_id: Option<String>,
         #[arg(long)]
         detach: bool,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        #[arg(long)]
+        max_output_tokens: Option<u32>,
     },
     Follow {
         id: String,
@@ -108,6 +121,20 @@ pub enum SessionCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum TurnCommand {
+    Requests {
+        id: String,
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    Tools {
+        id: String,
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
     Show {
         id: String,
     },
@@ -118,12 +145,34 @@ pub enum TurnCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ArtifactCommand {
+    Show {
+        id: String,
+    },
+    Download {
+        id: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+
 #[derive(Debug, clap::Args)]
 pub struct ChatArgs {
     #[arg(long)]
     pub session: Option<String>,
-    #[arg(long, conflicts_with = "session")]
+    #[arg(long)]
     pub model: Option<String>,
+    /// Explicit workspace on the daemon's machine for a new tool-enabled session.
+    #[arg(long, conflicts_with = "session")]
+    pub workspace: Option<PathBuf>,
+    /// Tool to allow; repeat to allow additional tools. Requires --workspace.
+    #[arg(long="tool", requires="workspace", value_parser=["read_file","list_files","write_file","apply_patch","shell"])]
+    pub tools: Vec<String>,
+    #[arg(long)]
+    pub effort: Option<String>,
+    #[arg(long)]
+    pub max_output_tokens: Option<u32>,
     #[arg(long, conflicts_with = "prompt_file")]
     pub prompt: Option<String>,
     #[arg(long)]
@@ -140,7 +189,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_cannot_be_silently_ignored_when_resuming_a_session() {
+    fn model_selection_is_preserved_when_resuming_a_session() {
         let parsed = Args::try_parse_from([
             "slop",
             "chat",
@@ -151,7 +200,11 @@ mod tests {
             "--prompt",
             "hello",
         ]);
-        assert!(parsed.is_err());
+        let args = parsed.unwrap();
+        let Command::Chat(chat) = args.command else {
+            panic!("expected chat")
+        };
+        assert_eq!(chat.model.as_deref(), Some("opencode-go/glm-5.3-flash"));
     }
 
     #[test]

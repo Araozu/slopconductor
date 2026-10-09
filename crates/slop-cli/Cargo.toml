@@ -15,7 +15,8 @@ serde.workspace = true
 serde_json.workspace = true
 slop-client.workspace = true
 slop-protocol.workspace = true
-tokio = { workspace = true, features = ["io-std", "io-util"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "fs"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

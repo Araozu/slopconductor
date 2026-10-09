@@ -110,22 +110,34 @@ pub mod chat {
         pub max_tokens: Option<u32>,
         pub revision: u64,
         pub last_event_sequence: u64,
+        #[serde(default)]
+        pub settings: crate::execution::GenerationSettings,
+        #[serde(default)]
+        pub execution: Option<crate::execution::WorkspacePolicy>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
     pub struct CreateSessionRequest {
         pub command_id: String,
         pub title: Option<String>,
         pub provider: String,
         pub model: String,
         pub max_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub settings: Option<crate::execution::GenerationSettings>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub execution: Option<crate::execution::WorkspacePolicy>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
     pub struct SendMessageRequest {
         pub command_id: String,
         pub text: String,
         pub expected_revision: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub settings: Option<crate::execution::GenerationSettings>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -151,6 +163,10 @@ pub mod chat {
         pub role: String,
         pub text: String,
         pub status: String,
+        #[serde(default)]
+        pub blocks: Vec<crate::execution::ContentBlock>,
+        #[serde(default)]
+        pub request_id: Option<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,6 +190,12 @@ pub mod chat {
         pub usage: Option<UsageResponse>,
         pub error_code: Option<String>,
         pub error_message: Option<String>,
+        #[serde(default)]
+        pub settings: crate::execution::GenerationSettings,
+        #[serde(default)]
+        pub model_request_ids: Vec<String>,
+        #[serde(default)]
+        pub tool_invocation_ids: Vec<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,6 +212,10 @@ pub mod chat {
         pub turn_id: Option<String>,
         pub message_id: Option<String>,
         pub revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub invocation_id: Option<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -201,6 +227,8 @@ pub mod chat {
         pub ready: bool,
         pub is_default: bool,
         pub reason: Option<String>,
+        #[serde(default)]
+        pub capabilities: crate::execution::ModelCapabilities,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -213,7 +241,27 @@ pub mod chat {
             session_id: String,
             turn_id: String,
             text: String,
+            #[serde(default)]
+            message_id: Option<String>,
+            #[serde(default)]
+            block_id: Option<String>,
+            #[serde(default)]
+            request_id: Option<String>,
+            #[serde(default)]
+            invocation_id: Option<String>,
+            #[serde(default)]
+            stream_id: String,
+            #[serde(default)]
+            chunk_index: u64,
+            #[serde(default = "default_delta_kind")]
+            kind: String,
         },
         Heartbeat,
     }
+
+    fn default_delta_kind() -> String {
+        "text".to_owned()
+    }
 }
+
+pub mod execution;

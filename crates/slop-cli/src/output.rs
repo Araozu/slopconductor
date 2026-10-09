@@ -63,6 +63,66 @@ impl Output {
         Ok(())
     }
 
+    pub fn message_snapshot(self, message: &MessageResponse, shown: &str) {
+        match self {
+            Self::Json => println!(
+                "{}",
+                serde_json::json!({"type":"message_snapshot","message":message})
+            ),
+            Self::Human => {
+                if message.text.starts_with(shown) {
+                    print!("{}", &message.text[shown.len()..]);
+                    if message.blocks.iter().any(|b| {
+                        matches!(
+                            b.content,
+                            slop_protocol::execution::BlockContent::ToolCall { .. }
+                        )
+                    }) {
+                        println!();
+                    }
+                } else if !message.text.is_empty() {
+                    eprintln!("[canonical assistant message updated]");
+                    println!("{}", message.text);
+                }
+                for block in &message.blocks {
+                    if let slop_protocol::execution::BlockContent::ToolCall {
+                        name, call_id, ..
+                    } = &block.content
+                    {
+                        eprintln!("[{name} requested: {call_id}]");
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn tool_snapshot(self, tool: &slop_protocol::execution::ToolInvocationResponse) {
+        match self {
+            Self::Json => println!(
+                "{}",
+                serde_json::json!({"type":"tool_snapshot","tool":tool})
+            ),
+            Self::Human => {
+                eprintln!(
+                    "[{} {}{}]",
+                    tool.name,
+                    tool.status,
+                    if tool.effects_unknown {
+                        "; effects may be unknown"
+                    } else {
+                        ""
+                    }
+                );
+                if let Some(output) = &tool.output {
+                    eprintln!("{output}");
+                }
+                for id in &tool.artifact_ids {
+                    eprintln!("artifact {id}");
+                }
+            }
+        }
+    }
+
     pub fn terminal(self, turn: &TurnResponse, message: Option<&MessageResponse>, shown: &str) {
         match self {
             Self::Json => println!(

@@ -12,9 +12,11 @@
 
 pub mod chatgpt_auth;
 pub mod codex;
+pub mod inference;
 mod opencode;
 pub mod opencode_go;
 pub mod opencode_zen;
+mod structured_wire;
 #[cfg(test)]
 mod test_http;
 mod transport;
@@ -190,6 +192,86 @@ pub type ProviderFuture<'a, T> =
 pub trait ProviderClient: Send + Sync {
     fn descriptor(&self) -> &dyn Provider;
 
+    fn capabilities(&self, _model: &str) -> inference::ModelCapabilities {
+        inference::ModelCapabilities {
+            tools: false,
+            reasoning_efforts: Vec::new(),
+        }
+    }
+
+    /// One inference attempt. Dropping this future cancels local transport;
+    /// adapters never execute tools or retry an inference behind the supervisor.
+    fn infer<'a>(
+        &'a self,
+        request: &'a inference::InferenceRequest,
+        on_event: &'a mut (dyn FnMut(inference::ProviderEvent) + Send),
+    ) -> ProviderFuture<'a, inference::InferenceResponse> {
+        Box::pin(async move {
+            use inference::*;
+            request.validate(self.descriptor(), &self.capabilities(&request.model))?;
+            let mut messages = Vec::new();
+            for message in &request.messages {
+                if message
+                    .blocks
+                    .iter()
+                    .any(|block| !matches!(block.content, BlockContent::Text { .. }))
+                    || message
+                        .continuation
+                        .as_ref()
+                        .is_some_and(|continuation| continuation.required)
+                {
+                    return Err(ProviderError::UnsupportedCapability {
+                        capability: "structured history",
+                    });
+                }
+                let role = match message.role {
+                    MessageRole::System => Role::System,
+                    MessageRole::Developer => Role::Developer,
+                    MessageRole::User => Role::User,
+                    MessageRole::Assistant => Role::Assistant,
+                    MessageRole::Tool => {
+                        return Err(ProviderError::UnsupportedCapability {
+                            capability: "tool results",
+                        });
+                    }
+                };
+                messages.push(ChatMessage {
+                    role,
+                    content: message.visible_text(),
+                });
+            }
+            let legacy = ChatRequest {
+                model: request.model.clone(),
+                messages,
+                max_tokens: request.settings.max_output_tokens,
+                session_id: request.session_id.clone(),
+            };
+            let result = self
+                .complete_streaming(&legacy, &mut |delta| {
+                    if !delta.text.is_empty() {
+                        on_event(ProviderEvent::TextDelta {
+                            block_index: 0,
+                            text: delta.text,
+                        });
+                    }
+                })
+                .await?;
+            Ok(InferenceResponse {
+                resolved_model: result.resolved_model,
+                message: InferenceMessage::text(
+                    MessageRole::Assistant,
+                    format!("{}:block:0", request.request_id),
+                    result.text,
+                ),
+                usage: result.usage,
+                finish_reason: match result.outcome {
+                    TurnOutcome::Completed => FinishReason::Stop,
+                    TurnOutcome::Incomplete { .. } => FinishReason::OutputLimit,
+                },
+            })
+        })
+    }
+
     fn auth_mode(&self) -> AuthMode {
         AuthMode::ApiKey
     }
@@ -356,7 +438,7 @@ pub fn is_valid_session_id(session: &str) -> bool {
 }
 
 /// Provenance of a known total. Input and output counters are provider-reported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum UsageSource {
     Reported,
     Derived,
@@ -367,7 +449,7 @@ pub enum UsageSource {
 /// Missing counters remain unknown. Stream updates are cumulative snapshots,
 /// not increments; explicit zero is a known value. Detailed usage counters and
 /// per-counter completeness remain future additions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
 pub struct Usage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,

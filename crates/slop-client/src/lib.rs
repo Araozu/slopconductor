@@ -5,6 +5,7 @@
 use std::{fmt, path::Path, time::Duration};
 
 use reqwest::header::{AUTHORIZATION, HeaderValue};
+use sha2::{Digest, Sha256};
 use slop_protocol::{
     API_VERSION, ErrorResponse, HEALTH_PATH, HealthResponse, NODE_PATH, NodeResponse, SERVICE_NAME,
     chat::{
@@ -18,7 +19,7 @@ use url::Url;
 
 const MAX_TOKEN_FILE_BYTES: u64 = 66;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
-const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
+const MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_EVENT_FRAME_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Error)]
@@ -61,6 +62,10 @@ pub enum ClientError {
     StreamTimeout,
     #[error("mutation delivery outcome is unknown: {0}")]
     DeliveryUncertain(String),
+    #[error("artifact data does not match its committed size and checksum")]
+    ArtifactIntegrity,
+    #[error("daemon does not advertise required capability: {0}")]
+    UnsupportedCapability(&'static str),
 }
 
 #[derive(Clone)]
@@ -194,6 +199,12 @@ impl DaemonClient {
         &self,
         request: &CreateSessionRequest,
     ) -> Result<CommandReceipt, ClientError> {
+        if request.execution.is_some() {
+            self.require_feature("tools").await?;
+        }
+        if request.settings.is_some() {
+            self.require_feature("per-turn-settings").await?;
+        }
         self.post_json(self.endpoint.join("/v1/sessions")?, request)
             .await
     }
@@ -234,6 +245,9 @@ impl DaemonClient {
         session_id: &str,
         request: &SendMessageRequest,
     ) -> Result<CommandReceipt, ClientError> {
+        if request.model.is_some() || request.settings.is_some() {
+            self.require_feature("per-turn-settings").await?;
+        }
         self.post_json(
             session_url(&self.endpoint, session_id, Some("messages"))?,
             request,
@@ -288,6 +302,80 @@ impl DaemonClient {
 
     pub async fn models(&self) -> Result<Vec<ModelResponse>, ClientError> {
         self.get_json(self.endpoint.join("/v1/models")?).await
+    }
+
+    pub async fn capabilities(
+        &self,
+    ) -> Result<slop_protocol::execution::CapabilitiesResponse, ClientError> {
+        self.get_json(self.endpoint.join("/v1/capabilities")?).await
+    }
+    pub async fn message(&self, id: &str) -> Result<MessageResponse, ClientError> {
+        self.get_json(id_url(&self.endpoint, "/v1/messages", id, None)?)
+            .await
+    }
+    pub async fn model_requests(
+        &self,
+        turn: &str,
+        after: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<Page<slop_protocol::execution::ModelRequestResponse>, ClientError> {
+        let mut url = id_url(&self.endpoint, "/v1/turns", turn, Some("requests"))?;
+        append_page_query(&mut url, after, limit);
+        self.get_json(url).await
+    }
+    pub async fn tool_invocations(
+        &self,
+        turn: &str,
+        after: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<Page<slop_protocol::execution::ToolInvocationResponse>, ClientError> {
+        let mut url = id_url(&self.endpoint, "/v1/turns", turn, Some("tools"))?;
+        append_page_query(&mut url, after, limit);
+        self.get_json(url).await
+    }
+    pub async fn tool_invocation(
+        &self,
+        id: &str,
+    ) -> Result<slop_protocol::execution::ToolInvocationResponse, ClientError> {
+        self.get_json(id_url(&self.endpoint, "/v1/tools", id, None)?)
+            .await
+    }
+    pub async fn artifact(
+        &self,
+        id: &str,
+    ) -> Result<slop_protocol::execution::ArtifactResponse, ClientError> {
+        self.get_json(id_url(&self.endpoint, "/v1/artifacts", id, None)?)
+            .await
+    }
+
+    pub async fn artifact_content(&self, id: &str) -> Result<ArtifactStream, ClientError> {
+        let metadata = self.artifact(id).await?;
+        if metadata.id != id || metadata.sha256 != id || metadata.size_bytes > 64 * 1024 * 1024 {
+            return Err(ClientError::InvalidResponse);
+        }
+        let pending = self
+            .authorized(self.stream_http.get(id_url(
+                &self.endpoint,
+                "/v1/artifacts",
+                id,
+                Some("content"),
+            )?))
+            .send();
+        let response = tokio::time::timeout(Duration::from_secs(10), pending)
+            .await
+            .map_err(|_| ClientError::StreamTimeout)??;
+        let status = response.status();
+        if !status.is_success() {
+            let body = read_bounded(response).await?;
+            return Err(api_error(status.as_u16(), &body, self.token.as_ref()));
+        }
+        Ok(ArtifactStream {
+            metadata,
+            response,
+            received: 0,
+            hash: Sha256::new(),
+            finished: false,
+        })
     }
 
     pub async fn providers(&self) -> Result<Vec<ProviderStatus>, ClientError> {
@@ -387,6 +475,19 @@ impl DaemonClient {
         })
     }
 
+    async fn require_feature(&self, feature: &'static str) -> Result<(), ClientError> {
+        if !self
+            .health()
+            .await?
+            .capabilities
+            .iter()
+            .any(|f| f == feature)
+        {
+            return Err(ClientError::UnsupportedCapability(feature));
+        }
+        Ok(())
+    }
+
     fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(token) = &self.token {
             request.header(AUTHORIZATION, token.clone())
@@ -413,6 +514,42 @@ pub struct EventStream {
     response: reqwest::Response,
     buffer: Vec<u8>,
     finished: bool,
+}
+
+/// Bounded artifact download. Consume through EOF to validate the committed
+/// checksum; callers should publish a destination only after validation.
+pub struct ArtifactStream {
+    pub metadata: slop_protocol::execution::ArtifactResponse,
+    response: reqwest::Response,
+    received: u64,
+    hash: Sha256,
+    finished: bool,
+}
+impl ArtifactStream {
+    pub async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, ClientError> {
+        if self.finished {
+            return Ok(None);
+        }
+        let next = tokio::time::timeout(Duration::from_secs(45), self.response.chunk())
+            .await
+            .map_err(|_| ClientError::StreamTimeout)??;
+        if let Some(chunk) = next {
+            self.received = self.received.saturating_add(chunk.len() as u64);
+            if self.received > self.metadata.size_bytes {
+                return Err(ClientError::ArtifactIntegrity);
+            }
+            self.hash.update(&chunk);
+            Ok(Some(chunk.to_vec()))
+        } else {
+            if self.received != self.metadata.size_bytes
+                || format!("{:x}", self.hash.clone().finalize()) != self.metadata.sha256
+            {
+                return Err(ClientError::ArtifactIntegrity);
+            }
+            self.finished = true;
+            Ok(None)
+        }
+    }
 }
 
 impl EventStream {
@@ -707,6 +844,123 @@ mod tests {
         format!("http://{address}")
     }
 
+    #[tokio::test]
+    async fn extended_mutations_fail_before_delivery_to_older_daemons() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = server(API_VERSION, seen.clone(), false).await;
+        let client = DaemonClient::with_token(&endpoint, Some(TOKEN.into())).unwrap();
+        let error = client
+            .send_message(
+                "session",
+                &SendMessageRequest {
+                    command_id: "cmd".into(),
+                    text: "hello".into(),
+                    model: Some("opencode-go/glm-5.3".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ClientError::UnsupportedCapability("per-turn-settings")
+        ));
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn artifact_download_validates_size_checksum_and_authentication() {
+        use slop_protocol::execution::ArtifactResponse;
+        async fn fixture(
+            bytes: Vec<u8>,
+            size: u64,
+            hash: String,
+        ) -> (String, Arc<Mutex<Vec<String>>>) {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let app = Router::new()
+                .route(
+                    HEALTH_PATH,
+                    get(|| async {
+                        Json(HealthResponse {
+                            service: SERVICE_NAME.into(),
+                            version: "test".into(),
+                            api_version: API_VERSION,
+                            capabilities: vec![],
+                        })
+                    }),
+                )
+                .route(
+                    "/v1/artifacts/{id}",
+                    get({
+                        let seen = seen.clone();
+                        let hash = hash.clone();
+                        move |headers: HeaderMap| {
+                            let seen = seen.clone();
+                            let hash = hash.clone();
+                            async move {
+                                seen.lock()
+                                    .unwrap()
+                                    .push(headers[AUTHORIZATION].to_str().unwrap().to_owned());
+                                Json(ArtifactResponse {
+                                    id: hash.clone(),
+                                    sha256: hash,
+                                    size_bytes: size,
+                                    media_type: "application/octet-stream".into(),
+                                })
+                            }
+                        }
+                    }),
+                )
+                .route(
+                    "/v1/artifacts/{id}/content",
+                    get({
+                        let seen = seen.clone();
+                        move |headers: HeaderMap| {
+                            let seen = seen.clone();
+                            let bytes = bytes.clone();
+                            async move {
+                                seen.lock()
+                                    .unwrap()
+                                    .push(headers[AUTHORIZATION].to_str().unwrap().to_owned());
+                                bytes
+                            }
+                        }
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            (format!("http://{address}"), seen)
+        }
+        let data = b"committed artifact";
+        let hash = format!("{:x}", Sha256::digest(data));
+        for (bytes, size, valid) in [
+            (data.to_vec(), data.len() as u64, true),
+            (b"corrupted artifact".to_vec(), data.len() as u64, false),
+            (data.to_vec(), 1, false),
+            (data.to_vec(), 100, false),
+        ] {
+            let (endpoint, seen) = fixture(bytes, size, hash.clone()).await;
+            let token = token_file(TOKEN);
+            let client = DaemonClient::new_with_token_file(&endpoint, token.path()).unwrap();
+            let mut stream = client.artifact_content(&hash).await.unwrap();
+            let mut downloaded = Vec::new();
+            let success = loop {
+                match stream.next_chunk().await {
+                    Ok(Some(chunk)) => downloaded.extend(chunk),
+                    Ok(None) => break true,
+                    Err(ClientError::ArtifactIntegrity) => break false,
+                    Err(error) => panic!("unexpected artifact error: {error}"),
+                }
+            };
+            assert_eq!(success, valid);
+            if valid {
+                assert_eq!(downloaded, data);
+            }
+            assert_eq!(*seen.lock().unwrap(), vec![format!("Bearer {TOKEN}"); 2]);
+        }
+    }
+
     fn token_file(contents: &str) -> tempfile::NamedTempFile {
         use std::io::Write;
         let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -809,6 +1063,8 @@ mod tests {
                     provider: "opencode-go".into(),
                     model: "glm-5.3-flash".into(),
                     max_tokens: None,
+
+                    ..Default::default()
                 })
                 .await
                 .map(|_| ())
@@ -821,6 +1077,8 @@ mod tests {
                         command_id: "command-send".into(),
                         text: "hello".into(),
                         expected_revision: None,
+
+                        ..Default::default()
                     }
                 )
                 .await
@@ -889,6 +1147,13 @@ mod tests {
             session_id: "session-1".into(),
             turn_id: "turn-1".into(),
             text: "snowman ☃".into(),
+            message_id: None,
+            block_id: None,
+            request_id: None,
+            invocation_id: None,
+            stream_id: String::new(),
+            chunk_index: 0,
+            kind: "text".into(),
         };
         let mut first = serde_json::to_vec(&event).unwrap();
         first.extend_from_slice(b"\r\n");

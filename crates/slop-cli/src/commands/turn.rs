@@ -13,6 +13,34 @@ use super::Context;
 pub(super) async fn run(command: TurnCommand, context: &Context) -> Result<()> {
     let client = context.client()?;
     match command {
+        TurnCommand::Requests { id, after, limit } => {
+            let page = client.model_requests(&id, after, Some(limit)).await?;
+            context.output.value(&page, || {
+                for request in &page.items {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        request.id,
+                        request.status,
+                        request.requested_model,
+                        request.finish_reason.as_deref().unwrap_or("pending")
+                    );
+                }
+            })?;
+        }
+        TurnCommand::Tools { id, after, limit } => {
+            let page = client.tool_invocations(&id, after, Some(limit)).await?;
+            context.output.value(&page, || {
+                for tool in &page.items {
+                    println!("{}\t{}\t{}", tool.id, tool.name, tool.status);
+                    if let Some(output) = &tool.output {
+                        println!("{output}");
+                    }
+                    for artifact in &tool.artifact_ids {
+                        println!("artifact {artifact}");
+                    }
+                }
+            })?;
+        }
         TurnCommand::Show { id } => {
             let turn = client.turn(&id).await?;
             context.output.value(&turn, || {

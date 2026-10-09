@@ -3,8 +3,9 @@
 This slice connects the public API, the daemon's native execution supervisor,
 SQLite, and the consumer CLI. It uses the existing OpenCode Go adapter directly.
 Zen and Codex remain available as runtime adapters; their daemon integration is
-separate work. Tools, projects, worktrees, and general task/run orchestration are
-not part of text chat.
+separate work. [Structured execution](structured-execution.md) now extends these
+turns with opt-in workspace tools, artifacts, and per-turn model/settings.
+Projects, worktrees, and general task/run orchestration remain future work.
 
 ## Ownership and durability
 
@@ -38,9 +39,9 @@ cannot be persisted, execution stops admitting further work and the API reports
 `runtime_unavailable`; startup recovery reconciles unfinished records.
 
 History is ordered by conversational turn, with its user message before its
-assistant message. Later queued messages are excluded from an earlier turn's
-provider context. Completed replies are reusable context; interrupted thinking
-is discarded. Context is bounded rather than silently truncated.
+assistant messages and paired tool results. Later queued messages are excluded from an earlier turn's
+provider context. Completed replies and committed tool steps are reusable context; interrupted
+thinking is discarded. Context is bounded rather than silently truncated.
 
 ## Restart and cancellation
 
@@ -55,10 +56,9 @@ terminal immediately; active execution drops its provider future. Cancellation
 and completion are serialized by the database worker. Cancellation of a local
 HTTP request cannot guarantee that the provider stopped processing or billing.
 
-No tool calls are executed by this slice. When tools arrive, an unfinished call
-after daemon/process failure must become a failed result with possible unknown
-external effects. It must not be restored or replayed automatically; the agent
-decides its next action from that record.
+Tool-enabled sessions now reconcile unfinished calls into failed paired results
+with possible unknown external effects. Completed tool steps survive interruption.
+No operation is replayed automatically; see [structured execution](structured-execution.md#durability-and-recovery).
 
 ## Public surface
 
@@ -87,11 +87,12 @@ connection. Legacy environment keys are imported only when no saved key exists.
 The default model is `opencode-go/glm-5.3-flash`, with a 4,096-token output cap
 and four concurrent requests across sessions. `default_model`,
 `max_output_tokens`, and `execution_concurrency` can be set in the daemon TOML
-configuration; output caps are frozen in each created session. The execution
+configuration; session defaults and accepted per-turn overrides are frozen
+for execution. The execution
 queue allows 32 queued turns per session and 1,024 globally. Provider context is
 limited to 256 messages and 1 MiB; exceeding it records `context_limit` without
 dispatching inference. Visible text is limited to 1 MiB. Lists have at most 200
-items per page, and history pages also have an 8 MiB encoded JSON bound.
+items per page, and history pages also have a 16 MiB encoded JSON bound.
 
 `--default-model`/`SLOP_DEFAULT_MODEL` overrides the configured model.
 `--provider-base-url`/`SLOP_PROVIDER_BASE_URL` selects an explicitly trusted

@@ -21,6 +21,11 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 
 use crate::chat::{self, ChatOutcome, ChatRepository, RepoFuture, RoleKind, TurnWork};
+use crate::{
+    agent::{RequestCompletion, RequestIntent, ToolIntent},
+    providers::inference::InferenceMessage,
+    tools::ToolOutcome,
+};
 
 struct FixtureRepository {
     work: Mutex<VecDeque<TurnWork>>,
@@ -50,6 +55,8 @@ impl FixtureRepository {
                     role: RoleKind::User,
                     text: "Say hello".to_owned(),
                 }],
+
+                ..Default::default()
             }])),
             claim_barrier: None,
             cancellation,
@@ -125,6 +132,42 @@ impl FixtureRepository {
 }
 
 impl ChatRepository for FixtureRepository {
+    // This fixture exercises text-only scheduling; tool persistence must fail closed.
+    fn begin_request<'a>(&'a self, _: &'a str, _: RequestIntent) -> RepoFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    fn checkpoint_request<'a>(
+        &'a self,
+        turn: &'a str,
+        _: &'a str,
+        message: InferenceMessage,
+    ) -> RepoFuture<'a, ()> {
+        Box::pin(async move { self.checkpoint_visible(turn, &message.visible_text()).await })
+    }
+    fn complete_request<'a>(
+        &'a self,
+        _: &'a str,
+        completion: RequestCompletion,
+    ) -> RepoFuture<'a, ()> {
+        Box::pin(async move {
+            assert!(completion.tools.is_empty());
+            Ok(())
+        })
+    }
+    fn fail_request<'a>(&'a self, _: &'a str, _: &'a str, _: &'a str) -> RepoFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    fn start_tool<'a>(&'a self, _: &'a str, _: &'a ToolIntent) -> RepoFuture<'a, ()> {
+        Box::pin(async { Err(io::Error::other("text fixture has no tools").into()) })
+    }
+    fn finish_tool<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a ToolIntent,
+        _: ToolOutcome,
+    ) -> RepoFuture<'a, ()> {
+        Box::pin(async { Err(io::Error::other("text fixture has no tools").into()) })
+    }
     fn claim_next(&self) -> RepoFuture<'_, Option<TurnWork>> {
         Box::pin(async move {
             if let Some(barrier) = &self.claim_barrier {

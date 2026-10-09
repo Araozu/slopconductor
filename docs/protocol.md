@@ -4,7 +4,7 @@
 
 The protocol is the boundary shared by every frontend and automation client.
 Use HTTP/JSON for commands and queries, with a streaming transport for events.
-The first streaming proposal is NDJSON over HTTP; a WebSocket transport can be
+The implemented streaming transport is NDJSON over HTTP; a WebSocket transport can be
 added without changing event meaning.
 
 **Implemented:** anonymous health, authenticated node identity, and the
@@ -12,6 +12,9 @@ added without changing event meaning.
 history, event replay/follow, and turn inspection/cancellation. The wire structs
 are in `slop_protocol::chat`. Mutations use explicit command IDs and return
 durable acceptance receipts. Errors use `ErrorResponse { code, message }`.
+[Structured execution](structured-execution.md) also adds message blocks,
+model requests, tool invocations, artifacts, capability discovery, causal delta
+IDs, and per-turn model/settings. Its DTOs live in `slop_protocol::execution`.
 Resource summaries and the larger command/error envelope below remain proposed.
 The [provider credential surface](provider-credentials.md#public-api) is also
 implemented, with wire structs in `slop_protocol::providers`: private API-key
@@ -102,7 +105,7 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | --- | --- |
 | GET /v1/health | Implemented: anonymous service identity/capabilities |
 | GET /v1/node | Implemented: authenticated durable node ID, name, and OS; resource summary remains proposed |
-| GET /v1/capabilities | Available tools, providers, settings, and policy capabilities |
+| GET /v1/capabilities | Implemented: tool schemas, per-turn selection support, and loop bounds |
 | GET /v1/models | Implemented: known Go models and local credential readiness; account entitlement is not probed |
 | GET /v1/providers | Implemented: safe credential presence and daemon execution support |
 | PUT /v1/providers/{provider}/api-key | Implemented: persist an API key and activate new supported requests without restart |
@@ -113,10 +116,16 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET, POST /v1/sessions | Implemented: list/create conversations owned by this node |
 | GET /v1/sessions/{id} | Implemented: snapshot with revision and event watermark |
 | GET /v1/sessions/{id}/messages | Implemented: paginated durable conversation |
-| POST /v1/sessions/{id}/messages | Implemented: accept a user message and queue one text turn |
+| POST /v1/sessions/{id}/messages | Implemented: accept a user message with optional model/settings and queue one turn |
 | GET /v1/sessions/{id}/events | Implemented: catch up and optionally follow NDJSON session events |
-| GET /v1/turns/{id} | Implemented: text-turn status, message IDs, model, and usage |
-| POST /v1/turns/{id}/cancel | Implemented: durable text-turn cancellation |
+| GET /v1/turns/{id} | Implemented: turn status, message/request/invocation IDs, frozen settings, model, and usage |
+| POST /v1/turns/{id}/cancel | Implemented: durable turn cancellation |
+| GET /v1/messages/{id} | Implemented: canonical structured message |
+| GET /v1/turns/{id}/requests | Implemented: paginated model requests/settings/usage |
+| GET /v1/turns/{id}/tools | Implemented: paginated tool invocations/results |
+| GET /v1/tools/{id} | Implemented: one canonical tool invocation |
+| GET /v1/artifacts/{id} | Implemented: artifact metadata |
+| GET /v1/artifacts/{id}/content | Implemented: authenticated artifact byte stream |
 | GET, POST /v1/tasks | List/create queued work, optionally creating a session |
 | GET /v1/tasks/{id} | Goal, status, attempts, and outputs |
 | POST /v1/tasks/{id}/cancel | Request cancellation of pending/active work |
@@ -128,7 +137,6 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET, POST /v1/batches | Create/list batch records and member tasks |
 | GET /v1/batches/{id} | Progress, parameters, members, and aggregate outputs |
 | POST /v1/batches/{id}/cancel | Request cancellation according to recorded propagation policy |
-| GET /v1/artifacts/{id} | Metadata and controlled artifact download |
 | GET, POST /v1/peers | Configure and inspect trusted peer endpoints |
 | POST /v1/transfers | Future handoff preparation; unavailable before M6 |
 
@@ -170,8 +178,8 @@ final message establish recoverable text; clients reconcile transient display
 with those canonical records.
 Interrupted thinking is discarded. An unfinished tool after daemon/process
 failure is represented as a failed tool result with its invocation ID, failure
-cause, and any uncertainty about external effects. This is a planned semantic
-event, not an implemented tool endpoint. The daemon never restores or replays
+cause, and any uncertainty about external effects. This is implemented for
+opt-in local tools in [structured execution](structured-execution.md). The daemon never restores or replays
 that call; the agent chooses its next action.
 
 ## Replay, gaps, and backpressure
@@ -228,8 +236,9 @@ do not change daemon ownership.
 Local bearer-token authentication is implemented for node, provider credential,
 and text-chat queries
 and mutations. The daemon
-still binds loopback only. Pairing and authorization for privileged tools remain
-future work. M3 adds authenticated access over Tailscale, with separate
+still binds loopback only. Explicit session workspace/tool policy gates local
+tool execution under the bearer credential. Remote pairing and separate
+read/write authorization remain future work. M3 adds authenticated access over Tailscale, with separate
 read/write capabilities. Network membership alone is not the entire application
 authorization policy.
 

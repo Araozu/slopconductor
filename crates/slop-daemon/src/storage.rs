@@ -23,9 +23,11 @@ use slop_protocol::{
 };
 use tokio::sync::oneshot;
 
+mod execution;
+
 const DATABASE_FILE: &str = "state.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const MINIMUM_SQLITE_VERSION: i32 = 3_051_003;
 const MAX_QUEUE_CAPACITY: usize = 4096;
 const MAX_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -34,7 +36,7 @@ const MAX_COMMAND_ID_BYTES: usize = 128;
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const MAX_CONTEXT_BYTES: usize = 1024 * 1024;
 const MAX_CONTEXT_MESSAGES: usize = 256;
-const MAX_MESSAGE_PAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_MESSAGE_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_QUEUE_PER_SESSION: i64 = 32;
 const MAX_QUEUE_GLOBAL: i64 = 1024;
 const DEFAULT_PAGE_SIZE: usize = 50;
@@ -68,6 +70,8 @@ pub enum StoreError {
     Conflict,
     #[error("chat storage limit reached")]
     Limit,
+    #[error("unsupported execution capability: {0}")]
+    Unsupported(&'static str),
 }
 
 type StoreResult<T> = Result<T, StoreError>;
@@ -649,9 +653,12 @@ where
     }
     if existing_version <= 1 {
         create_chat_schema(&tx)?;
-        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
-            .map_err(|_| StoreError::Database)?;
     }
+    if existing_version < 3 {
+        execution::migrate(&tx)?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(|_| StoreError::Database)?;
     hook(&tx)?;
     tx.commit().map_err(|_| StoreError::Database)
 }
@@ -929,7 +936,9 @@ fn create_session(
     }
     let node = query_node(&tx)?;
     let session_id = opaque_id()?;
-    let effective_max_tokens = request.max_tokens.unwrap_or(default_max_tokens);
+    let settings = execution::session_settings(&request, default_max_tokens)?;
+    let effective_max_tokens = settings.max_output_tokens.expect("validated output cap");
+    let policy = execution::workspace(&request)?;
     let order: i64 = tx
         .query_row(
             "SELECT next_order FROM session_order WHERE singleton=1",
@@ -944,6 +953,16 @@ fn create_session(
     .map_err(|_| StoreError::Database)?;
     tx.execute("INSERT INTO sessions(id,owner_node_id,title,provider,model,max_tokens,created_order) VALUES(?1,?2,?3,?4,?5,?6,?7)",
         rusqlite::params![session_id,node.node_id,request.title,request.provider,request.model,effective_max_tokens,order]).map_err(|_|StoreError::Database)?;
+    tx.execute(
+        "UPDATE sessions SET settings=?1,execution=?2,workspace_root=?3 WHERE id=?4",
+        rusqlite::params![
+            canonical(&settings)?,
+            policy.as_ref().map(canonical).transpose()?,
+            policy.as_ref().map(|p| p.root.as_str()),
+            session_id
+        ],
+    )
+    .map_err(|_| StoreError::Database)?;
     let (revision, sequence) = append_event(&tx, &session_id, "session_created", None, None)?;
     let receipt = make_receipt(
         &request.command_id,
@@ -968,11 +987,13 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionResponse
         max_tokens: row.get(5)?,
         revision: row.get::<_, i64>(6)? as u64,
         last_event_sequence: row.get::<_, i64>(7)? as u64,
+        settings: execution::json_column(row, 8)?,
+        execution: execution::optional_json_column(row, 9)?,
     })
 }
 
 fn get_session(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
-    connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence FROM sessions WHERE id=?1",[id],session_from_row)
+    connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution FROM sessions WHERE id=?1",[id],session_from_row)
         .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)
 }
 
@@ -982,7 +1003,7 @@ fn list_sessions(
     limit: usize,
 ) -> StoreResult<Page<SessionResponse>> {
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
+    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
         .map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![after, (limit + 1) as i64])
@@ -994,7 +1015,7 @@ fn list_sessions(
             break;
         }
         let item = session_from_row(row).map_err(|_| StoreError::Database)?;
-        next_after = Some(row.get::<_, i64>(8).map_err(|_| StoreError::Database)? as u64);
+        next_after = Some(row.get::<_, i64>(10).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     let has_more = items.len() == limit
@@ -1067,9 +1088,22 @@ fn send_message(
             |r| r.get(0),
         )
         .map_err(|_| StoreError::Database)?;
-    let user_order = ordinal.saturating_mul(2);
-    let requested_model = format!("{}/{}", session.provider, session.model);
+    let user_order = ordinal.checked_mul(1024).ok_or(StoreError::Limit)?;
+    let requested_model = request
+        .model
+        .clone()
+        .unwrap_or_else(|| format!("{}/{}", session.provider, session.model));
+    let settings = execution::turn_settings(&session, &request, &requested_model)?;
     tx.execute("INSERT INTO turns(id,session_id,ordinal,user_message_id,status,requested_model) VALUES(?1,?2,?3,?4,'queued',?5)",rusqlite::params![turn_id,session_id,ordinal,message_id,requested_model]).map_err(|_|StoreError::Database)?;
+    tx.execute(
+        "UPDATE turns SET settings=?1,requested_settings=?2 WHERE id=?3",
+        rusqlite::params![
+            canonical(&settings)?,
+            canonical(&request.settings.clone().unwrap_or_default())?,
+            turn_id
+        ],
+    )
+    .map_err(|_| StoreError::Database)?;
     tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'user',?5,'completed')",rusqlite::params![message_id,session_id,turn_id,user_order,request.text]).map_err(|_|StoreError::Database)?;
     let (revision, event_sequence) = append_event(
         &tx,
@@ -1099,7 +1133,7 @@ fn list_messages(
 ) -> StoreResult<Page<MessageResponse>> {
     let _ = get_session(connection, session_id)?;
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,session_id,turn_id,role,text,status,ordinal FROM messages WHERE session_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
+    let mut statement=connection.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id,ordinal FROM messages WHERE session_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![session_id, after, (limit + 1) as i64])
         .map_err(|_| StoreError::Database)?;
@@ -1119,6 +1153,8 @@ fn list_messages(
             role: row.get(3).map_err(|_| StoreError::Database)?,
             text: row.get(4).map_err(|_| StoreError::Database)?,
             status: row.get(5).map_err(|_| StoreError::Database)?,
+            blocks: execution::public_blocks_from_row(row, 6, 0, 4)?,
+            request_id: row.get(7).map_err(|_| StoreError::Database)?,
         };
         let item_bytes = serde_json::to_vec(&item)
             .map_err(|_| StoreError::Database)?
@@ -1131,7 +1167,7 @@ fn list_messages(
             break;
         }
         encoded_bytes += item_bytes + usize::from(!items.is_empty());
-        next_after = Some(row.get::<_, i64>(6).map_err(|_| StoreError::Database)? as u64);
+        next_after = Some(row.get::<_, i64>(8).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     if has_more {
@@ -1162,7 +1198,7 @@ fn list_events(
 ) -> StoreResult<Page<EventResponse>> {
     let _ = get_session(connection, session_id)?;
     let after = after.min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT session_id,sequence,kind,turn_id,message_id,revision FROM session_events WHERE session_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3").map_err(|_|StoreError::Database)?;
+    let mut statement=connection.prepare("SELECT session_id,sequence,kind,turn_id,message_id,revision,request_id,invocation_id FROM session_events WHERE session_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3").map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![session_id, after, (limit + 1) as i64])
         .map_err(|_| StoreError::Database)?;
@@ -1180,6 +1216,8 @@ fn list_events(
             turn_id: row.get(3).map_err(|_| StoreError::Database)?,
             message_id: row.get(4).map_err(|_| StoreError::Database)?,
             revision: row.get::<_, i64>(5).map_err(|_| StoreError::Database)? as u64,
+            request_id: row.get(6).map_err(|_| StoreError::Database)?,
+            invocation_id: row.get(7).map_err(|_| StoreError::Database)?,
         });
         next_after = Some(sequence as u64);
     }
@@ -1198,8 +1236,8 @@ fn list_events(
     Ok(Page { items, next_after })
 }
 
-fn get_turn(connection: &Connection, id: &str) -> StoreResult<TurnResponse> {
-    connection.query_row("SELECT id,session_id,user_message_id,assistant_message_id,status,requested_model,resolved_model,input_tokens,output_tokens,total_tokens,total_source,error_code,error_message FROM turns WHERE id=?1",[id],|r|{let input:Option<String>=r.get(7)?;let output:Option<String>=r.get(8)?;let total:Option<String>=r.get(9)?;let total_source:Option<String>=r.get(10)?;Ok(TurnResponse{id:r.get(0)?,session_id:r.get(1)?,user_message_id:r.get(2)?,assistant_message_id:r.get(3)?,status:r.get(4)?,requested_model:r.get(5)?,resolved_model:r.get(6)?,usage:if input.is_some()||output.is_some()||total.is_some()||total_source.is_some(){Some(UsageResponse{input_tokens:input.and_then(|v|v.parse().ok()),output_tokens:output.and_then(|v|v.parse().ok()),total_tokens:total.and_then(|v|v.parse().ok()),total_source})}else{None},error_code:r.get(11)?,error_message:r.get(12)?})}).optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)
+fn get_base_turn(connection: &Connection, id: &str) -> StoreResult<TurnResponse> {
+    connection.query_row("SELECT id,session_id,user_message_id,assistant_message_id,status,requested_model,resolved_model,input_tokens,output_tokens,total_tokens,total_source,error_code,error_message FROM turns WHERE id=?1",[id],|r|{let input:Option<String>=r.get(7)?;let output:Option<String>=r.get(8)?;let total:Option<String>=r.get(9)?;let total_source:Option<String>=r.get(10)?;Ok(TurnResponse{id:r.get(0)?,session_id:r.get(1)?,user_message_id:r.get(2)?,assistant_message_id:r.get(3)?,status:r.get(4)?,requested_model:r.get(5)?,resolved_model:r.get(6)?,usage:if input.is_some()||output.is_some()||total.is_some()||total_source.is_some(){Some(UsageResponse{input_tokens:input.and_then(|v|v.parse().ok()),output_tokens:output.and_then(|v|v.parse().ok()),total_tokens:total.and_then(|v|v.parse().ok()),total_source})}else{None},error_code:r.get(11)?,error_message:r.get(12)?,settings:Default::default(),model_request_ids:Vec::new(),tool_invocation_ids:Vec::new()})}).optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)
 }
 
 fn cancel_turn(
@@ -1278,9 +1316,11 @@ fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
         .map_err(|_| StoreError::Database)?;
     drop(stmt);
     for (turn_id, session_id) in active {
-        // Thinking/checkpoints are discarded and never become conversation context.
+        execution::reconcile_tools(&tx, &turn_id, "daemon_restarted")?;
+        execution::reconcile_requests(&tx, &turn_id, "daemon_restarted")?;
+        // Incomplete thinking is discarded; completed tool steps remain facts.
         tx.execute(
-            "UPDATE messages SET status='interrupted' WHERE turn_id=?1 AND role='assistant'",
+            "UPDATE messages SET status='interrupted',continuation=NULL WHERE turn_id=?1 AND role='assistant' AND status!='completed'",
             [&turn_id],
         )
         .map_err(|_| StoreError::Database)?;
@@ -1291,77 +1331,11 @@ fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
 }
 
 fn claim_next_turn(connection: &Connection) -> StoreResult<Option<slop_runtime::chat::TurnWork>> {
-    use slop_runtime::chat::{ContextMessage, RoleKind, TurnWork};
-    let tx = connection
-        .unchecked_transaction()
-        .map_err(|_| StoreError::Database)?;
-    let next:Option<(String,String,i64,String,Option<u32>)>=tx.query_row(
-        "SELECT t.id,t.session_id,t.ordinal,t.requested_model,s.max_tokens FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.status='queued' AND NOT EXISTS (SELECT 1 FROM turns active WHERE active.session_id=t.session_id AND active.status='running') AND NOT EXISTS (SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN ('queued','running')) ORDER BY t.rowid LIMIT 1",[],
-        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(|_|StoreError::Database)?;
-    let Some((turn_id, session_id, _ordinal, requested_model, max_tokens)) = next else {
-        tx.commit().map_err(|_| StoreError::Database)?;
-        return Ok(None);
-    };
-    let mut statement=tx.prepare("SELECT m.role,m.text FROM messages m JOIN turns t ON t.id=m.turn_id WHERE m.session_id=?1 AND (t.status='completed' OR m.turn_id=?2) AND m.role IN ('user','assistant') ORDER BY m.ordinal DESC LIMIT ?3").map_err(|_|StoreError::Database)?;
-    let mut rows = statement
-        .query(rusqlite::params![
-            session_id,
-            turn_id,
-            (MAX_CONTEXT_MESSAGES + 1) as i64
-        ])
-        .map_err(|_| StoreError::Database)?;
-    let mut reverse: Vec<ContextMessage> = Vec::new();
-    let mut bytes = 0usize;
-    let mut overflow = false;
-    while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
-        if reverse.len() == MAX_CONTEXT_MESSAGES {
-            overflow = true;
-            break;
-        }
-        let role: String = row.get(0).map_err(|_| StoreError::Database)?;
-        let text: String = row.get(1).map_err(|_| StoreError::Database)?;
-        if bytes.saturating_add(text.len()) > MAX_CONTEXT_BYTES {
-            overflow = true;
-            break;
-        }
-        let role = match role.as_str() {
-            "user" => RoleKind::User,
-            "assistant" => RoleKind::Assistant,
-            _ => return Err(StoreError::Database),
-        };
-        bytes += text.len();
-        reverse.push(ContextMessage { role, text });
-    }
-    drop(rows);
-    drop(statement);
-    if overflow {
-        tx.execute("UPDATE turns SET status='failed',error_code='context_limit',error_message='Conversation context exceeds the supported bound.' WHERE id=?1 AND status='queued'", [&turn_id]).map_err(|_|StoreError::Database)?;
-        if tx.changes() != 1 {
-            return Err(StoreError::Conflict);
-        }
-        append_event(&tx, &session_id, "turn_failed", Some(&turn_id), None)?;
-        tx.commit().map_err(|_| StoreError::Database)?;
-        return Ok(None);
-    }
-    tx.execute(
-        "UPDATE turns SET status='running' WHERE id=?1 AND status='queued'",
-        [&turn_id],
-    )
-    .map_err(|_| StoreError::Database)?;
-    if tx.changes() != 1 {
-        return Err(StoreError::Conflict);
-    }
-    append_event(&tx, &session_id, "turn_started", Some(&turn_id), None)?;
-    reverse.reverse();
-    let history = reverse;
-    tx.commit().map_err(|_| StoreError::Database)?;
-    Ok(Some(TurnWork {
-        turn_id,
-        session_id,
-        requested_model,
-        max_tokens,
-        messages: history,
-    }))
+    execution::claim_next_turn(connection)
+}
+
+fn get_turn(connection: &Connection, id: &str) -> StoreResult<TurnResponse> {
+    execution::get_turn(connection, id)
 }
 
 fn checkpoint_turn(connection: &Connection, turn_id: &str, text: &str) -> StoreResult<()> {
@@ -1388,12 +1362,7 @@ fn checkpoint_turn(connection: &Connection, turn_id: &str, text: &str) -> StoreR
         id
     } else {
         let id = opaque_id()?;
-        let turn_ordinal: i64 = tx
-            .query_row("SELECT ordinal FROM turns WHERE id=?1", [turn_id], |r| {
-                r.get(0)
-            })
-            .map_err(|_| StoreError::Database)?;
-        let ordinal = turn_ordinal.saturating_mul(2).saturating_add(1);
+        let ordinal = execution::next_message_ordinal(&tx, turn_id)?;
         tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'assistant',?5,'checkpoint')",rusqlite::params![id,session_id,turn_id,ordinal,text]).map_err(|_|StoreError::Database)?;
         tx.execute(
             "UPDATE turns SET assistant_message_id=?1 WHERE id=?2",
@@ -1443,6 +1412,18 @@ fn finish_turn(
         outcome.text.clear();
         outcome.resolved_model = None;
     }
+    if outcome.status != ChatStatus::Completed {
+        execution::reconcile_requests(
+            &tx,
+            turn_id,
+            outcome.error_code.as_deref().unwrap_or("turn_cancelled"),
+        )?;
+        execution::reconcile_tools(
+            &tx,
+            turn_id,
+            outcome.error_code.as_deref().unwrap_or("turn_cancelled"),
+        )?;
+    }
     let event_kind = match outcome.status {
         ChatStatus::Completed => "turn_completed",
         ChatStatus::Canceled => "turn_cancelled",
@@ -1466,7 +1447,19 @@ fn finish_turn(
     } else {
         "interrupted"
     };
-    let assistant_id = if outcome.status == ChatStatus::Completed
+    let preserve_completed = if let Some(id) = &existing {
+        tx.query_row(
+            "SELECT status='completed' AND request_id IS NOT NULL FROM messages WHERE id=?1",
+            [id],
+            |r| r.get::<_, bool>(0),
+        )
+        .map_err(|_| StoreError::Database)?
+    } else {
+        false
+    };
+    let assistant_id = if preserve_completed && outcome.status != ChatStatus::Completed {
+        existing
+    } else if outcome.status == ChatStatus::Completed
         || existing.is_some()
         || !outcome.text.is_empty()
     {
@@ -1474,12 +1467,7 @@ fn finish_turn(
             id
         } else {
             let id = opaque_id()?;
-            let turn_ordinal: i64 = tx
-                .query_row("SELECT ordinal FROM turns WHERE id=?1", [turn_id], |r| {
-                    r.get(0)
-                })
-                .map_err(|_| StoreError::Database)?;
-            let ordinal = turn_ordinal.saturating_mul(2).saturating_add(1);
+            let ordinal = execution::next_message_ordinal(&tx, turn_id)?;
             tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'assistant',?5,?6)",rusqlite::params![id,session_id,turn_id,ordinal,outcome.text,message_status]).map_err(|_|StoreError::Database)?;
             id
         };
@@ -1534,6 +1522,86 @@ fn cancellation_requested(connection: &Connection, turn_id: &str) -> StoreResult
 }
 
 impl slop_runtime::chat::ChatRepository for StoreClient {
+    fn begin_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: slop_runtime::agent::RequestIntent,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            self.submit(move |c| execution::begin_request(c, &turn, intent))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn checkpoint_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        request_id: &'a str,
+        message: slop_runtime::providers::inference::InferenceMessage,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let request = request_id.to_owned();
+            self.submit(move |c| execution::checkpoint_request(c, &turn, &request, message))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn complete_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        completion: slop_runtime::agent::RequestCompletion,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            self.submit(move |c| execution::complete_request(c, &turn, completion))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn fail_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        request_id: &'a str,
+        code: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let request = request_id.to_owned();
+            let code = code.to_owned();
+            self.submit(move |c| execution::fail_request(c, &turn, &request, &code))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn start_tool<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: &'a slop_runtime::agent::ToolIntent,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let intent = intent.clone();
+            self.submit(move |c| execution::start_tool(c, &turn, &intent))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn finish_tool<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: &'a slop_runtime::agent::ToolIntent,
+        outcome: slop_runtime::tools::ToolOutcome,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let intent = intent.clone();
+            self.submit(move |c| execution::finish_tool(c, &turn, &intent, outcome))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
     fn claim_next(
         &self,
     ) -> slop_runtime::chat::RepoFuture<'_, Option<slop_runtime::chat::TurnWork>> {
@@ -1646,7 +1714,341 @@ mod tests {
             provider: "opencode-go".to_owned(),
             model: "glm-5.3-flash".to_owned(),
             max_tokens: Some(1024),
+
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn schema_two_migration_preserves_history_settings_and_command_payloads() {
+        let connection = Connection::open_in_memory().unwrap();
+        let tx = connection.unchecked_transaction().unwrap();
+        create_chat_schema(&tx).unwrap();
+        tx.execute("INSERT INTO sessions(id,owner_node_id,provider,model,max_tokens,created_order) VALUES('session','node','opencode-go','glm-5.3-flash',1024,1)",[]).unwrap();
+        tx.execute(
+            "INSERT INTO commands VALUES('command','scope','{\"text\":\"old payload\"}','{}')",
+            [],
+        )
+        .unwrap();
+        for i in 1..=2 {
+            tx.execute("INSERT INTO turns(id,session_id,ordinal,user_message_id,assistant_message_id,status,requested_model) VALUES(?1,'session',?2,?3,?4,'completed','opencode-go/glm-5.3-flash')",rusqlite::params![format!("turn-{i}"),i,format!("user-{i}"),format!("assistant-{i}")]).unwrap();
+            for (role, offset) in [("user", 0), ("assistant", 1)] {
+                tx.execute(
+                    "INSERT INTO messages VALUES(?1,'session',?2,?3,?4,?5,'completed')",
+                    rusqlite::params![
+                        format!("{role}-{i}"),
+                        format!("turn-{i}"),
+                        i * 2 + offset,
+                        role,
+                        format!("{role} {i}")
+                    ],
+                )
+                .unwrap();
+            }
+        }
+        tx.pragma_update(None, "user_version", 2).unwrap();
+        tx.commit().unwrap();
+        migrate(&connection, 2, None).unwrap();
+        let history = list_messages(&connection, "session", None, 20).unwrap();
+        assert_eq!(
+            history
+                .items
+                .iter()
+                .map(|m| m.text.as_str())
+                .collect::<Vec<_>>(),
+            ["user 1", "assistant 1", "user 2", "assistant 2"]
+        );
+        assert!(history.items.iter().all(|m| m.blocks.len() == 1));
+        assert_eq!(
+            get_session(&connection, "session")
+                .unwrap()
+                .settings
+                .max_output_tokens,
+            Some(1024)
+        );
+        let payload: String = connection
+            .query_row(
+                "SELECT payload FROM commands WHERE command_id='command'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(payload, "{\"text\":\"old payload\"}");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
+    async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() {
+        use slop_protocol::execution::{GenerationSettings, WorkspacePolicy};
+        let dir = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let store = open_test(&dir, None).await;
+        let client = store.client();
+        let policy = WorkspacePolicy {
+            root: workspace.path().to_str().unwrap().into(),
+            allowed_tools: vec!["read_file".into()],
+            shell_timeout_ms: 1000,
+            max_output_bytes: 1024,
+            max_tool_calls: 4,
+            max_model_requests: 4,
+        };
+        let mut first = create_request("lease-first", None);
+        first.execution = Some(policy.clone());
+        let first = client.create_session(first).await.unwrap();
+        let mut second = create_request("lease-second", None);
+        second.execution = Some(policy);
+        let second = client.create_session(second).await.unwrap();
+        let sent = client
+            .send_message(
+                &first.session_id,
+                SendMessageRequest {
+                    command_id: "selected".into(),
+                    text: "hello".into(),
+                    model: Some("opencode-go/glm-5.3".into()),
+                    settings: Some(GenerationSettings {
+                        max_output_tokens: Some(512),
+                        reasoning_effort: None,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        client
+            .send_message(
+                &second.session_id,
+                SendMessageRequest {
+                    command_id: "blocked-workspace".into(),
+                    text: "wait".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let work = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(work.turn_id, sent.turn_id.clone().unwrap());
+        assert_eq!(work.requested_model, "opencode-go/glm-5.3");
+        assert_eq!(work.settings.max_output_tokens, Some(512));
+        assert_eq!(
+            client
+                .session(&first.session_id)
+                .await
+                .unwrap()
+                .settings
+                .max_output_tokens,
+            Some(1024)
+        );
+        assert!(client.claim_next_turn().await.unwrap().is_none());
+        client
+            .finish_chat_turn(
+                &work.turn_id,
+                slop_runtime::chat::ChatOutcome {
+                    text: "done".into(),
+                    resolved_model: None,
+                    usage: Default::default(),
+                    status: slop_runtime::chat::ChatStatus::Completed,
+                    error_code: None,
+                    error_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let next = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(next.session_id, second.session_id);
+        assert_eq!(next.settings.max_output_tokens, Some(1024));
+        let before = client.session(&first.session_id).await.unwrap().revision;
+        let unsupported = client
+            .send_message(
+                &first.session_id,
+                SendMessageRequest {
+                    command_id: "effort".into(),
+                    text: "reject".into(),
+                    settings: Some(GenerationSettings {
+                        max_output_tokens: None,
+                        reasoning_effort: Some("high".into()),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(matches!(
+            unsupported,
+            Err(StoreError::Unsupported("settings.reasoning_effort"))
+        ));
+        assert_eq!(
+            client.session(&first.session_id).await.unwrap().revision,
+            before
+        );
+        store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
+        use slop_runtime::{
+            agent::{RequestCompletion, RequestIntent, ToolIntent},
+            chat::ChatRepository,
+            providers::{Usage, inference::*},
+            tools::ToolOutcome,
+        };
+        let dir = TempDir::new().unwrap();
+        let store = open_test(&dir, None).await;
+        let client = store.client();
+        let session = client
+            .create_session(create_request("tool-recovery", None))
+            .await
+            .unwrap();
+        let turn = client
+            .send_message(
+                &session.session_id,
+                SendMessageRequest {
+                    command_id: "tool-turn".into(),
+                    text: "do work".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .turn_id
+            .unwrap();
+        client.claim_next_turn().await.unwrap().unwrap();
+        client
+            .begin_request(
+                &turn,
+                RequestIntent {
+                    id: "request".into(),
+                    message_id: "assistant".into(),
+                    ordinal: 1,
+                    requested_model: "opencode-go/glm-5.3-flash".into(),
+                    requested_settings: Default::default(),
+                    settings: GenerationSettings {
+                        max_output_tokens: Some(1024),
+                        reasoning_effort: None,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let intents: Vec<_> = (0..3)
+            .map(|i| ToolIntent {
+                id: format!("invocation-{i}"),
+                request_id: "request".into(),
+                result_message_id: format!("result-{i}"),
+                call_id: format!("call-{i}"),
+                provider_call_id: format!("provider-{i}"),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path":"file"}),
+            })
+            .collect();
+        let blocks = intents
+            .iter()
+            .enumerate()
+            .map(|(i, intent)| ContentBlock {
+                id: format!("block-{i}"),
+                content: BlockContent::ToolCall {
+                    call_id: intent.call_id.clone(),
+                    provider_call_id: intent.provider_call_id.clone(),
+                    name: intent.name.clone(),
+                    arguments: intent.arguments.clone(),
+                },
+            })
+            .collect();
+        client.complete_request(&turn, RequestCompletion { request_id: "request".into(),
+            response: InferenceResponse { resolved_model: None, usage: Usage::default(), finish_reason: FinishReason::ToolCalls,
+                message: InferenceMessage { role: MessageRole::Assistant, blocks, continuation: Some(Continuation {
+                    scope:"scope".into(), provider:"opencode-go".into(), model:"glm-5.3-flash".into(), wire:"chat_completions".into(), required:true,
+                    items:vec![serde_json::json!({"reasoning_content":"private test continuation"})],
+                }) },
+            }, tools: intents.clone(),
+        }).await.unwrap();
+        assert_eq!(
+            client
+                .tool_invocations(&turn, None, 10)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            3
+        );
+        client.start_tool(&turn, &intents[0]).await.unwrap();
+        let outcome = ToolOutcome {
+            status: "completed".into(),
+            output: "known result".into(),
+            artifacts: vec![],
+            error_code: None,
+            effects_unknown: false,
+        };
+        client
+            .finish_tool(&turn, &intents[0], outcome.clone())
+            .await
+            .unwrap();
+        client
+            .finish_tool(&turn, &intents[0], outcome)
+            .await
+            .unwrap(); // receipt retry, never execution
+        client.start_tool(&turn, &intents[1]).await.unwrap();
+        store.shutdown().await.unwrap();
+        let store = open_test(&dir, None).await;
+        let client = store.client();
+        let tools = client
+            .tool_invocations(&turn, None, 10)
+            .await
+            .unwrap()
+            .items;
+        assert_eq!(tools[0].status, "completed");
+        assert!(!tools[0].effects_unknown);
+        assert_eq!(tools[1].error_code.as_deref(), Some("daemon_restarted"));
+        assert!(tools[1].effects_unknown);
+        assert!(!tools[2].effects_unknown);
+        assert_eq!(client.turn(&turn).await.unwrap().status, "interrupted");
+        let history = client
+            .messages(&session.session_id, None, 20)
+            .await
+            .unwrap();
+        assert_eq!(history.items.len(), 5); // user, assistant, three paired results
+        let public = serde_json::to_string(&history).unwrap();
+        assert!(!public.contains("private test continuation"));
+        assert!(!public.contains("provider-0"));
+        assert!(client.claim_next_turn().await.unwrap().is_none());
+        client
+            .send_message(
+                &session.session_id,
+                SendMessageRequest {
+                    command_id: "inspect".into(),
+                    text: "inspect results".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let next = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(next.history.len(), 6);
+        assert!(next.history.iter().any(|m| m.continuation.is_some()));
+        let events = client.events(&session.session_id, 0, 200).await.unwrap();
+        let count = events
+            .items
+            .iter()
+            .filter(|e| e.kind == "tool_failed")
+            .count();
+        assert_eq!(count, 2);
+        store.shutdown().await.unwrap();
+        let store = open_test(&dir, None).await;
+        let events = store
+            .client()
+            .events(&session.session_id, 0, 200)
+            .await
+            .unwrap();
+        assert_eq!(
+            events
+                .items
+                .iter()
+                .filter(|e| e.kind == "tool_failed")
+                .count(),
+            count
+        );
+        store.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -1695,6 +2097,8 @@ mod tests {
                     command_id: "send-1".into(),
                     text: "hello".into(),
                     expected_revision: Some(created.revision),
+
+                    ..Default::default()
                 },
             )
             .await
@@ -1706,6 +2110,8 @@ mod tests {
                     command_id: "send-1".into(),
                     text: "hello".into(),
                     expected_revision: Some(created.revision),
+
+                    ..Default::default()
                 },
             )
             .await
@@ -1718,7 +2124,8 @@ mod tests {
                     SendMessageRequest {
                         command_id: "send-1".into(),
                         text: "changed".into(),
-                        expected_revision: Some(created.revision)
+                        expected_revision: Some(created.revision),
+                        ..Default::default()
                     }
                 )
                 .await,
@@ -1758,6 +2165,8 @@ mod tests {
                     command_id: "send-2a".into(),
                     text: "first question".into(),
                     expected_revision: Some(created.revision),
+
+                    ..Default::default()
                 },
             )
             .await
@@ -1769,6 +2178,8 @@ mod tests {
                     command_id: "send-2b".into(),
                     text: "later queued question".into(),
                     expected_revision: Some(first.revision),
+
+                    ..Default::default()
                 },
             )
             .await
@@ -1839,6 +2250,8 @@ mod tests {
                         command_id: format!("context-{index}"),
                         text: "question".into(),
                         expected_revision: None,
+
+                        ..Default::default()
                     },
                 )
                 .await
@@ -1871,6 +2284,8 @@ mod tests {
                     command_id: "context-overflow".into(),
                     text: "last question".into(),
                     expected_revision: None,
+
+                    ..Default::default()
                 },
             )
             .await
@@ -1907,6 +2322,8 @@ mod tests {
                     command_id: "send-3".into(),
                     text: "question".into(),
                     expected_revision: None,
+
+                    ..Default::default()
                 },
             )
             .await
@@ -1952,6 +2369,8 @@ mod tests {
                     command_id: "send-3b".into(),
                     text: "new question".into(),
                     expected_revision: Some(session.revision),
+
+                    ..Default::default()
                 },
             )
             .await
@@ -1983,6 +2402,8 @@ mod tests {
                     command_id: "empty-send".into(),
                     text: "question".into(),
                     expected_revision: None,
+
+                    ..Default::default()
                 },
             )
             .await
@@ -2037,6 +2458,8 @@ mod tests {
                     command_id: "usage-send".into(),
                     text: "question".into(),
                     expected_revision: None,
+
+                    ..Default::default()
                 },
             )
             .await
@@ -2154,6 +2577,8 @@ mod tests {
                     command_id: "cancel-queued-send".into(),
                     text: "question".into(),
                     expected_revision: None,
+
+                    ..Default::default()
                 },
             )
             .await
@@ -2203,6 +2628,8 @@ mod tests {
                     command_id: "cancel-running-send".into(),
                     text: "question".into(),
                     expected_revision: None,
+
+                    ..Default::default()
                 },
             )
             .await
@@ -2272,6 +2699,8 @@ mod tests {
                     command_id: "cancel-done-send".into(),
                     text: "question".into(),
                     expected_revision: None,
+
+                    ..Default::default()
                 },
             )
             .await
@@ -2336,6 +2765,8 @@ mod tests {
                         command_id: "cross-operation".into(),
                         text: "must not be inserted".into(),
                         expected_revision: None,
+
+                        ..Default::default()
                     }
                 )
                 .await,
@@ -2431,6 +2862,8 @@ mod tests {
             command_id: "rollback-send".into(),
             text: "atomic message".into(),
             expected_revision: None,
+
+            ..Default::default()
         };
         assert!(matches!(
             client
@@ -2822,7 +3255,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema version");
-        assert_eq!(version, 2);
+        assert_eq!(version, SCHEMA_VERSION);
         let tables: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions','turns','messages','session_events','commands')",

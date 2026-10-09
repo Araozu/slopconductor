@@ -13,7 +13,11 @@ use crate::{
     output::Output,
 };
 
-use super::{Context, session::send_and_follow, turn::cancel_turn};
+use super::{
+    Context,
+    session::{TurnSelection, send_and_follow},
+    turn::cancel_turn,
+};
 
 pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
     let ChatArgs {
@@ -23,6 +27,10 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         prompt_file,
         command_id,
         detach,
+        workspace,
+        tools,
+        effort,
+        max_output_tokens,
     } = args;
     let input = prompt_value_optional(prompt, prompt_file).await?;
     let interactive = input.is_none() && io::stdin().is_terminal();
@@ -32,9 +40,51 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         );
     }
     let client = context.client()?;
+    let settings = if effort.is_some() || max_output_tokens.is_some() {
+        Some(slop_protocol::execution::GenerationSettings {
+            max_output_tokens,
+            reasoning_effort: effort,
+        })
+    } else {
+        None
+    };
+    let selection = if session.is_some() {
+        TurnSelection {
+            model: model.clone(),
+            settings: settings.clone(),
+        }
+    } else {
+        TurnSelection::default()
+    };
+    let execution = workspace
+        .map(|root| {
+            std::path::absolute(root).map(|root| slop_protocol::execution::WorkspacePolicy {
+                root: root.to_string_lossy().into_owned(),
+                allowed_tools: if tools.is_empty() {
+                    vec!["read_file".into(), "list_files".into()]
+                } else {
+                    tools
+                },
+                shell_timeout_ms: 30_000,
+                max_output_bytes: 1024 * 1024,
+                max_tool_calls: 32,
+                max_model_requests: 16,
+            })
+        })
+        .transpose()?;
     let mut session_id = match session {
         Some(id) => id,
-        None => create_session(&client, model, command_id.as_deref(), context.output).await?,
+        None => {
+            create_session(
+                &client,
+                model,
+                command_id.as_deref(),
+                context.output,
+                settings,
+                execution,
+            )
+            .await?
+        }
     };
 
     let mut interactive_stdin = interactive.then(|| tokio::io::BufReader::new(tokio::io::stdin()));
@@ -81,7 +131,17 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
             None => break,
         };
         let id = choose_command_id(next_id.take())?;
-        match send_and_follow(&client, &session_id, message, id, detach, context.output).await {
+        match send_and_follow(
+            &client,
+            &session_id,
+            message,
+            id,
+            detach,
+            context.output,
+            selection.clone(),
+        )
+        .await
+        {
             Ok(()) => (),
             Err(error) if interactive => eprintln!("slop: {error}"),
             Err(error) => return Err(error),
@@ -99,6 +159,8 @@ async fn create_session(
     model: Option<String>,
     command_id: Option<&str>,
     output: Output,
+    settings: Option<slop_protocol::execution::GenerationSettings>,
+    execution: Option<slop_protocol::execution::WorkspacePolicy>,
 ) -> Result<String> {
     let (provider, model) = match model {
         Some(value) => parse_model(&value)?,
@@ -118,6 +180,8 @@ async fn create_session(
         provider,
         model,
         max_tokens: None,
+        settings,
+        execution,
     };
     let receipt = client
         .create_session(&request)

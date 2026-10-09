@@ -10,8 +10,16 @@ pub async fn print_history(client: &DaemonClient, session_id: &str) -> Result<Op
         let page = client.history(session_id, after, Some(100)).await?;
         for message in &page.items {
             latest_turn = Some(message.turn_id.clone());
-            if message.status != "checkpoint" {
+            if !matches!(message.status.as_str(), "checkpoint" | "pending") {
                 println!("{}: {}", message.role, message.text);
+                for block in &message.blocks {
+                    if let slop_protocol::execution::BlockContent::ToolCall {
+                        name, call_id, ..
+                    } = &block.content
+                    {
+                        println!("  {name} requested ({call_id})");
+                    }
+                }
             }
         }
         match page.next_after {

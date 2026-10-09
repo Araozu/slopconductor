@@ -222,6 +222,18 @@ impl OpencodeZenClient {
 }
 
 impl ProviderClient for OpencodeZenClient {
+    fn capabilities(&self, model: &str) -> super::inference::ModelCapabilities {
+        super::inference::capabilities(self.descriptor(), model)
+    }
+
+    fn infer<'a>(
+        &'a self,
+        request: &'a super::inference::InferenceRequest,
+        on_event: &'a mut (dyn FnMut(super::inference::ProviderEvent) + Send),
+    ) -> ProviderFuture<'a, super::inference::InferenceResponse> {
+        Box::pin(self.inner.infer(request, on_event))
+    }
+
     fn descriptor(&self) -> &dyn Provider {
         OpencodeZenProvider::instance()
     }

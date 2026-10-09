@@ -1,10 +1,12 @@
 # Shared provider interface
 
-**Status: proposed implementation guidance, 2026-10-08.** This document defines
+**Status: target contract with an implemented structured subset, 2026-10-08.** This document defines
 the target contract for provider integrations and the common surface the daemon
 will expose to clients. The full `ProviderAdapter` contract and account/capability
 DTOs/endpoints remain proposed; basic [credential endpoints](provider-credentials.md)
-are implemented. The implemented one-turn subset is described
+are implemented. [Structured inference and Go tools](structured-execution.md)
+now implement blocks, continuation, frozen settings, model requests, tool records,
+artifacts, and canonical streaming. The implemented subset is described
 below. The [requirements](requirements.md) and [crate boundaries](architecture.md)
 remain authoritative; the specific target types and operations are a draft.
 
@@ -55,15 +57,14 @@ The repository currently contains:
   deltas, explicit completed/incomplete outcomes, optional token counters with
   total provenance, and separate requested/reported model identifiers.
 
-This is a starting point. It does not yet implement structured tools/content,
-account capability discovery, the cancellation contract, continuation persistence,
-or the full public provider surface described here. Basic credential setup,
-status and ChatGPT login endpoints are implemented in the linked credential
-guide. The text-only adapter rejects
-unsupported tool/non-text output and required opaque continuation instead of
-silently discarding it. Empty reasoning metadata can accompany text; legacy
-Chat reasoning deltas remain transient runtime data, not the public summary
-capability proposed below.
+The structured `ProviderClient::infer` path now accepts blocks, tool definitions,
+and generation settings. Go/Zen implement all three wire shapes; Codex uses an
+explicit text-only bridge. Private completed continuation is stored by the
+daemon and replayed only within its provider/model/connection scope. The public
+Go surface includes model capabilities, per-turn selection, structured messages,
+request/tool records, streamed IDs, and artifacts. The older text methods retain
+their strict text-only decoders. Account-scoped discovery, media blocks, summaries,
+and the complete target `ProviderAdapter` lifecycle remain proposed.
 
 The current decoders require recognized terminal evidence, preserve incomplete
 outcomes, distinguish unknown usage from reported zero, and enforce bounded
@@ -551,7 +552,9 @@ capability, or client-independence requirements above.
 
 ## Conformance review of the current slice
 
-This review covers the integrated one-turn code, not the future session service.
+This review covers the one-turn adapters and the implemented structured Go
+session/tool service. New structured execution checks use offline fixtures;
+the historical live results below apply to the earlier text-only adapter slice.
 The [provider surface fixtures](../crates/slop-runtime/tests/provider_surface.rs)
 exercise the shared trait with both real clients rejected before network dispatch
 and a deterministic fixture adapter. Decoder regression fixtures live in the
@@ -582,10 +585,10 @@ live Codex login or inference was performed; see [Codex connection](codex-connec
 | --- | --- |
 | C01–C02 | Shared object-safe execution interface, three concrete adapters, local HTTP fixture consumers, independent client dependencies, and a persisted bounded Go text-turn supervisor. |
 | C03–C04 | Static model validation, bounded requests, requested/reported model identities, and rejection of multiple/non-leading Messages system instructions. Account-scoped discovery and general setting descriptors remain planned. |
-| C05–C08 | Text-only parsers reject unsupported structured output, missing/unknown terminal evidence, malformed JSON/UTF-8, contradictory outcomes and post-terminal text. Regression fixtures cover trailing end markers, incomplete stop reasons, multiline framing, and chunk splits. Structured blocks and tool dispatch remain planned. |
-| C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Go chat has durable turn intent and explicit cancellation; interrupted requests are not automatically retried. Tools and broader retry policies remain planned. |
-| C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Go chat persists counters/provenance and reconciles interrupted turns on restart. Required unsupported continuation is rejected. Detailed counters and durable continuation remain planned. |
-| C13–C15 | Common synthetic and HTTP consumers verify adapter results, terminal outcomes, wire translation, and `Send` futures. The real daemon/CLI fixture verifies Go chat detach, durable replay, command deduplication, cancellation, and restart history. Separately budgeted Go live adapter checks passed across all three wire shapes; Zen and Codex live checks remain opt-in and unverified. Structured-block replay remains planned. |
+| C05–C08 | Text-only parsers reject unsupported structured output, missing/unknown terminal evidence, malformed JSON/UTF-8, contradictory outcomes and post-terminal text. Regression fixtures cover trailing end markers, incomplete stop reasons, multiline framing, and chunk splits. Structured fixtures cover call/result translation, private replay, fragmented arguments, and rejection before execution; the real-binary tool workflow covers durable dispatch. |
+| C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Go chat has durable turn intent and explicit cancellation; interrupted requests are not automatically retried. Tools have committed intents/results and no-replay interruption recovery. Broader inference retry policies remain planned. |
+| C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Go chat persists counters/provenance and reconciles interrupted turns on restart. Required unsupported continuation is rejected. Private completed continuation is durable and scope-checked. Detailed usage counters remain planned. |
+| C13–C15 | Common synthetic and HTTP consumers verify adapter results, terminal outcomes, wire translation, and `Send` futures. The real daemon/CLI fixture verifies Go chat detach, durable replay, command deduplication, cancellation, and restart history. Separately budgeted Go live adapter checks passed across all three wire shapes; Zen and Codex live checks remain opt-in and unverified. Offline structured-tool fixtures additionally verify canonical snapshots, artifact integrity, per-turn selection, and restart without replay. Native Windows and live structured-tool checks remain outstanding. |
 
 ## Decoder references
 

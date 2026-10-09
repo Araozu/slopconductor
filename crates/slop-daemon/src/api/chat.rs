@@ -36,6 +36,7 @@ pub struct AppState {
 
 pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
     Router::new()
+        .route("/v1/capabilities", get(capabilities))
         .route("/v1/models", get(models))
         .route("/v1/sessions", get(sessions).post(create_session))
         .route("/v1/sessions/{session_id}", get(session))
@@ -45,6 +46,12 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         )
         .route("/v1/sessions/{session_id}/events", get(events))
         .route("/v1/turns/{turn_id}", get(turn))
+        .route("/v1/turns/{turn_id}/requests", get(model_requests))
+        .route("/v1/turns/{turn_id}/tools", get(tool_invocations))
+        .route("/v1/tools/{id}", get(tool_invocation))
+        .route("/v1/messages/{id}", get(message))
+        .route("/v1/artifacts/{id}", get(artifact))
+        .route("/v1/artifacts/{id}/content", get(artifact_content))
         .route("/v1/turns/{turn_id}/cancel", post(cancel_turn))
         .route_layer(middleware::from_fn(normalize_rejections))
         .route_layer(middleware::from_fn_with_state(token, authorize_request))
@@ -62,6 +69,113 @@ pub struct EventQuery {
     follow: Option<bool>,
 }
 
+async fn capabilities() -> Json<slop_protocol::execution::CapabilitiesResponse> {
+    Json(slop_protocol::execution::CapabilitiesResponse {
+        structured_messages: true,
+        per_turn_model_selection: true,
+        per_turn_settings: true,
+        tools: slop_runtime::tools::definitions()
+            .into_iter()
+            .map(|d| slop_protocol::execution::ToolDescriptor {
+                side_effects: if matches!(d.name.as_str(), "read_file" | "list_files") {
+                    "read"
+                } else {
+                    "write"
+                }
+                .into(),
+                name: d.name,
+                description: d.description,
+                parameters: d.parameters,
+            })
+            .collect(),
+        max_model_requests_per_turn: 64,
+        max_tool_calls_per_turn: 128,
+    })
+}
+async fn model_requests(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(query): Query<PageQuery>,
+) -> Response {
+    let limit = match checked_limit(query.limit) {
+        Ok(limit) => limit,
+        Err(error) => return error.into_response(),
+    };
+    storage_response(state.store.model_requests(&id, query.after, limit).await)
+}
+async fn tool_invocations(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(query): Query<PageQuery>,
+) -> Response {
+    let limit = match checked_limit(query.limit) {
+        Ok(limit) => limit,
+        Err(error) => return error.into_response(),
+    };
+    storage_response(state.store.tool_invocations(&id, query.after, limit).await)
+}
+async fn tool_invocation(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    storage_response(state.store.tool_invocation(&id).await)
+}
+async fn message(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    storage_response(state.store.message(&id).await)
+}
+async fn artifact(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    storage_response(state.store.artifact(&id).await)
+}
+async fn artifact_content(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let metadata = match state.store.artifact(&id).await {
+        Ok(metadata) => metadata,
+        Err(error) => return store_error(error),
+    };
+    let Some(path) = state.runtime.tools().artifact_path(&id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "Artifact is unavailable.",
+        );
+    };
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(_) => {
+            return error(
+                StatusCode::NOT_FOUND,
+                "artifact_unavailable",
+                "Artifact data is unavailable.",
+            );
+        }
+    };
+    if file
+        .metadata()
+        .await
+        .map_or(true, |m| !m.is_file() || m.len() != metadata.size_bytes)
+    {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "artifact_unavailable",
+            "Artifact data is inconsistent.",
+        );
+    }
+    let body = Body::from_stream(stream::try_unfold(file, |mut file| async move {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = vec![0u8; 16 * 1024];
+        let n = file.read(&mut bytes).await?;
+        if n == 0 {
+            Ok::<_, std::io::Error>(None)
+        } else {
+            bytes.truncate(n);
+            Ok(Some((Bytes::from(bytes), file)))
+        }
+    }));
+    Response::builder()
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header("content-length", metadata.size_bytes)
+        .header("content-disposition", "attachment")
+        .header("x-content-type-options", "nosniff")
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 async fn models(State(state): State<Arc<AppState>>) -> Response {
     let reason = state.runtime.provider_reason().map(str::to_owned);
     let items = slop_runtime::providers::opencode_go::MODELS
@@ -74,6 +188,20 @@ async fn models(State(state): State<Arc<AppState>>) -> Response {
             ready: state.runtime.provider_ready(),
             is_default: format!("opencode-go/{}", model.id) == state.runtime.default_model(),
             reason: reason.clone(),
+            capabilities: slop_protocol::execution::ModelCapabilities {
+                tools: slop_runtime::providers::inference::capabilities(
+                    slop_runtime::providers::opencode_go::OpencodeGoProvider::instance(),
+                    model.id,
+                )
+                .tools,
+                reasoning_efforts: slop_runtime::providers::inference::capabilities(
+                    slop_runtime::providers::opencode_go::OpencodeGoProvider::instance(),
+                    model.id,
+                )
+                .reasoning_efforts,
+                incremental_streaming: true,
+                max_output_tokens: 65_536,
+            },
         })
         .collect::<Vec<_>>();
     Json(items).into_response()
@@ -271,6 +399,13 @@ impl EventFeed {
                         session_id: delta.session_id,
                         turn_id: delta.turn_id,
                         text: delta.text,
+                        message_id: delta.message_id,
+                        block_id: delta.block_id,
+                        request_id: delta.request_id,
+                        invocation_id: delta.invocation_id,
+                        stream_id: delta.stream_id,
+                        chunk_index: delta.chunk_index,
+                        kind: delta.kind,
                     }),
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) | Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
@@ -312,6 +447,15 @@ pub(super) async fn authorize_request(
 
 pub(super) async fn normalize_rejections(request: Request<Body>, next: Next) -> Response {
     let response = next.run(request).await;
+    // Preserve our typed errors; only normalize plain extractor rejections.
+    if response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        == Some("application/json")
+    {
+        return response;
+    }
     match response.status() {
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => error(
             StatusCode::BAD_REQUEST,
@@ -366,6 +510,9 @@ fn store_error(store_error: StoreError) -> Response {
             "invalid_request",
             "The chat request is invalid.",
         ),
+        StoreError::Unsupported(field) => {
+            error(StatusCode::BAD_REQUEST, "unsupported_capability", field)
+        }
         StoreError::Limit => error(
             StatusCode::TOO_MANY_REQUESTS,
             "queue_limit",

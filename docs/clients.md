@@ -16,7 +16,8 @@ agent runtime.
 The CLI is both an interactive human entry point and a scriptable control tool.
 It should ship useful local execution before the TUI, web, or Electron exists.
 
-The implemented commands are `status`, `node`, `models`, `provider`
+The implemented commands are `status`, `node`, `models`, `capabilities`, `artifact`
+(show/download), `provider`
 (status/set-key/login/login-status), `chat`, `session`
 (list/show/history/send/follow), and `turn` (show/cancel), optionally with
 `--json` and `--daemon`. Status remains anonymous. For loopback endpoints the
@@ -37,7 +38,10 @@ cargo run -p slop-cli -- provider login codex
 
 Text chat supports interactive input, one-shot prompts, files, and piped stdin.
 One-shot requests follow their accepted turn by default; `--detach` returns its
-receipt immediately. JSON chat emits NDJSON receipts/events/terminal records.
+receipt immediately. JSON chat emits NDJSON receipts/events/terminal records
+and canonical structured message/tool snapshots. See
+[structured execution](structured-execution.md#limits-and-cli) for workspace
+tools, per-turn model/settings, capability discovery, and artifact downloads.
 Closing a client or pressing Ctrl-C while following detaches without canceling.
 `turn cancel` is explicit. Interactive `/exit` exits; `/cancel TURN_ID` submits
 the same cancellation command.

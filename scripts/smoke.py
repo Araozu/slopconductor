@@ -17,6 +17,7 @@ import urllib.request
 
 from chat_smoke import check_chat_lifecycle
 from credentials_smoke import check_credentials
+from tools_smoke import check_tools
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -188,7 +189,7 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
             stored_id = database.execute(
                 "SELECT node_id FROM node_identity WHERE singleton = 1"
             ).fetchone()[0]
-        if journal != "wal" or schema_version != 2 or stored_id != node["node_id"]:
+        if journal != "wal" or schema_version != 3 or stored_id != node["node_id"]:
             raise RuntimeError(
                 f"unexpected SQLite state: journal={journal}, schema={schema_version}, node={stored_id}"
             )
@@ -386,10 +387,11 @@ def main():
             raise RuntimeError("bootstrap daemon accepted a non-loopback listener")
 
         check_chat_lifecycle(daemon_binary, cli_binary, root / "durable-chat")
+        check_tools(daemon_binary, cli_binary, root / "structured-tools")
         check_credentials(daemon_binary, cli_binary, root / "credentials", start_daemon, stop_daemon, isolated_env)
 
     print("Smoke check passed: bootstrap ownership/authentication, runtime credentials/login, chat durability/replay, "
-          "command idempotency, cancellation, client boundaries, and offline provider execution.")
+          "structured tools/artifacts/recovery, model selection, command idempotency, cancellation, client boundaries, and offline provider execution.")
 
 
 if __name__ == "__main__":

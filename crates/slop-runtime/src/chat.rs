@@ -15,19 +15,17 @@ use std::{
 };
 
 use crate::providers::opencode_go::OpencodeGoClient;
-use crate::providers::{
-    ChatMessage, ChatRequest, ProviderClient, ProviderError, Role, StreamDelta, TurnOutcome, Usage,
+use crate::providers::{ProviderError, Usage};
+use crate::{
+    agent::{RequestCompletion, RequestIntent, ToolIntent},
+    providers::inference::{GenerationSettings, InferenceMessage},
+    tools::{ToolOutcome, ToolService, WorkspacePolicy},
 };
-use slop_core::provider::ProviderModelRef;
 
 pub const DEFAULT_MODEL: &str = "opencode-go/glm-5.3-flash";
 pub const DEFAULT_OUTPUT_TOKENS: u32 = 4_096;
 pub const DEFAULT_CONCURRENCY: usize = 4;
-const CHECKPOINT_INTERVAL: Duration = Duration::from_millis(250);
-const CHECKPOINT_BYTES: usize = 16 * 1024;
-const CANCELLATION_POLL: Duration = Duration::from_millis(250);
 const CLAIM_POLL: Duration = Duration::from_millis(100);
-const MAX_VISIBLE_BYTES: usize = 1024 * 1024;
 
 pub type RepoError = Box<dyn Error + Send + Sync>;
 pub type RepoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepoError>> + Send + 'a>>;
@@ -35,6 +33,32 @@ pub type RepoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepoError>> +
 /// Storage boundary for accepted chat turns. Implementations own transaction
 /// semantics and wire-independent persistence; the runtime never sees SQL/DTOs.
 pub trait ChatRepository: Send + Sync + 'static {
+    fn begin_request<'a>(&'a self, turn_id: &'a str, intent: RequestIntent) -> RepoFuture<'a, ()>;
+    fn checkpoint_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        request_id: &'a str,
+        message: InferenceMessage,
+    ) -> RepoFuture<'a, ()>;
+    /// Commit the completed message and every tool intent atomically before dispatch.
+    fn complete_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        completion: RequestCompletion,
+    ) -> RepoFuture<'a, ()>;
+    fn fail_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        request_id: &'a str,
+        code: &'a str,
+    ) -> RepoFuture<'a, ()>;
+    fn start_tool<'a>(&'a self, turn_id: &'a str, intent: &'a ToolIntent) -> RepoFuture<'a, ()>;
+    fn finish_tool<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: &'a ToolIntent,
+        outcome: ToolOutcome,
+    ) -> RepoFuture<'a, ()>;
     /// Atomically claim the next eligible turn and mark it running.
     fn claim_next(&self) -> RepoFuture<'_, Option<TurnWork>>;
     /// Persist bounded visible assistant text as an incomplete checkpoint.
@@ -63,13 +87,17 @@ pub struct ContextMessage {
 
 /// Durable input chosen when the repository claims a turn. Later queued user
 /// messages must never be appended to this context after claim.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TurnWork {
     pub turn_id: String,
     pub session_id: String,
     pub requested_model: String,
     pub max_tokens: Option<u32>,
     pub messages: Vec<ContextMessage>,
+    pub history: Vec<InferenceMessage>,
+    pub settings: GenerationSettings,
+    pub requested_settings: GenerationSettings,
+    pub execution: Option<WorkspacePolicy>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +124,13 @@ pub struct ChatDelta {
     pub session_id: String,
     pub turn_id: String,
     pub text: String,
+    pub message_id: Option<String>,
+    pub block_id: Option<String>,
+    pub request_id: Option<String>,
+    pub invocation_id: Option<String>,
+    pub stream_id: String,
+    pub chunk_index: u64,
+    pub kind: String,
 }
 
 #[derive(Clone)]
@@ -112,6 +147,7 @@ struct RuntimeInner {
     max_tokens: u32,
     shutdown: Option<tokio::sync::watch::Sender<bool>>,
     scheduler: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    tools: Arc<ToolService>,
 }
 
 /// Starts the daemon-owned scheduler. `base_url` is an optional explicitly
@@ -124,6 +160,28 @@ pub fn start<R: ChatRepository>(
     concurrency: usize,
     default_model: Option<String>,
     max_tokens: Option<u32>,
+) -> ChatRuntime {
+    start_with_tools(
+        repository,
+        api_key,
+        base_url,
+        concurrency,
+        default_model,
+        max_tokens,
+        Arc::new(ToolService::disabled()),
+    )
+}
+
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn start_with_tools<R: ChatRepository>(
+    repository: Arc<R>,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    concurrency: usize,
+    default_model: Option<String>,
+    max_tokens: Option<u32>,
+    tools: Arc<ToolService>,
 ) -> ChatRuntime {
     let (deltas, _) = tokio::sync::broadcast::channel(128);
     let default_model = default_model.unwrap_or_else(|| DEFAULT_MODEL.to_owned());
@@ -148,6 +206,7 @@ pub fn start<R: ChatRepository>(
             max_tokens,
             shutdown: Some(shutdown_sender.clone()),
             scheduler: Mutex::new(None),
+            tools: Arc::clone(&tools),
         }),
     };
     let concurrency = concurrency.clamp(1, 64);
@@ -160,6 +219,7 @@ pub fn start<R: ChatRepository>(
         shutdown_receiver,
         shutdown_sender,
         scheduler_healthy,
+        tools,
     ));
     if let Ok(mut scheduler) = runtime.inner.scheduler.lock() {
         *scheduler = Some(handle);
@@ -168,6 +228,9 @@ pub fn start<R: ChatRepository>(
 }
 
 impl ChatRuntime {
+    pub fn tools(&self) -> &ToolService {
+        &self.inner.tools
+    }
     /// Stop new claims and wait for active turns to persist an interrupted or
     /// canceled terminal state before storage shutdown begins.
     pub async fn shutdown(&self) {
@@ -247,12 +310,6 @@ impl ChatRuntime {
     }
 }
 
-struct VisibleBuffer {
-    text: String,
-    last_checkpoint_bytes: usize,
-    last_checkpoint_at: tokio::time::Instant,
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_scheduler<R: ChatRepository>(
     repository: Arc<R>,
@@ -263,6 +320,7 @@ async fn run_scheduler<R: ChatRepository>(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
     shutdown_sender: tokio::sync::watch::Sender<bool>,
     scheduler_healthy: Arc<AtomicBool>,
+    tools: Arc<ToolService>,
 ) {
     let mut turns = tokio::task::JoinSet::new();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
@@ -340,15 +398,17 @@ async fn run_scheduler<R: ChatRepository>(
         let provider = provider.borrow().clone();
         let deltas = deltas.clone();
         let mut turn_shutdown = shutdown.clone();
+        let tools = Arc::clone(&tools);
         turns.spawn(async move {
             let _permit = permit;
-            execute_turn(
+            crate::agent::execute(
                 repository,
                 provider,
                 deltas,
                 work,
                 default_max_tokens,
                 &mut turn_shutdown,
+                tools,
             )
             .await
         });
@@ -361,245 +421,7 @@ async fn run_scheduler<R: ChatRepository>(
     }
 }
 
-async fn execute_turn<R: ChatRepository>(
-    repository: Arc<R>,
-    provider: Option<Arc<OpencodeGoClient>>,
-    deltas: tokio::sync::broadcast::Sender<ChatDelta>,
-    work: TurnWork,
-    default_max_tokens: u32,
-    shutdown: &mut tokio::sync::watch::Receiver<bool>,
-) -> bool {
-    if *shutdown.borrow() {
-        return finish_with_retry(repository.as_ref(), &work.turn_id, interrupted_shutdown()).await;
-    }
-    match repository.cancellation_requested(&work.turn_id).await {
-        Ok(true) => {
-            return finish_with_retry(repository.as_ref(), &work.turn_id, canceled()).await;
-        }
-        Ok(false) => {}
-        Err(_) => {
-            return finish_with_retry(
-                repository.as_ref(),
-                &work.turn_id,
-                failed("storage_unavailable", "The turn state could not be read."),
-            )
-            .await;
-        }
-    }
-    if work.messages.len() > ChatRequest::MAX_MESSAGES
-        || work.messages.iter().map(|m| m.text.len()).sum::<usize>()
-            > ChatRequest::MAX_REQUEST_BYTES
-    {
-        return finish_with_retry(
-            repository.as_ref(),
-            &work.turn_id,
-            failed("context_limit", "Turn context exceeds the supported bound."),
-        )
-        .await;
-    }
-    let model_ref = match work.requested_model.parse::<ProviderModelRef>() {
-        Ok(model_ref) if model_ref.provider().as_str() == "opencode-go" => model_ref,
-        _ => {
-            return finish_with_retry(
-                repository.as_ref(),
-                &work.turn_id,
-                failed(
-                    "unsupported_model",
-                    "The requested provider or model is not supported.",
-                ),
-            )
-            .await;
-        }
-    };
-    let request = ChatRequest {
-        model: model_ref.model().to_owned(),
-        messages: work
-            .messages
-            .iter()
-            .map(|message| ChatMessage {
-                role: match message.role {
-                    RoleKind::System => Role::System,
-                    RoleKind::Developer => Role::Developer,
-                    RoleKind::User => Role::User,
-                    RoleKind::Assistant => Role::Assistant,
-                },
-                content: message.text.clone(),
-            })
-            .collect(),
-        max_tokens: Some(work.max_tokens.unwrap_or(default_max_tokens)),
-        session_id: work.session_id.clone(),
-    };
-    let Some(provider) = provider else {
-        return finish_with_retry(
-            repository.as_ref(),
-            &work.turn_id,
-            failed(
-                "provider_auth_required",
-                "OpenCode Go credentials are unavailable.",
-            ),
-        )
-        .await;
-    };
-    if let Err(error) = provider.validate(&request) {
-        return finish_with_retry(repository.as_ref(), &work.turn_id, provider_failure(error))
-            .await;
-    }
-
-    let visible = Arc::new(Mutex::new(VisibleBuffer {
-        text: String::new(),
-        last_checkpoint_bytes: 0,
-        last_checkpoint_at: tokio::time::Instant::now(),
-    }));
-    let stream_visible = Arc::clone(&visible);
-    let stream_deltas = deltas.clone();
-    let session_id = work.session_id.clone();
-    let turn_id = work.turn_id.clone();
-    let mut inference = Box::pin(provider.complete_streaming(
-        &request,
-        move |delta: StreamDelta| {
-            if delta.text.is_empty() {
-                return;
-            }
-            let mut offset = 0;
-            while offset < delta.text.len() {
-                let mut end = (offset + 16 * 1024).min(delta.text.len());
-                while !delta.text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                let chunk = &delta.text[offset..end];
-                if let Ok(mut visible) = stream_visible.lock()
-                    && visible.text.len().saturating_add(chunk.len()) <= MAX_VISIBLE_BYTES
-                {
-                    visible.text.push_str(chunk);
-                    let _ = stream_deltas.send(ChatDelta {
-                        session_id: session_id.clone(),
-                        turn_id: turn_id.clone(),
-                        text: chunk.to_owned(),
-                    });
-                }
-                offset = end;
-            }
-        },
-    ));
-    let mut checkpoint_tick = tokio::time::interval(CHECKPOINT_INTERVAL);
-    let mut cancel_tick = tokio::time::interval(CANCELLATION_POLL);
-    checkpoint_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    cancel_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // Skip the immediate first ticks; the first checkpoint is after visible
-    // output, while cancellation is checked promptly after request start.
-    checkpoint_tick.tick().await;
-    let mut storage_failed = false;
-    let inference_result = loop {
-        tokio::select! {
-            result = &mut inference => break Some(result),
-            _ = shutdown.changed() => break None,
-            _ = cancel_tick.tick() => {
-                match repository.cancellation_requested(&work.turn_id).await {
-                    Ok(true) => break None,
-                    Ok(false) => {}
-                    Err(_) => { storage_failed = true; break None; }
-                }
-            }
-            _ = checkpoint_tick.tick() => {
-                if checkpoint_if_due(repository.as_ref(), &work.turn_id, &visible, false).await.is_err() {
-                    storage_failed = true;
-                    break None;
-                }
-            }
-        }
-    };
-    drop(inference);
-    if storage_failed {
-        return finish_with_retry(
-            repository.as_ref(),
-            &work.turn_id,
-            failed(
-                "storage_unavailable",
-                "The durable checkpoint could not be committed.",
-            ),
-        )
-        .await;
-    }
-    match inference_result {
-        Some(Ok(response)) => {
-            let (status, error_code, error_message) = match response.outcome {
-                TurnOutcome::Completed => (ChatStatus::Completed, None, None),
-                TurnOutcome::Incomplete { reason } => (
-                    ChatStatus::Incomplete,
-                    Some("provider_incomplete".to_owned()),
-                    Some(bound_reason(reason)),
-                ),
-            };
-            let outcome = ChatOutcome {
-                text: response.text,
-                resolved_model: response.resolved_model,
-                usage: response.usage,
-                status,
-                error_code,
-                error_message,
-            };
-            return finish_with_retry(repository.as_ref(), &work.turn_id, outcome).await;
-        }
-        Some(Err(error)) => {
-            // Incomplete/interrupted provider text is not promoted to a final
-            // assistant message. The durable checkpoint remains explicitly
-            // incomplete and is excluded by storage from later context.
-            return finish_with_retry(repository.as_ref(), &work.turn_id, provider_failure(error))
-                .await;
-        }
-        None => {
-            let cancelled = match repository.cancellation_requested(&work.turn_id).await {
-                Ok(cancelled) => cancelled,
-                Err(_) => {
-                    return finish_with_retry(
-                        repository.as_ref(),
-                        &work.turn_id,
-                        failed("storage_unavailable", "The turn state could not be read."),
-                    )
-                    .await;
-                }
-            };
-            let outcome = if cancelled {
-                canceled()
-            } else {
-                interrupted_shutdown()
-            };
-            return finish_with_retry(repository.as_ref(), &work.turn_id, outcome).await;
-        }
-    }
-}
-
-async fn checkpoint_if_due<R: ChatRepository>(
-    repository: &R,
-    turn_id: &str,
-    visible: &Mutex<VisibleBuffer>,
-    force: bool,
-) -> Result<(), RepoError> {
-    let snapshot = {
-        let mut buffer = visible
-            .lock()
-            .map_err(|_| std::io::Error::other("visible buffer poisoned"))?;
-        let advanced = buffer
-            .text
-            .len()
-            .saturating_sub(buffer.last_checkpoint_bytes);
-        if !force
-            && advanced < CHECKPOINT_BYTES
-            && buffer.last_checkpoint_at.elapsed() < CHECKPOINT_INTERVAL
-        {
-            return Ok(());
-        }
-        if advanced == 0 && !force {
-            return Ok(());
-        }
-        buffer.last_checkpoint_bytes = buffer.text.len();
-        buffer.last_checkpoint_at = tokio::time::Instant::now();
-        buffer.text.clone()
-    };
-    repository.checkpoint_visible(turn_id, &snapshot).await
-}
-
-async fn finish_with_retry<R: ChatRepository>(
+pub(crate) async fn finish_with_retry<R: ChatRepository>(
     repository: &R,
     turn_id: &str,
     outcome: ChatOutcome,
@@ -626,7 +448,7 @@ async fn finish_with_retry<R: ChatRepository>(
     false
 }
 
-fn failed(code: &str, message: &str) -> ChatOutcome {
+pub(crate) fn failed(code: &str, message: &str) -> ChatOutcome {
     ChatOutcome {
         text: String::new(),
         resolved_model: None,
@@ -637,7 +459,7 @@ fn failed(code: &str, message: &str) -> ChatOutcome {
     }
 }
 
-fn canceled() -> ChatOutcome {
+pub(crate) fn canceled() -> ChatOutcome {
     ChatOutcome {
         text: String::new(),
         resolved_model: None,
@@ -648,7 +470,7 @@ fn canceled() -> ChatOutcome {
     }
 }
 
-fn interrupted_shutdown() -> ChatOutcome {
+pub(crate) fn interrupted_shutdown() -> ChatOutcome {
     ChatOutcome {
         text: String::new(),
         resolved_model: None,
@@ -659,7 +481,7 @@ fn interrupted_shutdown() -> ChatOutcome {
     }
 }
 
-fn provider_failure(error: ProviderError) -> ChatOutcome {
+pub(crate) fn provider_failure(error: ProviderError) -> ChatOutcome {
     let (code, message) = match error {
         ProviderError::InvalidModel { .. } => {
             ("unsupported_model", "The requested model is not supported.")
@@ -672,18 +494,22 @@ fn provider_failure(error: ProviderError) -> ChatOutcome {
             "provider_auth_failed",
             "OpenCode Go rejected the configured credentials.",
         ),
+        ProviderError::UnsupportedCapability { capability }
+            if capability.starts_with("context_incompatible") =>
+        {
+            (
+                "context_incompatible",
+                "This context requires continuation from its original model and provider connection.",
+            )
+        }
+        ProviderError::UnsupportedCapability { .. } => (
+            "unsupported_capability",
+            "The provider does not support the requested capability.",
+        ),
         _ => (
             "provider_failed",
             "The provider could not complete this turn.",
         ),
     };
     failed(code, message)
-}
-
-fn bound_reason(reason: String) -> String {
-    reason
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(256)
-        .collect()
 }

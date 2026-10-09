@@ -1,3 +1,4 @@
+mod artifact;
 mod chat;
 mod discovery;
 mod provider;
@@ -40,6 +41,15 @@ pub async fn run(args: Args) -> Result<()> {
         Command::Status => discovery::status(&context).await,
         Command::Node => discovery::node(&context).await,
         Command::Models => discovery::models(&context).await,
+        Command::Capabilities => {
+            let response = context.client()?.capabilities().await?;
+            context.output.value(&response, || {
+                for tool in &response.tools {
+                    println!("{}\t{}", tool.name, tool.description);
+                }
+            })
+        }
+        Command::Artifact { command } => artifact::run(command, &context).await,
         Command::Provider { command } => provider::run(command, &context).await,
         Command::Session { command } => session::run(command, &context).await,
         Command::Turn { command } => turn::run(command, &context).await,

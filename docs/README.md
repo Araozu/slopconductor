@@ -12,7 +12,9 @@ shutdown. Durable text chat now adds sessions, idempotent message acceptance,
 paginated history/events, daemon-owned Go inference, cancellation, and a consumer
 CLI. Runtime provider credential commands now persist secrets in private XDG
 storage, replace Go credentials without restart, and own ChatGPT authorization
-in the daemon. Coding tools and general task orchestration remain planned. Commands,
+in the daemon. Structured Go execution now adds explicit workspace tools, durable
+request/invocation records, artifacts, block-aware streaming, and per-turn model
+settings. General task orchestration remains planned. Commands,
 schemas, and workflows marked proposed describe future work.
 
 ## Reading order
@@ -25,6 +27,7 @@ schemas, and workflows marked proposed describe future work.
 | [Clients](clients.md) | How the CLI, TUI, web, and Electron evolve independently |
 | [Protocol](protocol.md) | Proposed commands, responses, events, and compatibility |
 | [Text chat](text-chat.md) | Implemented local chat ownership, API, durability, and recovery |
+| [Structured execution](structured-execution.md) | Implemented tool loop, structured streaming, artifacts, frozen model/settings, and recovery |
 | [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
 | [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |
@@ -64,9 +67,9 @@ clients share the wire contract and can generate their own SDK.
 ## Current repository entry points
 
 - [Root manifest](../Cargo.toml): virtual Rust workspace and shared dependency versions.
-- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node and text-chat DTOs.
+- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node, chat, and structured execution DTOs.
 - [Client library](../crates/slop-client/src/lib.rs): bounded requests, event streams, token files, and compatibility checks.
 - [Daemon](../crates/slop-daemon/src/main.rs): loopback HTTP service.
-- [CLI](../crates/slop-cli/src/main.rs): independent status, node, session, turn, and chat client.
+- [CLI](../crates/slop-cli/src/main.rs): independent status, session, turn, chat, capability, and artifact client.
 - [Client placeholder directory](../clients/README.md): future frontend locations.
 - [Smoke script](../scripts/smoke.py): checks the real daemon and CLI together.

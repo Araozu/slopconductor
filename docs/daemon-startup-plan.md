@@ -3,14 +3,16 @@
 Status: startup foundation and durable text chat implemented, 2026-10-08.
 The daemon exposes health, authenticated node identity, and the
 [text-chat slice](text-chat.md) with its session store and execution supervisor.
-Tools and general task execution remain planned.
+[Structured execution](structured-execution.md) adds opt-in file/shell tools,
+artifacts, and interrupted-step recovery. General task execution remains planned.
 
 ## Implemented scope
 
 Startup implements ownership, configuration, local authentication, bounded
 shutdown, and SQLite initialization for persistent node identity and chats.
 Text turns use the transaction and recovery contract below; interrupted thinking
-is not automatically resumed. Tool and artifact parts remain accepted design.
+is not automatically resumed. Tool intents/results and artifacts now follow
+the implemented protocol in [structured execution](structured-execution.md).
 
 ### Directories
 

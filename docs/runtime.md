@@ -18,11 +18,17 @@ Responses API, with native ChatGPT subscription login or Platform API keys;
 see [Codex connection](codex-connection.md). All three clients share bounded
 wire decoders. Responses preserve terminal outcomes, optional usage/provenance,
 and requested/reported model IDs. The daemon now composes Go with a bounded
-text-turn supervisor, durable repository port, session serialization, visible
-checkpoints, and cancellation. See [text chat](text-chat.md). Zen/Codex daemon
-selection, structured tools, and the general loop below remain proposed.
+turn supervisor, durable repository port, session/workspace serialization, visible
+checkpoints, cancellation, and a bounded file/shell tool loop. See
+[text chat](text-chat.md) and [structured execution](structured-execution.md).
+Zen/Codex daemon selection and general task/child orchestration remain proposed.
 
 ## Agent loop
+
+The following is the target general task loop. The implemented user-turn loop
+covers model intent, structured completion, tool policy/dispatch/results, budgets,
+streaming, cancellation, and terminal/recovery records. Task inboxes, children,
+and pause/resume remain proposed.
 
 One admitted run has a serialized supervisor and bounded command inbox:
 
@@ -67,10 +73,12 @@ The [shared provider interface](provider-interface.md) specifies the proposed
 runtime operations, capability validation, structured content, terminal outcomes,
 and conformance criteria. It also defines the daemon's mapping to a common public
 surface for every client. The registry `Provider` trait implements metadata;
-`ProviderClient` implements the text-only execution subset. Capability discovery,
-structured blocks and the broader public surface remain proposed. The text-chat
-API exposes Go model metadata/local credential readiness, normalized text/usage,
-and durable cancellation; it does not expose raw provider events.
+`ProviderClient::infer` implements structured text/refusal/tool blocks, settings,
+private continuation, and normalized incremental events for Go/Zen; Codex retains
+a text-only bridge with explicit unsupported errors. The Go public API projects
+canonical messages, tools, artifacts, capabilities, usage, and cancellation; it
+does not expose private provider events. Account-scoped discovery and the broader
+contract remain proposed.
 
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.
@@ -160,8 +168,9 @@ resource limits; creating a chat cannot implicitly launch a browser.
 
 Each invocation has an identity, recorded input, workspace, start time, limits,
 and outcome. Keep previews bounded and put large outputs in artifact storage.
-On Windows, process-tree supervision will need Job Object or equivalent support;
-on Linux, process groups/service supervision need explicit handling.
+The implemented shell uses Windows Job Objects and Unix process groups with
+bounded cancellation cleanup. Native Windows validation remains outstanding;
+hard daemon death on Unix does not guarantee descendant cleanup.
 
 A run's capabilities are chosen before execution. Child tasks inherit a bounded
 subset or explicitly allowed additions. Repository content and model-generated
@@ -198,8 +207,8 @@ Interrupted thinking is discarded. An unfinished tool call is recorded as
 failed due to daemon/process failure; the daemon does not restore or replay it.
 The failure record preserves the invocation ID and warns when its external
 effects are unknown. The agent decides whether to inspect those effects or issue
-a new call. This recovery behavior remains planned until a session supervisor
-and tool execution exist.
+a new call. This behavior is implemented for Go user turns and local tools;
+general task/run/handoff recovery remains proposed.
 
 Measure release-build baseline RSS, incremental active context and buffer memory,
 idle-session metadata cost, context assembly CPU, queue fairness, and tool

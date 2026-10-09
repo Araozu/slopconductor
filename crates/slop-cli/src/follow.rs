@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use slop_client::{DaemonClient, EventStream};
@@ -7,6 +8,16 @@ use crate::{Result, history::find_message, output::Output};
 
 const MAX_RENDERED_TURN_BYTES: usize = 2 * 1024 * 1024;
 
+#[derive(Default)]
+struct StreamDisplay {
+    active_message: Option<String>,
+    completed: HashSet<String>,
+    chunks: HashMap<String, u64>,
+    rendered: usize,
+    shown: String,
+    terminal_turn: Option<String>,
+}
+
 pub async fn follow_turn(
     client: &DaemonClient,
     session_id: &str,
@@ -14,9 +25,8 @@ pub async fn follow_turn(
     mut cursor: u64,
     output: Output,
 ) -> Result<()> {
-    let mut shown = String::new();
     let mut attempts = 0_u32;
-    let mut terminal_turn = None;
+    let mut display = StreamDisplay::default();
     loop {
         match client.events(session_id, cursor, true).await {
             Ok(mut stream) => {
@@ -24,9 +34,9 @@ pub async fn follow_turn(
                     &mut stream,
                     &mut cursor,
                     turn_id,
-                    &mut shown,
-                    &mut terminal_turn,
                     output,
+                    client,
+                    &mut display,
                 )
                 .await
                 {
@@ -54,7 +64,7 @@ pub async fn follow_turn(
             } else {
                 None
             };
-            output.terminal(&turn, canonical.as_ref(), &shown);
+            output.terminal(&turn, canonical.as_ref(), &display.shown);
             if turn.status != "completed" {
                 return Err(format!(
                     "turn {} ended with status {}: {}",
@@ -83,9 +93,9 @@ async fn consume_stream(
     stream: &mut EventStream,
     cursor: &mut u64,
     turn_id: &str,
-    shown: &mut String,
-    terminal_turn: &mut Option<String>,
     output: Output,
+    client: &DaemonClient,
+    display: &mut StreamDisplay,
 ) -> Result<bool> {
     loop {
         let frame = match tokio::select! {
@@ -98,7 +108,33 @@ async fn consume_stream(
         };
         match &frame {
             EventFrame::Durable { event } => {
-                *cursor = (*cursor).max(event.sequence);
+                if (turn_id.is_empty() || event.turn_id.as_deref() == Some(turn_id))
+                    && matches!(
+                        event.kind.as_str(),
+                        "assistant_message_completed" | "assistant_message_checkpointed"
+                    )
+                    && let Some(id) = &event.message_id
+                    && !display.completed.contains(id)
+                {
+                    let message = client.message(id).await?;
+                    if display.active_message.as_ref() != Some(id) {
+                        display.shown.clear();
+                        display.active_message = Some(id.clone());
+                    }
+                    output.message_snapshot(&message, &display.shown);
+                    let keep = bounded_utf8_prefix_len(&message.text, MAX_RENDERED_TURN_BYTES);
+                    display.shown.clear();
+                    display.shown.push_str(&message.text[..keep]);
+                    if message.status != "checkpoint" {
+                        display.completed.insert(id.clone());
+                    }
+                }
+                if (turn_id.is_empty() || event.turn_id.as_deref() == Some(turn_id))
+                    && matches!(event.kind.as_str(), "tool_completed" | "tool_failed")
+                    && let Some(id) = &event.invocation_id
+                {
+                    output.tool_snapshot(&client.tool_invocation(id).await?);
+                }
                 if (turn_id.is_empty() || event.turn_id.as_deref() == Some(turn_id))
                     && matches!(
                         event.kind.as_str(),
@@ -109,24 +145,55 @@ async fn consume_stream(
                             | "turn_incomplete"
                     )
                 {
-                    *terminal_turn = event.turn_id.clone();
+                    display.terminal_turn = event.turn_id.clone();
                 }
+                *cursor = (*cursor).max(event.sequence);
             }
             EventFrame::Delta {
                 turn_id: frame_turn,
                 text,
+                message_id,
+                stream_id,
+                chunk_index,
+                kind,
                 ..
             } if turn_id.is_empty() || frame_turn == turn_id => {
-                let remaining = MAX_RENDERED_TURN_BYTES.saturating_sub(shown.len());
+                if !stream_id.is_empty() {
+                    if display
+                        .chunks
+                        .get(stream_id)
+                        .is_some_and(|last| chunk_index <= last)
+                    {
+                        continue;
+                    }
+                    if display.chunks.len() >= 512 && !display.chunks.contains_key(stream_id) {
+                        return Err("event stream exceeded its display bound".into());
+                    }
+                    display.chunks.insert(stream_id.clone(), *chunk_index);
+                }
+                if kind != "text"
+                    || message_id
+                        .as_ref()
+                        .is_some_and(|id| display.completed.contains(id))
+                {
+                    output.frame(&frame)?;
+                    continue;
+                }
+                if &display.active_message != message_id {
+                    display.shown.clear();
+                    display.active_message = message_id.clone();
+                }
+                let remaining = MAX_RENDERED_TURN_BYTES.saturating_sub(display.rendered);
                 let visible_len = bounded_utf8_prefix_len(text, remaining);
                 let visible = &text[..visible_len];
-                shown.push_str(visible);
+                display.shown.push_str(visible);
+                display.rendered = display.rendered.saturating_add(visible.len());
                 output.delta(visible)?;
             }
             EventFrame::Delta { .. } | EventFrame::Heartbeat => (),
         }
         output.frame(&frame)?;
-        if terminal_turn.is_some() {
+        if display.terminal_turn.is_some() {
             return Ok(false);
         }
     }
@@ -150,33 +217,26 @@ pub async fn follow_session(
     mut cursor: u64,
     output: Output,
 ) -> Result<()> {
-    let mut shown = String::new();
     let mut attempts = 0_u32;
-    let mut terminal_turn = None;
+    let mut display = StreamDisplay::default();
     loop {
         match client.events(session_id, cursor, true).await {
             Ok(mut stream) => {
-                match consume_stream(
-                    &mut stream,
-                    &mut cursor,
-                    "",
-                    &mut shown,
-                    &mut terminal_turn,
-                    output,
-                )
-                .await
+                match consume_stream(&mut stream, &mut cursor, "", output, client, &mut display)
+                    .await
                 {
                     Ok(true) => return Ok(()),
-                    Ok(false) if terminal_turn.is_some() => {
-                        let turn_id = terminal_turn.take().expect("checked terminal turn");
+                    Ok(false) if display.terminal_turn.is_some() => {
+                        let turn_id = display.terminal_turn.take().expect("checked terminal turn");
                         let turn = client.turn(&turn_id).await?;
                         let message = if let Some(id) = &turn.assistant_message_id {
                             find_message(client, session_id, id).await?
                         } else {
                             None
                         };
-                        output.canonical(&turn, message.as_ref(), &shown);
-                        shown.clear();
+                        output.canonical(&turn, message.as_ref(), &display.shown);
+                        display.shown.clear();
+                        display = StreamDisplay::default();
                         attempts = 0;
                     }
                     Ok(false) => attempts += 1,

@@ -88,13 +88,17 @@ async fn run(args: Args) -> Result<()> {
     // without a service that can acknowledge or observe it.
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
-    let chat_runtime = slop_runtime::chat::start(
+    let tools = Arc::new(slop_runtime::tools::ToolService::new(
+        config.data_dir.join("artifacts"),
+    )?);
+    let chat_runtime = slop_runtime::chat::start_with_tools(
         Arc::new(store_client.clone()),
         go_key,
         config.provider_base_url.clone(),
         config.execution_concurrency,
         Some(config.default_model.clone()),
         Some(config.max_output_tokens),
+        tools,
     );
     let accepting = Arc::new(AtomicBool::new(true));
     let state = Arc::new(api::chat::AppState {
@@ -213,6 +217,9 @@ async fn health() -> Json<HealthResponse> {
             "sessions".to_owned(),
             "text-chat".to_owned(),
             "provider-credentials".to_owned(),
+            "structured-messages".to_owned(),
+            "tools".to_owned(),
+            "per-turn-settings".to_owned(),
         ],
     })
 }

@@ -5,7 +5,9 @@
 //! first implemented slice: OpenCode Go, Zen, and headless Codex model access.
 //! This crate must never depend on a client frontend.
 
+pub mod agent;
 pub mod chat;
 #[cfg(test)]
 mod chat_tests;
 pub mod providers;
+pub mod tools;

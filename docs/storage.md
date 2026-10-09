@@ -9,8 +9,10 @@ over a network mount.
 
 The daemon implements a SQLite startup store for node identity, a schema
 migration, an exclusive data-directory lock, and one bounded database worker.
-Schema version 2 adds sessions, text turns, ordered messages, command receipts,
-and semantic events. Tool and artifact storage remain planned. The worker
+Schema version 2 added sessions, text turns, ordered messages, command receipts,
+and semantic events. Schema 3 adds structured blocks, private continuation,
+frozen settings, model requests, tool intents/results, workspace roots, and
+artifact metadata. See [structured execution](structured-execution.md). The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,
 and a bounded busy timeout. Node identity and display-name changes commit in a
 transaction before startup is announced.
@@ -94,7 +96,8 @@ the transaction; reconnect replay fills any notification gap.
 
 The [text-chat slice](text-chat.md) implements atomic session/message acceptance,
 deduplication, provider intent, visible checkpoints, and terminal outcomes.
-The following tool/artifact protocol remains accepted design. An external tool invocation cannot be atomic with a
+The implemented [structured tool slice](structured-execution.md) follows the
+write protocol below. An external tool invocation cannot be atomic with a
 SQLite transaction. Record its intent first, then launch it, then persist the
 known result. On daemon/process failure, an unfinished call is marked failed
 with that cause and any uncertainty about effects. It is not restored or
@@ -147,7 +150,9 @@ At startup, classify work using recorded state:
 
 Current startup restores node identity and chat history, marks running text turns
 interrupted without reissuing inference, and leaves undispatched queued turns
-eligible for admission. Tool, pause, and handoff recovery remain planned.
+eligible for admission. Unfinished tools receive paired failure records with
+uncertain effects when started; completed steps are preserved and no operation
+is replayed. Pause and handoff recovery remain planned.
 A future durable outbox for peer replication contains committed
 application records.
 Its backpressure does not prevent ordinary local execution indefinitely.

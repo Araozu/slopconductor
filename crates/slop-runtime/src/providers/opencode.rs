@@ -39,9 +39,94 @@ pub(super) struct OpencodeClient {
     base_url: String,
     http: reqwest::Client,
     api_key: String,
+    continuation_scope: String,
 }
 
 impl OpencodeClient {
+    pub async fn infer(
+        &self,
+        request: &super::inference::InferenceRequest,
+        on_event: &mut (dyn FnMut(super::inference::ProviderEvent) + Send),
+    ) -> Result<super::inference::InferenceResponse, ProviderError> {
+        let wire = request.validate(
+            self.provider,
+            &super::inference::capabilities(self.provider, &request.model),
+        )?;
+        for message in &request.messages {
+            if message
+                .continuation
+                .as_ref()
+                .is_some_and(|c| c.required && c.scope != self.continuation_scope)
+            {
+                return Err(ProviderError::UnsupportedCapability {
+                    capability: "context_incompatible: required account or endpoint continuation",
+                });
+            }
+        }
+        let payload = super::structured_wire::encode(
+            request,
+            wire,
+            self.provider.id(),
+            &self.continuation_scope,
+        )?;
+        let mut req = self.http.post(format!("{}{}", self.base_url, wire.path()));
+        req = match wire {
+            WireProtocol::AnthropicMessages => req
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", ANTHROPIC_VERSION),
+            _ => req.bearer_auth(&self.api_key),
+        };
+        let mut response = req
+            .header(SESSION_HEADER, &request.session_id)
+            .header("Accept", "text/event-stream")
+            .json(&payload)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(self.status_error(response.status().as_u16()));
+        }
+        if !is_event_stream(&response) {
+            let body = self.read_body_limited(response).await?;
+            let value =
+                serde_json::from_str(&body).map_err(|_| ProviderError::InvalidResponse {
+                    provider: self.provider.id(),
+                    detail: "response body is not JSON",
+                })?;
+            let mut result =
+                super::structured_wire::decode(&value, wire, request, self.provider.id())
+                    .map_err(|error| error.for_provider(self.provider.id()))?;
+            if let Some(c) = &mut result.message.continuation {
+                c.scope = self.continuation_scope.clone();
+            }
+            return Ok(result);
+        }
+        let mut framing = SseStream::new();
+        let mut fold = super::structured_wire::StructuredFold::new(wire);
+        while let Some(chunk) = response.chunk().await? {
+            for event in framing
+                .push(&chunk)
+                .map_err(|error| error.for_provider(self.provider.id()))?
+            {
+                fold.feed(&event, on_event)
+                    .map_err(|error| error.for_provider(self.provider.id()))?;
+            }
+        }
+        for event in framing
+            .finish()
+            .map_err(|error| error.for_provider(self.provider.id()))?
+        {
+            fold.feed(&event, on_event)
+                .map_err(|error| error.for_provider(self.provider.id()))?;
+        }
+        let mut result = fold
+            .finish(request, self.provider.id())
+            .map_err(|error| error.for_provider(self.provider.id()))?;
+        if let Some(c) = &mut result.message.continuation {
+            c.scope = self.continuation_scope.clone();
+        }
+        Ok(result)
+    }
+
     /// Build from an explicit key (never logged or included in errors).
     pub fn new(provider: &'static dyn Provider, api_key: &str) -> Result<Self, ProviderError> {
         Self::new_with_base_url(provider, api_key, None)
@@ -70,11 +155,18 @@ impl OpencodeClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()?;
+        use sha2::{Digest, Sha256};
+        let mut scope = Sha256::new();
+        scope.update(api_key.as_bytes());
+        scope.update([0]);
+        scope.update(base_url.as_bytes());
+        let continuation_scope = format!("{:x}", scope.finalize());
         Ok(Self {
             provider,
             base_url,
             http,
             api_key: api_key.to_owned(),
+            continuation_scope,
         })
     }
 

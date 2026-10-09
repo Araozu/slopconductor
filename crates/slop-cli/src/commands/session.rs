@@ -12,6 +12,12 @@ use crate::{
 
 use super::Context;
 
+#[derive(Default, Clone)]
+pub(super) struct TurnSelection {
+    pub model: Option<String>,
+    pub settings: Option<slop_protocol::execution::GenerationSettings>,
+}
+
 pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()> {
     let client = context.client()?;
     match command {
@@ -57,10 +63,33 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
             text,
             command_id,
             detach,
+            model,
+            effort,
+            max_output_tokens,
         } => {
             let text = prompt_value(text, prompt_file).await?;
             let command_id = choose_command_id(command_id)?;
-            send_and_follow(&client, &id, text, command_id, detach, context.output).await?;
+            let selection = TurnSelection {
+                model,
+                settings: if effort.is_some() || max_output_tokens.is_some() {
+                    Some(slop_protocol::execution::GenerationSettings {
+                        max_output_tokens,
+                        reasoning_effort: effort,
+                    })
+                } else {
+                    None
+                },
+            };
+            send_and_follow(
+                &client,
+                &id,
+                text,
+                command_id,
+                detach,
+                context.output,
+                selection,
+            )
+            .await?;
         }
         SessionCommand::Follow { id, after } => {
             follow_session(&client, &id, after, context.output).await?;
@@ -76,11 +105,14 @@ pub(super) async fn send_and_follow(
     command_id: String,
     detach: bool,
     output: Output,
+    selection: TurnSelection,
 ) -> Result<()> {
     let request = SendMessageRequest {
         command_id: command_id.clone(),
         text,
         expected_revision: None,
+        model: selection.model,
+        settings: selection.settings,
     };
     let receipt = client
         .send_message(session_id, &request)

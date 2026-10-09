@@ -7,6 +7,7 @@ description = "Versioned public API types for Slop Conductor clients"
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
