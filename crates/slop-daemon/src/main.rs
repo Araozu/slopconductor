@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod config;
+mod credentials;
 mod storage;
 
 use std::{
@@ -69,13 +70,27 @@ async fn run(args: Args) -> Result<()> {
     let token = auth::LocalToken::from_data_dir(&config.data_dir)?;
     let token = Arc::new(token);
     let store_client = store.client();
+    let bootstrap = credentials::PROVIDERS
+        .iter()
+        .filter_map(|(provider, variable)| {
+            std::env::var(variable)
+                .ok()
+                .map(|key| ((*provider).to_owned(), key))
+        })
+        .collect();
+    let (credentials, go_key) = credentials::ProviderCredentials::load(
+        &config.data_dir,
+        store_client.node().await?.node_id,
+        bootstrap,
+    )
+    .await?;
     // Bind first so a port/configuration failure cannot start queued inference
     // without a service that can acknowledge or observe it.
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
     let chat_runtime = slop_runtime::chat::start(
         Arc::new(store_client.clone()),
-        std::env::var(slop_runtime::providers::opencode_go::ENV_KEY_VAR).ok(),
+        go_key,
         config.provider_base_url.clone(),
         config.execution_concurrency,
         Some(config.default_model.clone()),
@@ -88,6 +103,7 @@ async fn run(args: Args) -> Result<()> {
         runtime: chat_runtime.clone(),
         accepting: Arc::clone(&accepting),
         event_subscribers: Arc::new(tokio::sync::Semaphore::new(128)),
+        credentials,
     });
 
     // Config validation, exclusive ownership, database initialization,
@@ -97,6 +113,7 @@ async fn run(args: Args) -> Result<()> {
         .route(HEALTH_PATH, get(health))
         .route(NODE_PATH, get(node))
         .merge(api::chat::router(Arc::clone(&state.token)))
+        .merge(api::providers::router(Arc::clone(&state.token)))
         .with_state(state.clone());
     eprintln!("Listening on http://{address}");
 
@@ -149,20 +166,14 @@ async fn run(args: Args) -> Result<()> {
         }
     }
 
-    // Stop provider futures and durably mark interrupted turns before the DB
-    // worker closes. The shared deadline also bounds graceful supervisor drain.
-    match timeout(remaining(deadline), state.runtime.shutdown()).await {
-        Ok(()) => {}
-        Err(_) => {
-            eprintln!("slopd: chat supervisor shutdown deadline elapsed");
-            complete = false;
-        }
-    }
-
-    // Keep shutdown alive if the deadline expires: Store owns the directory
-    // lock and its shutdown future retains that ownership until the DB worker
-    // has actually stopped.
-    let shutdown = tokio::spawn(store.shutdown());
+    // Keep directory ownership until secret writes, login, active turns, and
+    // finally the DB worker have drained, even if the shared deadline expires.
+    let shutdown_state = Arc::clone(&state);
+    let shutdown = tokio::spawn(async move {
+        shutdown_state.credentials.shutdown().await;
+        shutdown_state.runtime.shutdown().await;
+        store.shutdown().await
+    });
     match timeout(remaining(deadline), shutdown).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
@@ -174,7 +185,7 @@ async fn run(args: Args) -> Result<()> {
             complete = false;
         }
         Err(_) => {
-            eprintln!("slopd: shutdown deadline elapsed; database shutdown is still pending");
+            eprintln!("slopd: shutdown deadline elapsed; daemon resources are still draining");
             complete = false;
         }
     }
@@ -201,6 +212,7 @@ async fn health() -> Json<HealthResponse> {
             "node".to_owned(),
             "sessions".to_owned(),
             "text-chat".to_owned(),
+            "provider-credentials".to_owned(),
         ],
     })
 }

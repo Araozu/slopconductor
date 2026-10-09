@@ -16,7 +16,8 @@ agent runtime.
 The CLI is both an interactive human entry point and a scriptable control tool.
 It should ship useful local execution before the TUI, web, or Electron exists.
 
-The implemented commands are `status`, `node`, `models`, `chat`, `session`
+The implemented commands are `status`, `node`, `models`, `provider`
+(status/set-key/login/login-status), `chat`, `session`
 (list/show/history/send/follow), and `turn` (show/cancel), optionally with
 `--json` and `--daemon`. Status remains anonymous. For loopback endpoints the
 CLI discovers the token in the platform data directory; `--token-file` and
@@ -30,6 +31,8 @@ cargo run -p slop-cli -- chat --prompt "Reply briefly."
 cargo run -p slop-cli -- chat --session SESSION_ID --prompt-file prompt.md
 cargo run -p slop-cli -- --json session history SESSION_ID
 cargo run -p slop-cli -- turn cancel TURN_ID
+cargo run -p slop-cli -- provider set-key opencode-go --key-file /path/to/key
+cargo run -p slop-cli -- provider login codex
 ```
 
 Text chat supports interactive input, one-shot prompts, files, and piped stdin.
@@ -38,6 +41,11 @@ receipt immediately. JSON chat emits NDJSON receipts/events/terminal records.
 Closing a client or pressing Ctrl-C while following detaches without canceling.
 `turn cancel` is explicit. Interactive `/exit` exits; `/cancel TURN_ID` submits
 the same cancellation command.
+
+[Provider credential commands](provider-credentials.md) forward bounded secret
+input through the API to daemon-owned XDG storage. The daemon owns browser login
+and persistence independently of CLI lifetime. Status separates configured
+credentials from daemon execution support; Codex/Zen chat remain planned.
 
 The CLI entry point only parses arguments, starts the async client, and reports
 exit status. Command handlers are separated from connection/token selection,
@@ -56,7 +64,7 @@ The proposed broader command groups are:
 | task / run | Create work, inspect attempts, pause/resume/cancel/retry |
 | batch | Validate a matrix, submit it, inspect/export results |
 | artifact | List metadata and download outputs |
-| provider / account | Configure supported credentials and inspect available models |
+| provider / account | Broader account selection and account-scoped model capabilities |
 | daemon | Inspect local service health and eventually install/manage startup |
 | transfer | Future export/handoff commands after migration exists |
 

@@ -16,6 +16,7 @@ pub const NODE_PATH: &str = "/v1/node";
 /// Session and durable text chat routes.
 pub const SESSIONS_PATH: &str = "/v1/sessions";
 pub const MODELS_PATH: &str = "/v1/models";
+pub const PROVIDERS_PATH: &str = "/v1/providers";
 
 /// Local development endpoint; remote authentication is a later milestone.
 pub const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7331";
@@ -45,6 +46,53 @@ pub struct NodeResponse {
 pub struct ErrorResponse {
     pub code: String,
     pub message: String,
+}
+
+/// Credential management never returns stored secrets.
+pub mod providers {
+    use serde::{Deserialize, Serialize};
+
+    pub const MAX_API_KEY_BYTES: usize = 16 * 1024;
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SetApiKeyRequest {
+        pub api_key: String,
+    }
+
+    impl std::fmt::Debug for SetApiKeyRequest {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("SetApiKeyRequest([REDACTED])")
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct ProviderStatus {
+        pub provider: String,
+        pub api_key_configured: bool,
+        pub chatgpt_configured: bool,
+        pub execution_supported: bool,
+    }
+
+    /// The URL is an ephemeral authorization link, never an access token.
+    #[derive(Clone, Serialize, Deserialize)]
+    pub struct LoginResponse {
+        pub login_id: String,
+        pub authorization_url: String,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct StartLoginRequest {
+        pub command_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct LoginStatus {
+        pub login_id: String,
+        pub status: String,
+        pub error_code: Option<String>,
+    }
 }
 
 /// Durable text-chat wire objects. These types intentionally contain no

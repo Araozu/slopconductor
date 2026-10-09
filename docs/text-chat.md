@@ -78,8 +78,11 @@ anonymous. The daemon accepts loopback listeners only.
 Model readiness reports local configuration. It does not prove account
 entitlement, provider availability, or a successful paid inference. Unsupported
 models fail validation; an explicitly selected model is never silently replaced.
-Provider credentials stay in the daemon environment and out of session records,
-public responses, and diagnostics.
+Provider credentials stay in private files under the daemon's XDG data directory
+and out of session records, public responses, and diagnostics. The
+[credential API/CLI](provider-credentials.md) sets keys while the daemon runs;
+new admissions use the saved connection and active turns retain their original
+connection. Legacy environment keys are imported only when no saved key exists.
 
 The default model is `opencode-go/glm-5.3-flash`, with a 4,096-token output cap
 and four concurrent requests across sessions. `default_model`,

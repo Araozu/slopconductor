@@ -95,9 +95,11 @@ API-key support is the first concrete provider integration, implemented for
 OpenCode Go via `OPENCODE_GO_API_KEY` and Zen via `OPENCODE_ZEN_API_KEY` (Bearer
 for Chat/Responses/model list, `x-api-key` plus `anthropic-version` for Messages).
 The current clients accept an explicit key or read their own environment
-variable; there is no fallback between gateways. Owner credential storage and
-opaque account handles remain proposed. Session
-exports, batches, logs, and event streams exclude actual secrets.
+variable; there is no fallback between gateways. The daemon now owns
+[runtime API-key configuration, private XDG storage, and ChatGPT login](provider-credentials.md).
+Go connection replacements affect subsequent admissions while active turns
+retain their original client. Broader opaque account handles remain proposed.
+Session exports, batches, logs, and event streams exclude actual secrets.
 
 Supported subscriptions are a separate authentication capability of a provider.
 They need account selection, token refresh, revocation handling, and usage-limit

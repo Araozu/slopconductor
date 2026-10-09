@@ -10,7 +10,9 @@ The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
 shutdown. Durable text chat now adds sessions, idempotent message acceptance,
 paginated history/events, daemon-owned Go inference, cancellation, and a consumer
-CLI. Coding tools and general task orchestration remain planned. Commands,
+CLI. Runtime provider credential commands now persist secrets in private XDG
+storage, replace Go credentials without restart, and own ChatGPT authorization
+in the daemon. Coding tools and general task orchestration remain planned. Commands,
 schemas, and workflows marked proposed describe future work.
 
 ## Reading order
@@ -23,6 +25,7 @@ schemas, and workflows marked proposed describe future work.
 | [Clients](clients.md) | How the CLI, TUI, web, and Electron evolve independently |
 | [Protocol](protocol.md) | Proposed commands, responses, events, and compatibility |
 | [Text chat](text-chat.md) | Implemented local chat ownership, API, durability, and recovery |
+| [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
 | [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |
 | [Shared provider interface](provider-interface.md) | Proposed adapter contract, common client surface, and conformance criteria |

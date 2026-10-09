@@ -31,6 +31,7 @@ pub struct AppState {
     pub runtime: slop_runtime::chat::ChatRuntime,
     pub accepting: Arc<std::sync::atomic::AtomicBool>,
     pub event_subscribers: Arc<tokio::sync::Semaphore>,
+    pub credentials: Arc<crate::credentials::ProviderCredentials>,
 }
 
 pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
@@ -284,7 +285,7 @@ impl EventFeed {
     }
 }
 
-async fn authorize_request(
+pub(super) async fn authorize_request(
     State(token): State<Arc<LocalToken>>,
     request: Request<Body>,
     next: Next,
@@ -309,7 +310,7 @@ async fn authorize_request(
     }
 }
 
-async fn normalize_rejections(request: Request<Body>, next: Next) -> Response {
+pub(super) async fn normalize_rejections(request: Request<Body>, next: Next) -> Response {
     let response = next.run(request).await;
     match response.status() {
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => error(

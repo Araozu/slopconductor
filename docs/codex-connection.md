@@ -1,10 +1,11 @@
 # Headless Codex connection
 
-**Implemented runtime slice, 2026-10-08.** Codex implements the same
+**Implemented runtime adapter and daemon credential setup, 2026-10-08.** Codex implements the same
 `ProviderClient` as OpenCode Go: validation, model listing, collected completion
-and incremental text completion. The daemon exposes health and an authenticated node query;
-session execution and public provider/account endpoints remain proposed in the
-[shared provider interface](provider-interface.md).
+and incremental text completion. The daemon owns runtime login and private XDG
+credential storage through [provider commands/endpoints](provider-credentials.md).
+Codex session execution and richer account capabilities remain planned; the
+daemon's implemented text-chat execution currently uses Go.
 
 ## ChatGPT subscription login
 
@@ -16,29 +17,31 @@ and validates the ID token's signature, issuer, audience, expiry and nonce.
 Inference requires the granted plan-usage scopes. App/account/workspace
 eligibility and available models remain upstream decisions.
 
-The short-lived helper prints a URL for the user to open; it does not launch a
-browser, invoke an agent CLI, or perform inference. On Linux, from this checkout:
+Start the daemon, then authorize through its public API using the native CLI:
 
 ```sh
-install -d -m 700 .slop/credentials
-cargo run -p slop-runtime --example codex_login --locked -- \
-  .slop/credentials/chatgpt.json slop-local-host-1
+cargo run -p slop-daemon --locked
+# In another terminal:
+cargo run --locked -- provider login codex --command-id my-login-1
 ```
 
-Choose a stable opaque host ID for this daemon host and reuse it. A different
-host needs a distinct ID. Open the printed **Continue with ChatGPT** URL and
+The daemon supplies its persisted opaque node ID as the stable host ID. Open the
+printed **Continue with ChatGPT** URL and
 complete authorization within five minutes. The callback is on `127.0.0.1` with
 an available port. If the browser is on another machine, forward that loopback
 port to the daemon host before completing login.
 
-On Windows, supply a credential path in an existing directory whose ACL grants
-access only to the intended user/service. The helper accepts the same path and
-host-ID arguments. Unix credential files are written with mode `0600`; records
-are replaced atomically on both platforms. Never commit the credential record.
+The daemon saves `credentials/codex-chatgpt.json` beneath its XDG data directory
+(default `~/.local/share/slopconductor`), or beneath its protected
+`LOCALAPPDATA/slopconductor` directory on Windows. Explicit supported data-directory
+overrides apply. Unix credential files have mode `0600`; records are replaced
+atomically on both platforms. Never commit the credential record.
 
-Running the helper again with the same record reauthorizes that registration,
+Running a new login command with the same record reauthorizes that registration,
 retains its issued client/host IDs, and rejects a different returned account
-identity. Use separate paths and connections for separate account registrations.
+identity. The daemon currently supports one saved subscription registration;
+an account picker remains planned. A low-level `codex_login` runtime example
+also exists for development with an explicitly supplied private file and host ID.
 
 Load the record into a daemon-owned connection and share it across sessions:
 
@@ -118,5 +121,5 @@ cargo test -p slop-runtime --test codex_live --locked -- --ignored
 ```
 
 No live login or inference is established by the offline suite. Account-picker
-UI, public login/configuration endpoints, remote sign-out/revocation, cancellation,
-capability snapshots and the persisted agent loop remain planned work.
+UI, remote sign-out/revocation, Codex inference cancellation, capability snapshots
+and Codex daemon chat execution remain planned work.

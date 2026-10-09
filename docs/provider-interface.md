@@ -2,8 +2,9 @@
 
 **Status: proposed implementation guidance, 2026-10-08.** This document defines
 the target contract for provider integrations and the common surface the daemon
-will expose to clients. The full `ProviderAdapter` contract and public provider
-DTOs/endpoints remain proposed; the implemented one-turn subset is described
+will expose to clients. The full `ProviderAdapter` contract and account/capability
+DTOs/endpoints remain proposed; basic [credential endpoints](provider-credentials.md)
+are implemented. The implemented one-turn subset is described
 below. The [requirements](requirements.md) and [crate boundaries](architecture.md)
 remain authoritative; the specific target types and operations are a draft.
 
@@ -40,7 +41,8 @@ The repository currently contains:
   with live model listing, non-streaming inference, and SSE text streaming over
   three wire shapes. Each supplies its own metadata, catalog, and credential
   variable to a [shared internal transport/decoder](../crates/slop-runtime/src/providers/opencode.rs).
-  Credentials are supplied explicitly or from the environment.
+  Runtime callers supply keys explicitly or from the environment. The daemon
+  owns [runtime credential configuration and private XDG storage](provider-credentials.md).
 - A [headless Codex client](../crates/slop-runtime/src/providers/codex.rs)
   through the public Responses API, with native ChatGPT subscription login,
   protected credential records and serialized token refresh. Platform API keys
@@ -55,7 +57,9 @@ The repository currently contains:
 
 This is a starting point. It does not yet implement structured tools/content,
 account capability discovery, the cancellation contract, continuation persistence,
-or the public provider surface described here. The text-only adapter rejects
+or the full public provider surface described here. Basic credential setup,
+status and ChatGPT login endpoints are implemented in the linked credential
+guide. The text-only adapter rejects
 unsupported tool/non-text output and required opaque continuation instead of
 silently discarding it. Empty reasoning metadata can accompany text; legacy
 Chat reasoning deltas remain transient runtime data, not the public summary
@@ -75,9 +79,9 @@ requires `None` and rejects an explicit cap. Developer messages retain their
 role on Responses/Chat and are rejected for Anthropic Messages. Subscription
 requests reject system messages instead of changing their priority; use an
 explicit developer role. All three clients share the bounded wire decoders.
-The daemon implements anonymous `GET /v1/health` and authenticated
-`GET /v1/node`. A runtime integration and node query are not evidence of a usable
-session API.
+The daemon implements anonymous health and authenticated node, Go text-chat,
+and provider credential APIs. Codex/Zen runtime adapters and saved credentials
+do not imply those providers support daemon session execution.
 
 ### Implemented OpenCode adapters
 
@@ -541,7 +545,7 @@ rejection, not by claiming simulated parity.
    credential and test budget; use synthetic fixtures without secrets for CI.
 
 The async utility crates, precise DTO field names, discovery cache policy, and
-headless credential store are implementation choices still to resolve. Record
+broader account discovery are implementation choices still to resolve. Record
 them when needed. They do not change the ownership, validation, completion,
 capability, or client-independence requirements above.
 

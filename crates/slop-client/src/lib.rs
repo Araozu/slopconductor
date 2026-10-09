@@ -11,6 +11,7 @@ use slop_protocol::{
         CancelTurnRequest, CommandReceipt, CreateSessionRequest, EventFrame, MessageResponse,
         ModelResponse, Page, SendMessageRequest, SessionResponse, TurnResponse,
     },
+    providers::{LoginResponse, LoginStatus, ProviderStatus, SetApiKeyRequest, StartLoginRequest},
 };
 use thiserror::Error;
 use url::Url;
@@ -289,6 +290,48 @@ impl DaemonClient {
         self.get_json(self.endpoint.join("/v1/models")?).await
     }
 
+    pub async fn providers(&self) -> Result<Vec<ProviderStatus>, ClientError> {
+        self.get_json(self.endpoint.join(slop_protocol::PROVIDERS_PATH)?)
+            .await
+    }
+
+    /// Idempotent replacement; transport failure may leave the key installed.
+    pub async fn set_provider_api_key(
+        &self,
+        provider: &str,
+        request: &SetApiKeyRequest,
+    ) -> Result<ProviderStatus, ClientError> {
+        self.mutate_json(
+            reqwest::Method::PUT,
+            id_url(
+                &self.endpoint,
+                slop_protocol::PROVIDERS_PATH,
+                provider,
+                Some("api-key"),
+            )?,
+            request,
+        )
+        .await
+    }
+
+    pub async fn start_codex_login(
+        &self,
+        request: &StartLoginRequest,
+    ) -> Result<LoginResponse, ClientError> {
+        self.post_json(self.endpoint.join("/v1/providers/codex/login")?, request)
+            .await
+    }
+
+    pub async fn codex_login_status(&self, login_id: &str) -> Result<LoginStatus, ClientError> {
+        self.get_json(id_url(
+            &self.endpoint,
+            "/v1/providers/codex/login",
+            login_id,
+            None,
+        )?)
+        .await
+    }
+
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, ClientError> {
         self.health().await?;
         let response = self.authorized(self.http.get(url)).send().await?;
@@ -300,6 +343,15 @@ impl DaemonClient {
         url: Url,
         body: &B,
     ) -> Result<T, ClientError> {
+        self.mutate_json(reqwest::Method::POST, url, body).await
+    }
+
+    async fn mutate_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        url: Url,
+        body: &B,
+    ) -> Result<T, ClientError> {
         let body = serde_json::to_vec(body).map_err(|_| ClientError::InvalidResponse)?;
         if body.len() > MAX_JSON_BYTES {
             return Err(ClientError::RequestTooLarge);
@@ -308,7 +360,7 @@ impl DaemonClient {
         let response = self
             .authorized(
                 self.http
-                    .post(url)
+                    .request(method, url)
                     .header(reqwest::header::CONTENT_TYPE, "application/json")
                     .body(body),
             )

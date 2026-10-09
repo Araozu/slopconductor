@@ -135,7 +135,8 @@ authenticated node-identity query to make persistence and authentication
 observable. Add native-client token-file support and a minimal CLI node query;
 credentials must not appear in CLI arguments, JSON output, logs, or Debug
 representations. Reject missing/invalid authorization on protected routes.
-Provider login and remote pairing remain separate later work.
+Runtime provider configuration/login is implemented separately in
+[provider credentials](provider-credentials.md). Remote pairing remains planned.
 
 For the default Linux data path:
 

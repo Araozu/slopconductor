@@ -21,6 +21,10 @@ one-turn operations, with terminal validation, safe diagnostics and optional
 usage. A bounded daemon-owned supervisor now runs Go text turns, serializes each
 session, checkpoints visible output, and commits terminal replies/usage.
 SQLite stores node identity, sessions, turns, messages, commands, and events.
+Authenticated provider credential routes and CLI commands now support private
+XDG API-key storage, startup restoration, hot Go connection replacement, and
+daemon-owned ChatGPT login. The [credential guide](provider-credentials.md)
+specifies the implemented surface; Zen/Codex chat wiring remains planned.
 Tool supervision, worktrees, batch execution, and peer control remain next-stage
 work.
 
@@ -238,6 +242,10 @@ a direct integration investigation, not a plan to invoke Codex's agent runtime.
 Credential handling must be independent of the UI used to complete browser
 login. A short-lived login helper can assist, but a desktop client cannot own
 refresh required for unattended daemon execution.
+
+Runtime credential setup is implemented through `provider set-key`, `provider
+login codex`, and the authenticated provider API. Secrets live under the selected
+XDG data directory; Go inference uses runtime replacements without restart.
 
 Acceptance: revoked/expired credentials and shared usage limits produce
 recoverable account states. Ineligible flows remain unavailable rather than

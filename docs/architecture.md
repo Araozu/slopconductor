@@ -46,6 +46,11 @@ local API credential initialization. A bounded native supervisor executes Go
 text turns independently of client lifetime. Tools and general task/run
 orchestration remain planned.
 
+The daemon also owns [runtime provider credential configuration](provider-credentials.md):
+private XDG records, API-key replacement, and a bounded ChatGPT login listener.
+Go requests snapshot the shared connection when admitted, allowing subsequent
+requests to use a saved replacement while existing turns finish normally.
+
 ```mermaid
 flowchart TD
     CLI[slop-cli] --> Client[slop-client]

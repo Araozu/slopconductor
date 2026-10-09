@@ -30,6 +30,11 @@ pub enum Command {
     Node,
     /// Discover available models.
     Models,
+    /// Configure daemon-owned provider credentials.
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
     /// Manage conversations.
     Session {
         #[command(subcommand)]
@@ -42,6 +47,27 @@ pub enum Command {
     },
     /// Start or resume a text conversation.
     Chat(ChatArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProviderCommand {
+    /// Show credential presence and daemon execution support, never secrets.
+    Status,
+    /// Read an API key from stdin (or --key-file) and save it in the daemon.
+    SetKey {
+        provider: String,
+        #[arg(long)]
+        key_file: Option<PathBuf>,
+    },
+    /// Authorize a ChatGPT subscription through the daemon's callback listener.
+    Login {
+        #[arg(value_parser = ["codex"])]
+        provider: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+    /// Inspect a daemon-owned ChatGPT login after detaching.
+    LoginStatus { login_id: String },
 }
 
 #[derive(Debug, Subcommand)]

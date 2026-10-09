@@ -144,6 +144,11 @@ limits. A model's supported settings are provider-specific.
 I07: Browser/Electron client code may use JS, while executable agent policy,
 scheduling, and tool decisions remain daemon-owned.
 
+I08: Provider credentials can be configured while the daemon is running through
+the public API and CLI. The daemon persists secrets in its private application
+data directory (XDG on Linux), outside conversations and logs. New supported
+requests use updates without a daemon restart.
+
 ## Exclusions from the first useful release
 
 The first useful local CLI release does not include browser tools, graphical

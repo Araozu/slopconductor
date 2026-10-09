@@ -31,6 +31,10 @@ linked version and relevant fixes when updating the binding.
   state.sqlite3-shm          # SQLite-managed when WAL is enabled
   credentials/
     local-api-token         # persistent private local API credential
+    opencode-go-api-key     # optional saved provider API keys
+    opencode-zen-api-key
+    codex-api-key
+    codex-chatgpt.json       # optional validated ChatGPT registration/tokens
   artifacts/
     <content-hash>/...       # bounded files and metadata references
   workspaces/
@@ -39,8 +43,9 @@ linked version and relevant fixes when updating the binding.
     <transfer-id>/...        # validated future handoff packages
 ```
 
-Only the lock, database, SQLite sidecars when needed, and local API credential
-are implemented. Artifact/workspace/transfer directories are future layout;
+The lock, database, SQLite sidecars when needed, local API credential, and
+[runtime provider credentials](provider-credentials.md) are implemented.
+Provider files are created only when configured. Artifact/workspace/transfer directories are future layout;
 startup does not create unused directories.
 
 Linux config is `$XDG_CONFIG_HOME/slopconductor/config.toml` (default

@@ -1,5 +1,6 @@
 mod chat;
 mod discovery;
+mod provider;
 mod session;
 mod turn;
 
@@ -39,6 +40,7 @@ pub async fn run(args: Args) -> Result<()> {
         Command::Status => discovery::status(&context).await,
         Command::Node => discovery::node(&context).await,
         Command::Models => discovery::models(&context).await,
+        Command::Provider { command } => provider::run(command, &context).await,
         Command::Session { command } => session::run(command, &context).await,
         Command::Turn { command } => turn::run(command, &context).await,
         Command::Chat(args) => chat::run(args, &context).await,

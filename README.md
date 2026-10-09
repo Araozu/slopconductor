@@ -34,6 +34,9 @@ Implemented:
 - A native headless Codex connection through the same interface, with ChatGPT
   subscription login, protected credentials and serialized refresh. See the
   [Codex setup guide](docs/codex-connection.md). Platform API keys are also supported.
+- Runtime provider credential configuration through authenticated API/CLI
+  commands, private XDG storage, immediate Go key replacement, and daemon-owned
+  ChatGPT login. See [provider credentials](docs/provider-credentials.md).
 
 Planned: more daemon provider options, coding tools, worktrees, batch execution, child tasks, remote
 control, additional clients, browser tools, and session migration. See the
@@ -82,12 +85,26 @@ that token using the platform data directory; `--token-file` or `SLOP_TOKEN_FILE
 can override it. Explicit daemon data-directory overrides require the matching
 CLI token-file override. Other origins require an explicit `--token-file`.
 
-Set `OPENCODE_GO_API_KEY` in the daemon's environment to enable inference. The
-CLI does not read provider credentials or call the provider. The default model
+Configure Go while the daemon is running:
+
+```sh
+cargo run -- provider set-key opencode-go --key-file /path/to/key
+cargo run -- provider status
+```
+
+The key can also be piped on stdin. It is persisted in the daemon's private
+XDG data directory and enables new turns immediately. The CLI forwards input
+through the public API; it never calls the provider or owns credential storage.
+`OPENCODE_GO_API_KEY` remains a startup import when no saved Go key exists;
+saved credentials take precedence on restart. The default model
 is `opencode-go/glm-5.3-flash`; select another verified Go model with
 `chat --model opencode-go/MODEL`. `--prompt-file PATH` and piped stdin are also
 supported. One-shot chat waits for completion unless `--detach` is supplied.
 Ctrl-C while following detaches; cancellation is an explicit command.
+
+Use `provider login codex` to authorize a ChatGPT subscription through the
+daemon. Zen/Codex credentials can be saved now, but their daemon chat execution
+remains planned. See [runtime credentials](docs/provider-credentials.md).
 
 Use `--command-id ID` for a script's stable mutation identity. After uncertain
 delivery, retry the same operation with the same ID and input. Completed history

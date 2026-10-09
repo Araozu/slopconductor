@@ -105,8 +105,8 @@ pub struct ChatRuntime {
 
 struct RuntimeInner {
     deltas: tokio::sync::broadcast::Sender<ChatDelta>,
-    provider_ready: bool,
-    provider_reason: Option<String>,
+    provider: tokio::sync::watch::Sender<Option<Arc<OpencodeGoClient>>>,
+    provider_base_url: Option<String>,
     scheduler_healthy: Arc<AtomicBool>,
     default_model: String,
     max_tokens: u32,
@@ -135,21 +135,14 @@ pub fn start<R: ChatRepository>(
         };
         result.ok()
     });
-    let provider_reason = if api_key.as_deref().is_none_or(|key| key.trim().is_empty()) {
-        Some("missing OPENCODE_GO_API_KEY".to_owned())
-    } else if client.is_none() {
-        Some("OpenCode Go provider configuration is invalid".to_owned())
-    } else {
-        None
-    };
-    let provider_ready = client.is_some();
+    let (provider, provider_receiver) = tokio::sync::watch::channel(client.map(Arc::new));
     let scheduler_healthy = Arc::new(AtomicBool::new(true));
     let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
     let runtime = ChatRuntime {
         inner: Arc::new(RuntimeInner {
             deltas: deltas.clone(),
-            provider_ready,
-            provider_reason,
+            provider,
+            provider_base_url: base_url,
             scheduler_healthy: Arc::clone(&scheduler_healthy),
             default_model,
             max_tokens,
@@ -160,7 +153,7 @@ pub fn start<R: ChatRepository>(
     let concurrency = concurrency.clamp(1, 64);
     let handle = tokio::spawn(run_scheduler(
         repository,
-        client.map(Arc::new),
+        provider_receiver,
         deltas,
         concurrency,
         max_tokens,
@@ -199,16 +192,32 @@ impl ChatRuntime {
 
     #[must_use]
     pub fn provider_ready(&self) -> bool {
-        self.inner.provider_ready && self.accepting_work()
+        self.inner.provider.borrow().is_some() && self.accepting_work()
     }
 
     #[must_use]
     pub fn provider_reason(&self) -> Option<&str> {
-        if self.accepting_work() {
-            self.inner.provider_reason.as_deref()
-        } else {
+        if !self.accepting_work() {
             Some("chat runtime is unavailable")
+        } else if self.inner.provider.borrow().is_none() {
+            Some("OpenCode Go credentials are unavailable; configure a provider API key")
+        } else {
+            None
         }
+    }
+
+    /// Prepare without changing execution. The daemon persists the key first.
+    pub fn prepare_api_key(&self, api_key: &str) -> Result<Arc<OpencodeGoClient>, ProviderError> {
+        let client = match self.inner.provider_base_url.as_deref() {
+            Some(url) => OpencodeGoClient::new_with_base_url(api_key, url)?,
+            None => OpencodeGoClient::new(api_key)?,
+        };
+        Ok(Arc::new(client))
+    }
+
+    /// New admissions take this connection; active turns retain their snapshot.
+    pub fn replace_provider(&self, provider: Arc<OpencodeGoClient>) {
+        self.inner.provider.send_replace(Some(provider));
     }
 
     #[must_use]
@@ -247,7 +256,7 @@ struct VisibleBuffer {
 #[allow(clippy::too_many_arguments)]
 async fn run_scheduler<R: ChatRepository>(
     repository: Arc<R>,
-    provider: Option<Arc<OpencodeGoClient>>,
+    provider: tokio::sync::watch::Receiver<Option<Arc<OpencodeGoClient>>>,
     deltas: tokio::sync::broadcast::Sender<ChatDelta>,
     concurrency: usize,
     default_max_tokens: u32,
@@ -328,7 +337,7 @@ async fn run_scheduler<R: ChatRepository>(
             break;
         }
         let repository = Arc::clone(&repository);
-        let provider = provider.clone();
+        let provider = provider.borrow().clone();
         let deltas = deltas.clone();
         let mut turn_shutdown = shutdown.clone();
         turns.spawn(async move {

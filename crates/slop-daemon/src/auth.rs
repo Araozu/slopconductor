@@ -63,7 +63,7 @@ pub fn bearer_token(value: &str) -> Option<&[u8]> {
     Some(candidate.as_bytes())
 }
 
-fn create_private_dir(path: &Path) -> Result<(), AuthError> {
+pub(crate) fn create_private_dir(path: &Path) -> Result<(), AuthError> {
     #[cfg(unix)]
     let create_result = {
         use std::os::unix::fs::DirBuilderExt;
@@ -118,6 +118,10 @@ fn is_under_local_app_data(path: &Path) -> bool {
 }
 
 fn read_existing(path: &Path) -> Result<LocalToken, AuthError> {
+    parse_token(open_private_file(path)?)
+}
+
+pub(crate) fn open_private_file(path: &Path) -> Result<File, AuthError> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(AuthError::Insecure(
@@ -145,7 +149,25 @@ fn read_existing(path: &Path) -> Result<LocalToken, AuthError> {
         ));
     }
     validate_windows_acl_location(path)?;
-    parse_token(file)
+    Ok(file)
+}
+
+/// Synchronized, private, same-directory atomic replacement.
+pub(crate) fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), AuthError> {
+    if fs::symlink_metadata(path).is_ok() {
+        open_private_file(path)?;
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("missing credential directory"))?;
+    create_private_dir(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 #[cfg(unix)]

@@ -13,6 +13,10 @@ history, event replay/follow, and turn inspection/cancellation. The wire structs
 are in `slop_protocol::chat`. Mutations use explicit command IDs and return
 durable acceptance receipts. Errors use `ErrorResponse { code, message }`.
 Resource summaries and the larger command/error envelope below remain proposed.
+The [provider credential surface](provider-credentials.md#public-api) is also
+implemented, with wire structs in `slop_protocol::providers`: private API-key
+replacement, safe credential status, and daemon-owned ChatGPT login. This setup
+surface does not enable Codex/Zen session execution.
 
 The native client currently accepts an HTTP(S) origin without path, query,
 fragment, or embedded credentials. It applies connect/request timeouts, avoids
@@ -100,6 +104,10 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/node | Implemented: authenticated durable node ID, name, and OS; resource summary remains proposed |
 | GET /v1/capabilities | Available tools, providers, settings, and policy capabilities |
 | GET /v1/models | Implemented: known Go models and local credential readiness; account entitlement is not probed |
+| GET /v1/providers | Implemented: safe credential presence and daemon execution support |
+| PUT /v1/providers/{provider}/api-key | Implemented: persist an API key and activate new supported requests without restart |
+| POST /v1/providers/codex/login | Implemented: start/reuse the current ChatGPT authorization attempt |
+| GET /v1/providers/codex/login/{id} | Implemented: inspect the latest daemon-owned login attempt |
 | GET, POST /v1/projects | Register/list logical projects and local mappings |
 | GET /v1/workspaces | Inspect active worktree and exclusive workspace reservations |
 | GET, POST /v1/sessions | Implemented: list/create conversations owned by this node |
@@ -217,7 +225,8 @@ do not change daemon ownership.
 
 ## Authentication and remote forwarding
 
-Local bearer-token authentication is implemented for node and text-chat queries
+Local bearer-token authentication is implemented for node, provider credential,
+and text-chat queries
 and mutations. The daemon
 still binds loopback only. Pairing and authorization for privileged tools remain
 future work. M3 adds authenticated access over Tailscale, with separate

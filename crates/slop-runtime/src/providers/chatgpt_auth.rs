@@ -158,7 +158,11 @@ async fn save(path: PathBuf, credentials: Credentials) -> Result<(), ProviderErr
         file.as_file()
             .sync_all()
             .map_err(|_| ProviderError::CredentialStorage)?;
-        file.persist(path)
+        file.persist(&path)
+            .map_err(|_| ProviderError::CredentialStorage)?;
+        #[cfg(unix)]
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
             .map_err(|_| ProviderError::CredentialStorage)?;
         Ok(())
     })
@@ -347,6 +351,32 @@ impl ChatGptLogin {
     /// Wait up to five minutes, validate the callback and signed ID token, then
     /// atomically store credentials. The parent directory must already exist.
     pub async fn finish(self, path: impl AsRef<Path>) -> Result<ChatGptConnection, ProviderError> {
+        self.finish_with_cancellation(path, std::future::pending())
+            .await
+    }
+
+    /// Cancel authorization on daemon shutdown, but drain any credential write
+    /// already begun. An interrupted exchange is never automatically replayed.
+    pub async fn finish_with_cancellation(
+        self,
+        path: impl AsRef<Path>,
+        cancellation: impl std::future::Future<Output = ()>,
+    ) -> Result<ChatGptConnection, ProviderError> {
+        let credentials = tokio::select! {
+            biased;
+            _ = cancellation => return Err(auth_error("login interrupted")),
+            credentials = self.authorize() => credentials?,
+        };
+        let path = path.as_ref().to_owned();
+        save(path.clone(), credentials.clone()).await?;
+        Ok(ChatGptConnection::from_credentials(
+            path,
+            credentials,
+            transport::http_client()?,
+        ))
+    }
+
+    async fn authorize(&self) -> Result<Credentials, ProviderError> {
         let callback = tokio::time::timeout(Duration::from_secs(300), self.callback())
             .await
             .map_err(|_| auth_error("login timed out"))??;
@@ -381,7 +411,7 @@ impl ChatGptLogin {
             issuer: ISSUER.to_owned(),
             subject,
             client_id,
-            ext_agent_host_id: self.host_id,
+            ext_agent_host_id: self.host_id.clone(),
             id_token: String::new(),
             access_token: String::new(),
             refresh_token: String::new(),
@@ -389,9 +419,7 @@ impl ChatGptLogin {
             expires_at: 0,
         };
         token.apply(&mut credentials)?;
-        let path = path.as_ref().to_owned();
-        save(path.clone(), credentials.clone()).await?;
-        Ok(ChatGptConnection::from_credentials(path, credentials, http))
+        Ok(credentials)
     }
 
     fn validate_callback(
