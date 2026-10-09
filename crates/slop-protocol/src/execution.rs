@@ -76,6 +76,11 @@ pub struct ModelCapabilities {
     pub reasoning_efforts: Vec<String>,
     pub incremental_streaming: bool,
     pub max_output_tokens: u32,
+    #[serde(default = "default_output_token_cap_support")]
+    pub output_token_cap_supported: bool,
+}
+fn default_output_token_cap_support() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

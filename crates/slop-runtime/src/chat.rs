@@ -4,6 +4,7 @@
 //! Tokio runtime. A request connection never owns or waits for execution.
 
 use std::{
+    collections::HashMap,
     error::Error,
     future::Future,
     pin::Pin,
@@ -14,8 +15,7 @@ use std::{
     time::Duration,
 };
 
-use crate::providers::opencode_go::OpencodeGoClient;
-use crate::providers::{ProviderError, Usage};
+use crate::providers::{ProviderClient, ProviderError, Usage, opencode_go::OpencodeGoClient};
 use crate::{
     agent::{RequestCompletion, RequestIntent, ToolIntent},
     providers::inference::{GenerationSettings, InferenceMessage},
@@ -140,8 +140,8 @@ pub struct ChatRuntime {
 
 struct RuntimeInner {
     deltas: tokio::sync::broadcast::Sender<ChatDelta>,
-    provider: tokio::sync::watch::Sender<Option<Arc<OpencodeGoClient>>>,
-    provider_base_url: Option<String>,
+    providers: tokio::sync::watch::Sender<HashMap<String, Arc<dyn ProviderClient>>>,
+    go_base_url: Option<String>,
     scheduler_healthy: Arc<AtomicBool>,
     default_model: String,
     max_tokens: u32,
@@ -183,24 +183,54 @@ pub fn start_with_tools<R: ChatRepository>(
     max_tokens: Option<u32>,
     tools: Arc<ToolService>,
 ) -> ChatRuntime {
-    let (deltas, _) = tokio::sync::broadcast::channel(128);
-    let default_model = default_model.unwrap_or_else(|| DEFAULT_MODEL.to_owned());
-    let max_tokens = max_tokens.unwrap_or(DEFAULT_OUTPUT_TOKENS);
     let client = api_key.as_deref().and_then(|key| {
+        use crate::providers::opencode_go::OpencodeGoClient;
         let result = match base_url.as_deref() {
             Some(url) => OpencodeGoClient::new_with_base_url(key, url),
             None => OpencodeGoClient::new(key),
         };
         result.ok()
     });
-    let (provider, provider_receiver) = tokio::sync::watch::channel(client.map(Arc::new));
+    let providers = client
+        .map(|client| {
+            let provider: Arc<dyn ProviderClient> = Arc::new(client);
+            HashMap::from([(provider.descriptor().id().as_str().to_owned(), provider)])
+        })
+        .unwrap_or_default();
+    start_with_provider_clients(
+        repository,
+        providers,
+        base_url,
+        concurrency,
+        default_model,
+        max_tokens,
+        tools,
+    )
+}
+
+/// Starts the common provider scheduler with already validated authenticated clients.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn start_with_provider_clients<R: ChatRepository>(
+    repository: Arc<R>,
+    providers: HashMap<String, Arc<dyn ProviderClient>>,
+    base_url: Option<String>,
+    concurrency: usize,
+    default_model: Option<String>,
+    max_tokens: Option<u32>,
+    tools: Arc<ToolService>,
+) -> ChatRuntime {
+    let (deltas, _) = tokio::sync::broadcast::channel(128);
+    let default_model = default_model.unwrap_or_else(|| DEFAULT_MODEL.to_owned());
+    let max_tokens = max_tokens.unwrap_or(DEFAULT_OUTPUT_TOKENS);
+    let (providers, provider_receiver) = tokio::sync::watch::channel(providers);
     let scheduler_healthy = Arc::new(AtomicBool::new(true));
     let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
     let runtime = ChatRuntime {
         inner: Arc::new(RuntimeInner {
             deltas: deltas.clone(),
-            provider,
-            provider_base_url: base_url,
+            providers,
+            go_base_url: base_url,
             scheduler_healthy: Arc::clone(&scheduler_healthy),
             default_model,
             max_tokens,
@@ -215,7 +245,6 @@ pub fn start_with_tools<R: ChatRepository>(
         provider_receiver,
         deltas,
         concurrency,
-        max_tokens,
         shutdown_receiver,
         shutdown_sender,
         scheduler_healthy,
@@ -255,15 +284,15 @@ impl ChatRuntime {
 
     #[must_use]
     pub fn provider_ready(&self) -> bool {
-        self.inner.provider.borrow().is_some() && self.accepting_work()
+        !self.inner.providers.borrow().is_empty() && self.accepting_work()
     }
 
     #[must_use]
     pub fn provider_reason(&self) -> Option<&str> {
         if !self.accepting_work() {
             Some("chat runtime is unavailable")
-        } else if self.inner.provider.borrow().is_none() {
-            Some("OpenCode Go credentials are unavailable; configure a provider API key")
+        } else if self.inner.providers.borrow().is_empty() {
+            Some("No supported provider credentials are configured")
         } else {
             None
         }
@@ -271,7 +300,7 @@ impl ChatRuntime {
 
     /// Prepare without changing execution. The daemon persists the key first.
     pub fn prepare_api_key(&self, api_key: &str) -> Result<Arc<OpencodeGoClient>, ProviderError> {
-        let client = match self.inner.provider_base_url.as_deref() {
+        let client = match self.inner.go_base_url.as_deref() {
             Some(url) => OpencodeGoClient::new_with_base_url(api_key, url)?,
             None => OpencodeGoClient::new(api_key)?,
         };
@@ -279,8 +308,16 @@ impl ChatRuntime {
     }
 
     /// New admissions take this connection; active turns retain their snapshot.
-    pub fn replace_provider(&self, provider: Arc<OpencodeGoClient>) {
-        self.inner.provider.send_replace(Some(provider));
+    pub fn replace_provider(&self, provider: Arc<dyn ProviderClient>) {
+        let key = provider.descriptor().id().as_str().to_owned();
+        self.inner.providers.send_modify(|providers| {
+            providers.insert(key, provider);
+        });
+    }
+
+    #[must_use]
+    pub fn provider_client(&self, provider: &str) -> Option<Arc<dyn ProviderClient>> {
+        self.inner.providers.borrow().get(provider).cloned()
     }
 
     #[must_use]
@@ -313,10 +350,9 @@ impl ChatRuntime {
 #[allow(clippy::too_many_arguments)]
 async fn run_scheduler<R: ChatRepository>(
     repository: Arc<R>,
-    provider: tokio::sync::watch::Receiver<Option<Arc<OpencodeGoClient>>>,
+    providers: tokio::sync::watch::Receiver<HashMap<String, Arc<dyn ProviderClient>>>,
     deltas: tokio::sync::broadcast::Sender<ChatDelta>,
     concurrency: usize,
-    default_max_tokens: u32,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
     shutdown_sender: tokio::sync::watch::Sender<bool>,
     scheduler_healthy: Arc<AtomicBool>,
@@ -395,7 +431,7 @@ async fn run_scheduler<R: ChatRepository>(
             break;
         }
         let repository = Arc::clone(&repository);
-        let provider = provider.borrow().clone();
+        let providers = providers.borrow().clone();
         let deltas = deltas.clone();
         let mut turn_shutdown = shutdown.clone();
         let tools = Arc::clone(&tools);
@@ -403,10 +439,9 @@ async fn run_scheduler<R: ChatRepository>(
             let _permit = permit;
             crate::agent::execute(
                 repository,
-                provider,
+                providers,
                 deltas,
                 work,
-                default_max_tokens,
                 &mut turn_shutdown,
                 tools,
             )

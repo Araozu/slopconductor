@@ -18,14 +18,14 @@ Codex adds native ChatGPT registration, signed ID-token validation, protected
 credential storage and serialized renewal; see [Codex connection](codex-connection.md).
 A shared object-safe `ProviderClient` covers all three adapters' text operations
 and adds structured inference for Go/Zen, with terminal validation, safe diagnostics and optional
-usage. A bounded daemon-owned supervisor runs Go turns, serializes sessions/workspaces,
-checkpoints visible output, dispatches authorized tools, and commits outcomes.
+usage. A bounded daemon-owned supervisor selects Go, Zen, or Codex per turn, serializes
+sessions/workspaces, checkpoints visible output, and commits outcomes. It
+dispatches authorized tools for Go/Zen; Codex turns are text-only.
 SQLite stores node identity, sessions, turns, messages, commands, and events.
 Authenticated provider credential routes and CLI commands now support private
-XDG API-key storage, startup restoration, hot Go connection replacement, and
-daemon-owned ChatGPT login. The [credential guide](provider-credentials.md)
-specifies the implemented surface; Zen/Codex chat wiring remains planned.
-Structured Go turns now persist blocks/private continuation, frozen per-turn
+XDG API-key storage, startup restoration, hot provider connection replacement,
+and daemon-owned ChatGPT login. The [credential guide](provider-credentials.md)
+specifies the implemented surface. Structured Go/Zen turns now persist blocks/private continuation, frozen per-turn
 model/settings, model requests, file/shell invocations, artifacts, and recovery
 results. Its only coding tools are `read`, `write`, `edit`, and `bash`, implemented
 in Rust; workspace chats enable all four unless an explicit allowlist restricts
@@ -171,15 +171,14 @@ exists.
 Acceptance: a second client can reconstruct a session from snapshot/events, and
 a lagging/disconnected client cannot stop unrelated execution.
 
-## Step 4: one direct provider integration
+## Step 4: direct provider integrations (implemented)
 
-Use the [shared provider interface](provider-interface.md) as the adapter and
-public-surface contract, including its conformance criteria. The current OpenCode
-Go and Zen clients implement structured `ProviderClient::infer` alongside their
-legacy text methods. Go supplies the daemon's durable chat/tool vertical slice,
-with blocks, private continuation, per-turn model/settings, and artifacts; see
-[structured execution](structured-execution.md). Codex/Zen daemon wiring and the
-complete target adapter lifecycle remain planned.
+The [shared provider interface](provider-interface.md) is the adapter and
+public-surface contract. Go and Zen implement structured `ProviderClient::infer`
+and supply the daemon's durable chat/tool vertical slice, with blocks, private
+continuation, per-turn model/settings, and artifacts. Codex supports text-only
+turns. See [structured execution](structured-execution.md). Broader account
+discovery and task orchestration remain planned.
 
 Implement provider capability validation and API-key account references. Add a
 direct streaming request adapter and preserve response/tool-call metadata.
@@ -252,7 +251,7 @@ refresh required for unattended daemon execution.
 
 Runtime credential setup is implemented through `provider set-key`, `provider
 login codex`, and the authenticated provider API. Secrets live under the selected
-XDG data directory; Go inference uses runtime replacements without restart.
+XDG data directory; runtime replacements affect new admissions without restart.
 
 Acceptance: revoked/expired credentials and shared usage limits produce
 recoverable account states. Ineligible flows remain unavailable rather than

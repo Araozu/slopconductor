@@ -14,7 +14,7 @@ use crate::{
         ChatDelta, ChatOutcome, ChatRepository, ChatStatus, RoleKind, TurnWork, canceled, failed,
         finish_with_retry, interrupted_shutdown, provider_failure,
     },
-    providers::{ProviderClient, Usage, UsageSource, inference::*, opencode_go::OpencodeGoClient},
+    providers::{ProviderClient, Usage, UsageSource, inference::*},
     tools::{ToolOutcome, ToolService},
 };
 
@@ -100,10 +100,9 @@ fn snapshot(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute<R: ChatRepository>(
     repository: Arc<R>,
-    provider: Option<Arc<OpencodeGoClient>>,
+    providers: std::collections::HashMap<String, Arc<dyn ProviderClient>>,
     deltas: tokio::sync::broadcast::Sender<ChatDelta>,
     work: TurnWork,
-    default_max_tokens: u32,
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
     tools: Arc<ToolService>,
 ) -> bool {
@@ -122,20 +121,8 @@ pub(crate) async fn execute<R: ChatRepository>(
         Ok(false) => {}
         Err(_) => return false,
     }
-    let Some(provider) = provider else {
-        return stop(
-            repository.as_ref(),
-            &work.turn_id,
-            failed(
-                "provider_auth_required",
-                "OpenCode Go credentials are unavailable.",
-            ),
-            total,
-        )
-        .await;
-    };
     let model = match work.requested_model.parse::<ProviderModelRef>() {
-        Ok(model) if model.provider().as_str() == "opencode-go" => model,
+        Ok(model) => model,
         _ => {
             return stop(
                 repository.as_ref(),
@@ -145,6 +132,18 @@ pub(crate) async fn execute<R: ChatRepository>(
             )
             .await;
         }
+    };
+    let Some(provider) = providers.get(model.provider().as_str()).cloned() else {
+        return stop(
+            repository.as_ref(),
+            &work.turn_id,
+            failed(
+                "provider_auth_required",
+                "Provider credentials are unavailable.",
+            ),
+            total,
+        )
+        .await;
     };
     let mut messages = if work.history.is_empty() {
         work.messages
@@ -166,11 +165,7 @@ pub(crate) async fn execute<R: ChatRepository>(
     } else {
         work.history.clone()
     };
-    let mut settings = work.settings.clone();
-    settings.max_output_tokens = settings
-        .max_output_tokens
-        .or(work.max_tokens)
-        .or(Some(default_max_tokens));
+    let settings = work.settings.clone();
     let definitions: Vec<ToolDefinition> = work
         .execution
         .as_ref()

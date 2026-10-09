@@ -49,7 +49,8 @@ the same cancellation command.
 [Provider credential commands](provider-credentials.md) forward bounded secret
 input through the API to daemon-owned XDG storage. The daemon owns browser login
 and persistence independently of CLI lifetime. Status separates configured
-credentials from daemon execution support; Codex/Zen chat remain planned.
+credentials from daemon execution support; Go, Zen, and Codex models route
+through the same public chat API, with Codex text-only.
 
 The CLI entry point only parses arguments, starts the async client, and reports
 exit status. Command handlers are separated from connection/token selection,

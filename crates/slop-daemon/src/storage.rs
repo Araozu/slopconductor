@@ -242,6 +242,51 @@ impl Drop for Store {
 }
 
 impl StoreClient {
+    /// Inspect at most the bounded chat context needed for provider preflight.
+    /// Private continuation items remain inside the storage/runtime boundary.
+    pub async fn context_requirements(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<(bool, Vec<(String, String, String)>)> {
+        let session_id = session_id.to_owned();
+        self.submit(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT m.blocks,m.continuation FROM messages m JOIN turns t ON t.id=m.turn_id
+                 WHERE m.session_id=?1 AND m.status='completed'
+                   AND (t.status='completed'
+                     OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id))
+                     OR (t.status='running' AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
+                 ORDER BY m.ordinal LIMIT 256",
+            ).map_err(|_| StoreError::Database)?;
+            let mut rows = statement.query([session_id]).map_err(|_| StoreError::Database)?;
+            let mut non_text = false;
+            let mut required = Vec::new();
+            while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
+                let blocks: Vec<slop_runtime::providers::inference::ContentBlock> = execution::json_column(row, 0).map_err(|_| StoreError::Database)?;
+                non_text |= blocks.iter().any(|block| !matches!(block.content, slop_runtime::providers::inference::BlockContent::Text { .. }));
+                let continuation: Option<slop_runtime::providers::inference::Continuation> = execution::optional_json_column(row, 1).map_err(|_| StoreError::Database)?;
+                if let Some(continuation) = continuation.filter(|value| value.required) {
+                    required.push((continuation.provider, continuation.model, continuation.wire));
+                }
+            }
+            Ok((non_text, required))
+        }).await
+    }
+
+    pub async fn command_seen(&self, command_id: &str) -> StoreResult<bool> {
+        let command_id = command_id.to_owned();
+        self.submit(move |connection| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM commands WHERE command_id=?1)",
+                    [command_id],
+                    |row| row.get(0),
+                )
+                .map_err(|_| StoreError::Database)
+        })
+        .await
+    }
+
     /// Query the persisted identity through the database worker.
     pub async fn node(&self) -> StoreResult<NodeResponse> {
         let (response_tx, response_rx) = oneshot::channel();
@@ -269,7 +314,7 @@ impl StoreClient {
         &self,
         request: CreateSessionRequest,
     ) -> StoreResult<CommandReceipt> {
-        self.create_session_with_default_max_tokens(request, 4096)
+        self.create_session_with_default_max_tokens(request, Some(4096))
             .await
     }
 
@@ -278,7 +323,7 @@ impl StoreClient {
     pub async fn create_session_with_default_max_tokens(
         &self,
         request: CreateSessionRequest,
-        default_max_tokens: u32,
+        default_max_tokens: Option<u32>,
     ) -> StoreResult<CommandReceipt> {
         self.submit(move |connection| create_session(connection, request, default_max_tokens))
             .await
@@ -305,9 +350,21 @@ impl StoreClient {
         session_id: &str,
         request: SendMessageRequest,
     ) -> StoreResult<CommandReceipt> {
-        let session_id = session_id.to_owned();
-        self.submit(move |connection| send_message(connection, &session_id, request))
+        self.send_message_with_effective_settings(session_id, request, None)
             .await
+    }
+
+    pub async fn send_message_with_effective_settings(
+        &self,
+        session_id: &str,
+        request: SendMessageRequest,
+        effective_settings: Option<slop_protocol::execution::GenerationSettings>,
+    ) -> StoreResult<CommandReceipt> {
+        let session_id = session_id.to_owned();
+        self.submit(move |connection| {
+            send_message(connection, &session_id, request, effective_settings)
+        })
+        .await
     }
 
     pub async fn messages(
@@ -896,7 +953,7 @@ fn make_receipt(
 fn create_session(
     connection: &Connection,
     request: CreateSessionRequest,
-    default_max_tokens: u32,
+    default_max_tokens: Option<u32>,
 ) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.provider.trim().is_empty()
@@ -910,8 +967,7 @@ fn create_session(
         || request
             .max_tokens
             .is_some_and(|tokens| tokens == 0 || tokens > 65_536)
-        || default_max_tokens == 0
-        || default_max_tokens > 65_536
+        || default_max_tokens.is_some_and(|tokens| tokens == 0 || tokens > 65_536)
     {
         return Err(StoreError::Invalid);
     }
@@ -927,17 +983,23 @@ fn create_session(
     if let Some(receipt) = prior_receipt(&tx, &request.command_id, scope, &payload)? {
         return Ok(receipt);
     }
-    if request.provider != "opencode-go"
-        || !slop_runtime::providers::opencode_go::MODELS
-            .iter()
-            .any(|model| model.id == request.model)
-    {
+    let provider_id = match request.provider.parse::<slop_core::provider::ProviderId>() {
+        Ok(provider) => provider,
+        Err(_) => return Err(StoreError::Invalid),
+    };
+    let Some(provider) = slop_runtime::providers::provider(provider_id) else {
+        return Err(StoreError::Invalid);
+    };
+    if provider.wire_protocol(&request.model).is_err() {
         return Err(StoreError::Invalid);
     }
     let node = query_node(&tx)?;
     let session_id = opaque_id()?;
     let settings = execution::session_settings(&request, default_max_tokens)?;
-    let effective_max_tokens = settings.max_output_tokens.expect("validated output cap");
+    let effective_max_tokens = settings
+        .max_output_tokens
+        .or(default_max_tokens)
+        .unwrap_or(4096);
     let policy = execution::workspace(&request)?;
     let order: i64 = tx
         .query_row(
@@ -978,16 +1040,17 @@ fn create_session(
 }
 
 fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionResponse> {
+    let settings: slop_protocol::execution::GenerationSettings = execution::json_column(row, 8)?;
     Ok(SessionResponse {
         id: row.get(0)?,
         owner_node_id: row.get(1)?,
         title: row.get(2)?,
         provider: row.get(3)?,
         model: row.get(4)?,
-        max_tokens: row.get(5)?,
+        max_tokens: settings.max_output_tokens,
         revision: row.get::<_, i64>(6)? as u64,
         last_event_sequence: row.get::<_, i64>(7)? as u64,
-        settings: execution::json_column(row, 8)?,
+        settings,
         execution: execution::optional_json_column(row, 9)?,
     })
 }
@@ -1036,6 +1099,7 @@ fn send_message(
     connection: &Connection,
     session_id: &str,
     request: SendMessageRequest,
+    effective_settings: Option<slop_protocol::execution::GenerationSettings>,
 ) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.text.trim().is_empty()
@@ -1093,7 +1157,13 @@ fn send_message(
         .model
         .clone()
         .unwrap_or_else(|| format!("{}/{}", session.provider, session.model));
-    let settings = execution::turn_settings(&session, &request, &requested_model)?;
+    let settings = match effective_settings {
+        Some(settings) => {
+            execution::validate_settings(&requested_model, &settings)?;
+            settings
+        }
+        None => execution::turn_settings(&session, &request, &requested_model)?,
+    };
     tx.execute("INSERT INTO turns(id,session_id,ordinal,user_message_id,status,requested_model) VALUES(?1,?2,?3,?4,'queued',?5)",rusqlite::params![turn_id,session_id,ordinal,message_id,requested_model]).map_err(|_|StoreError::Database)?;
     tx.execute(
         "UPDATE turns SET settings=?1,requested_settings=?2 WHERE id=?3",
@@ -1720,6 +1790,29 @@ mod tests {
     }
 
     #[test]
+    fn provider_defaults_preserve_settings_object_omission_and_subscription_no_cap() {
+        let mut go = create_request("go-default", None);
+        go.max_tokens = None;
+        go.settings = Some(slop_protocol::execution::GenerationSettings::default());
+        assert_eq!(
+            execution::session_settings(&go, Some(4096))
+                .unwrap()
+                .max_output_tokens,
+            Some(4096)
+        );
+
+        let mut codex = go;
+        codex.provider = "codex".into();
+        codex.model = "gpt-6.1-sol".into();
+        assert_eq!(
+            execution::session_settings(&codex, None)
+                .unwrap()
+                .max_output_tokens,
+            None
+        );
+    }
+
+    #[test]
     fn schema_two_migration_preserves_history_settings_and_command_payloads() {
         let connection = Connection::open_in_memory().unwrap();
         let tx = connection.unchecked_transaction().unwrap();
@@ -2003,6 +2096,19 @@ mod tests {
         assert!(tools[1].effects_unknown);
         assert!(!tools[2].effects_unknown);
         assert_eq!(client.turn(&turn).await.unwrap().status, "interrupted");
+        let (has_non_text, required) = client
+            .context_requirements(&session.session_id)
+            .await
+            .unwrap();
+        assert!(has_non_text);
+        assert_eq!(
+            required,
+            vec![(
+                "opencode-go".into(),
+                "glm-5.3-flash".into(),
+                "chat_completions".into(),
+            )]
+        );
         let history = client
             .messages(&session.session_id, None, 20)
             .await
@@ -2548,11 +2654,11 @@ mod tests {
         let mut request = create_request("default-cap", None);
         request.max_tokens = None;
         let receipt = client
-            .create_session_with_default_max_tokens(request.clone(), 12345)
+            .create_session_with_default_max_tokens(request.clone(), Some(12345))
             .await
             .expect("create");
         let retry = client
-            .create_session_with_default_max_tokens(request, 54321)
+            .create_session_with_default_max_tokens(request, Some(54321))
             .await
             .expect("retry with changed daemon config");
         assert_eq!(receipt, retry);

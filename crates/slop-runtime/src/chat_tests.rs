@@ -50,7 +50,10 @@ impl FixtureRepository {
                 turn_id: "turn-1".to_owned(),
                 session_id: "session-1".to_owned(),
                 requested_model: "opencode-go/glm-5.3-flash".to_owned(),
-                max_tokens: None,
+                settings: crate::providers::inference::GenerationSettings {
+                    max_output_tokens: Some(4096),
+                    ..Default::default()
+                },
                 messages: vec![chat::ContextMessage {
                     role: RoleKind::User,
                     text: "Say hello".to_owned(),
@@ -250,7 +253,7 @@ async fn real_provider_transport_streams_visible_text_and_commits_terminal_respo
     runtime.shutdown().await;
     server.abort();
 
-    assert_eq!(outcome.status, chat::ChatStatus::Completed);
+    assert_eq!(outcome.status, chat::ChatStatus::Completed, "{outcome:?}");
     assert_eq!(outcome.text, expected_text);
     assert_eq!(outcome.resolved_model.as_deref(), Some("glm-5.3-flash"));
     assert_eq!(requests.lock().unwrap().len(), 1);

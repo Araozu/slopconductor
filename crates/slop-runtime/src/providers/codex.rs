@@ -109,6 +109,12 @@ impl CodexClient {
         })
     }
 
+    pub fn new_with_base_url(api_key: &str, base_url: &str) -> Result<Self, ProviderError> {
+        let mut client = Self::new(api_key)?;
+        client.base_url = super::opencode::validate_base_url(base_url)?;
+        Ok(client)
+    }
+
     /// Attach a daemon-owned subscription registration. Share the same
     /// connection across all sessions using this account to serialize refresh.
     pub fn from_chatgpt(connection: Arc<ChatGptConnection>) -> Result<Self, ProviderError> {
@@ -117,6 +123,15 @@ impl CodexClient {
             auth: Authentication::ChatGpt(connection),
             base_url: BASE_URL.to_owned(),
         })
+    }
+
+    pub fn from_chatgpt_with_base_url(
+        connection: Arc<ChatGptConnection>,
+        base_url: &str,
+    ) -> Result<Self, ProviderError> {
+        let mut client = Self::from_chatgpt(connection)?;
+        client.base_url = super::opencode::validate_base_url(base_url)?;
+        Ok(client)
     }
 
     async fn access_token(&self) -> Result<String, ProviderError> {

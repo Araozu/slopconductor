@@ -1,11 +1,11 @@
 # Structured execution and tools
 
-**Implemented, 2026-10-08.** The daemon can run a bounded inference/tool loop
-through OpenCode Go. Sessions without an execution policy retain plain chat
-behavior. CLI and SDK consumers use public structured records; neither owns
-execution. Zen has the same structured runtime adapter but is not selectable
-for daemon sessions. Codex retains its text-only adapter bridge and rejects
-structured tools or required continuation it cannot support.
+**Implemented, 2026-10-09.** The daemon selects OpenCode Go, OpenCode Zen, or
+Codex through the common runtime provider interface. Go and Zen run the bounded
+inference/tool loop; Codex runs text-only requests and rejects tools, structured
+history, incompatible required continuation, and unsupported settings before
+acceptance where the existing session context makes that knowable. CLI and SDK
+consumers use public structured records; neither owns execution.
 
 **Tool set updated, 2026-10-09.** The native runtime exposes only pi's four basic
 coding tools: `read`, `write`, `edit`, and `bash`. Their implementation stays in
@@ -169,7 +169,7 @@ require the existing local bearer token, including artifact bytes.
 | Route | Record |
 | --- | --- |
 | `GET /v1/capabilities` | Tool schemas, selection support, and loop bounds |
-| `GET /v1/models` | Executable Go models, local readiness, tool/effort/streaming capabilities |
+| `GET /v1/models` | Executable Go, Zen, and Codex models, local readiness, and provider-specific capabilities |
 | `GET /v1/messages/{id}` | Canonical structured message |
 | `GET /v1/turns/{id}/requests` | Paginated model requests and usage/settings |
 | `GET /v1/turns/{id}/tools` | Paginated invocation states/results |

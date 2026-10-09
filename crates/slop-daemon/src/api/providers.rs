@@ -54,7 +54,11 @@ async fn start_login(
     if !state.accepting.load(Ordering::Acquire) {
         return credential_error(CredentialError::Stopping);
     }
-    match state.credentials.start_login(request.command_id).await {
+    match state
+        .credentials
+        .start_login(request.command_id, Some(state.runtime.clone()))
+        .await
+    {
         Ok(login) => (StatusCode::ACCEPTED, Json(login)).into_response(),
         Err(error) => credential_error(error),
     }

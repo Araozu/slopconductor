@@ -75,7 +75,7 @@ fn decode<T: serde::de::DeserializeOwned>(value: &str) -> StoreResult<T> {
 
 pub(super) fn session_settings(
     request: &CreateSessionRequest,
-    default: u32,
+    default: Option<u32>,
 ) -> StoreResult<GenerationSettings> {
     let mut settings = request.settings.clone().unwrap_or_default();
     if settings
@@ -88,24 +88,23 @@ pub(super) fn session_settings(
     settings.max_output_tokens = settings
         .max_output_tokens
         .or(request.max_tokens)
-        .or(Some(default));
+        .or(default);
     validate_settings(
         &format!("{}/{}", request.provider, request.model),
         &settings,
     )?;
     Ok(settings)
 }
-fn validate_settings(model: &str, settings: &GenerationSettings) -> StoreResult<()> {
+pub(super) fn validate_settings(model: &str, settings: &GenerationSettings) -> StoreResult<()> {
     let selected: slop_core::provider::ProviderModelRef =
         match model.parse::<slop_core::provider::ProviderModelRef>() {
             Ok(model) => model,
             Err(_) => return Err(StoreError::Invalid),
         };
-    if selected.provider().as_str() != "opencode-go"
-        || !slop_runtime::providers::opencode_go::MODELS
-            .iter()
-            .any(|m| m.id == selected.model())
-    {
+    let Some(provider) = slop_runtime::providers::provider(selected.provider()) else {
+        return Err(StoreError::Unsupported("model"));
+    };
+    if provider.wire_protocol(selected.model()).is_err() {
         return Err(StoreError::Unsupported("model"));
     }
     if settings
@@ -114,10 +113,7 @@ fn validate_settings(model: &str, settings: &GenerationSettings) -> StoreResult<
     {
         return Err(StoreError::Invalid);
     }
-    let capabilities = inference::capabilities(
-        slop_runtime::providers::opencode_go::OpencodeGoProvider::instance(),
-        selected.model(),
-    );
+    let capabilities = inference::capabilities(provider, selected.model());
     if settings
         .reasoning_effort
         .as_ref()
@@ -138,8 +134,7 @@ pub(super) fn turn_settings(
         .unwrap_or_else(|| session.settings.clone());
     settings.max_output_tokens = settings
         .max_output_tokens
-        .or(session.settings.max_output_tokens)
-        .or(session.max_tokens);
+        .or(session.settings.max_output_tokens);
     validate_settings(model, &settings)?;
     Ok(settings)
 }

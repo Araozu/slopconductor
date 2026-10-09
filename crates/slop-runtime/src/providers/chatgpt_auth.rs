@@ -233,6 +233,26 @@ impl ChatGptConnection {
         .await
     }
 
+    /// Complete a returning login into this shared registration. Holding the
+    /// token lock across persistence prevents an active refresh from overwriting
+    /// credentials installed by the newer authorization.
+    pub async fn finish_login_into(
+        &self,
+        login: ChatGptLogin,
+        cancellation: impl std::future::Future<Output = ()>,
+    ) -> Result<(), ProviderError> {
+        let credentials = tokio::select! {
+            biased;
+            _ = cancellation => return Err(auth_error("login interrupted")),
+            credentials = login.authorize() => credentials?,
+        };
+        let mut state = self.state.lock().await;
+        save(self.path.clone(), credentials.clone()).await?;
+        state.credentials = credentials;
+        state.refresh_blocked = false;
+        Ok(())
+    }
+
     pub(super) async fn access_token(&self) -> Result<String, ProviderError> {
         let mut state = self.state.lock().await;
         if state.credentials.expires_at > now()?.saturating_add(60) {

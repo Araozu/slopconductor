@@ -209,12 +209,14 @@ def request(endpoint, token, method="GET", payload=None, path=""):
 
 def wait_turn(endpoint, token, turn_id, statuses):
     deadline = time.monotonic() + 15
+    last = None
     while time.monotonic() < deadline:
         status, turn = request(endpoint, token, path=f"/v1/turns/{turn_id}")
+        last = (status, turn)
         if status == 200 and turn["status"] in statuses:
             return turn
         time.sleep(0.05)
-    raise RuntimeError(f"turn {turn_id} did not reach one of {statuses}")
+    raise RuntimeError(f"turn {turn_id} did not reach one of {statuses}; last response: {last}")
 
 
 def wait_checkpoint(endpoint, token, session_id, turn_id):

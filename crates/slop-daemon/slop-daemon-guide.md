@@ -146,7 +146,7 @@ Only `/v1/health` is anonymous. The node endpoint and product routes use a local
 | --- | --- |
 | `GET /v1/health` | Service name, version, API version, and capability names; no bearer token. |
 | `GET /v1/node` | Stable node identity; authenticated. |
-| `GET /v1/models` | Executable Go model catalog and local readiness; authenticated. |
+| `GET /v1/models` | Executable Go, Zen, and Codex model catalogs, local readiness, and capabilities; authenticated. |
 | `GET, POST /v1/sessions` | Paginated session listing and durable creation. |
 | `GET /v1/sessions/{id}` | Session settings, revision, and event high-water mark. |
 | `GET, POST /v1/sessions/{id}/messages` | Paginated history and durable message acceptance. |
@@ -160,7 +160,7 @@ Only `/v1/health` is anonymous. The node endpoint and product routes use a local
 
 Credentials live in `<data-dir>/credentials`, separate from messages and events. On Linux, credential directories/files are checked for owner-only permissions; on Windows, they must be under the protected local application data directory. The API never returns stored keys. A Go key replacement is persisted before new admissions use it; in-flight requests keep their existing provider connection.
 
-Provider status reports configuration, not proof of entitlement or a successful model call. `opencode-go` is currently the only provider wired into daemon chat. Zen and Codex API keys can be saved, and ChatGPT login is implemented, but those facts do not enable Zen or Codex turns in this daemon yet.
+Provider status reports configuration, active Codex auth mode, and implemented execution support; it does not prove entitlement or a successful model call. Use `--model opencode-zen/model` or `--model codex/model` to select those providers. Zen supports the same structured tools as Go. Codex accepts text-only turns; ChatGPT subscription requests omit output caps, and an explicitly supplied cap is rejected.
 
 ## Try the same flow
 
@@ -174,8 +174,12 @@ Configure a key from a protected file (or pipe it on stdin), then use the CLI:
 
 ```sh
 cargo run --locked -- provider set-key opencode-go --key-file /path/to/key
+cargo run --locked -- provider set-key opencode-zen --key-file /path/to/zen-key
+cargo run --locked -- provider set-key codex --key-file /path/to/platform-key
 cargo run --locked -- provider status
 cargo run --locked -- chat --prompt "Explain Rust ownership in two sentences."
+cargo run --locked -- chat --model opencode-zen/glm-5.3 --prompt "Summarize this project."
+cargo run --locked -- chat --model codex/gpt-6.1-sol --prompt "Summarize this project."
 ```
 
 The CLI sends HTTP requests to the daemon; it does not store the provider key or call the model itself. A one-shot chat waits for the reply by following events. Add `--detach` to return after acceptance, then inspect with `session history` or `turn show`. Use `turn cancel TURN_ID` to cancel explicitly.

@@ -42,15 +42,17 @@ adapters. The protocol, daemon, client, and CLI implement health/status plus an
 authenticated persisted node-identity query, plus the [durable text-chat slice](text-chat.md).
 The daemon also owns XDG-aware
 configuration, an exclusive data-directory lock, a bounded SQLite worker, and
-local API credential initialization. A bounded native supervisor executes Go
-turns independently of client lifetime. [Structured execution](structured-execution.md)
-adds a durable Go tool loop, explicit workspace leases, artifacts, and frozen
-per-turn model/settings. General task/run orchestration remains planned.
+local API credential initialization. A bounded native supervisor executes
+Go, Zen, and Codex turns independently of client lifetime through the shared
+provider interface. [Structured execution](structured-execution.md) adds a
+durable Go/Zen tool loop, explicit workspace leases, artifacts, and frozen
+per-turn model/settings. Codex currently supports text-only turns. General
+task/run orchestration remains planned.
 
 The daemon also owns [runtime provider credential configuration](provider-credentials.md):
 private XDG records, API-key replacement, and a bounded ChatGPT login listener.
-Go requests snapshot the shared connection when admitted, allowing subsequent
-requests to use a saved replacement while existing turns finish normally.
+Each admitted turn snapshots its provider client, so credential replacement
+affects new admissions while active turns finish with their original connection.
 
 ```mermaid
 flowchart TD

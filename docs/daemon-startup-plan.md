@@ -55,8 +55,10 @@ CLI flags take precedence over their environment equivalents:
 | `--data-dir` | `SLOP_DATA_DIR` | Select an absolute private data directory |
 | `--listen` | `SLOP_LISTEN` | Override the loopback listener |
 | `--name` | `SLOP_NODE_NAME` | Override the persisted display name |
-| `--default-model` | `SLOP_DEFAULT_MODEL` | Override the Go model used for new chats |
-| `--provider-base-url` | `SLOP_PROVIDER_BASE_URL` | Select an explicitly trusted provider destination |
+| `--default-model` | `SLOP_DEFAULT_MODEL` | Override the configured provider/model used for new chats |
+| `--provider-base-url` | `SLOP_PROVIDER_BASE_URL` | Select the explicitly trusted Go destination |
+| `--opencode-zen-base-url` | `SLOP_OPENCODE_ZEN_BASE_URL` | Select the explicitly trusted Zen destination |
+| `--codex-base-url` | `SLOP_CODEX_BASE_URL` | Select the explicitly trusted Codex destination |
 
 All TOML keys are optional; unknown keys are rejected and files are capped at
 64 KiB. The display name is limited to 128 UTF-8 bytes without control characters.
@@ -69,10 +71,12 @@ An omitted name preserves existing identity/name on restart.
 | `database_queue_capacity` | `128` | 1–4096 requests |
 | `database_busy_timeout_ms` | `5000` | 1–60000 ms |
 | `shutdown_timeout_ms` | `10000` | 100–300000 ms |
-| `default_model` | `opencode-go/glm-5.3-flash` | Verified Go catalog model |
+| `default_model` | `opencode-go/glm-5.3-flash` | Verified compiled provider catalog model |
 | `max_output_tokens` | `4096` | 1–65536 tokens, frozen in each created session |
 | `execution_concurrency` | `4` | 1–64 concurrent turns globally |
 | `provider_base_url` | Official Go endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
+| `opencode_zen_base_url` | Official Zen endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
+| `codex_base_url` | Official Codex endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
 
 ### Exclusive startup and stable identity
 

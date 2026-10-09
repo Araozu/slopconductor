@@ -1,11 +1,12 @@
 # Runtime provider credentials
 
-**Implemented, 2026-10-08.** Credentials can be configured through the running
+**Implemented, 2026-10-09.** Credentials can be configured through the running
 daemon's authenticated public API and native CLI. All secrets are daemon-owned
 files under `<data-dir>/credentials`, separate from SQLite conversations,
-command receipts, events, and logs. Setting a Go key enables new requests
+command receipts, events, and logs. Setting a provider key enables new requests
 immediately; active requests retain their original connection. No restart is
-required.
+required. Codex keeps both configured credentials when present and persists
+which mode is active (`api_key` or `chatgpt`) across restart.
 
 ## User workflow
 
@@ -29,9 +30,10 @@ cargo run --locked -- chat --prompt "Explain Rust ownership."
 
 `provider set-key` supports `opencode-go`, `opencode-zen`, and `codex`. A Codex
 API key uses OpenAI Platform billing. Credential status separately reports
-`api_key_configured`, `chatgpt_configured`, and `execution_supported`. Only Go
-currently supports daemon chat; storing Zen/Codex credentials does not enable
-their chat execution or prove upstream entitlement.
+`api_key_configured`, `chatgpt_configured`, `execution_supported`, and Codex's
+`active_auth_mode`. All three providers support daemon text chat; Go and Zen
+also support structured workspace tools. Readiness describes local credentials,
+not upstream entitlement or availability.
 
 Authorize a ChatGPT subscription with:
 
@@ -47,7 +49,8 @@ A browser on another machine needs the callback port forwarded to the daemon
 host. Ctrl-C detaches the CLI while the bounded daemon login continues. The
 daemon's durable node ID supplies the stable host identity. Returning login
 reuses the same registration and validates the returned account. This command
-still does not enable Codex chat; see [Codex connection](codex-connection.md).
+enables Codex subscription chat after authorization succeeds; see
+[Codex connection](codex-connection.md) for text-only restrictions.
 
 ## Location, privacy, and restart
 
@@ -59,8 +62,8 @@ existing startup fallback. Windows uses
 daemon data. Windows overrides must remain beneath canonical `LOCALAPPDATA`.
 There is no source-checkout or top-level home credential directory.
 
-Files are `opencode-go-api-key`, `opencode-zen-api-key`, `codex-api-key`, and
-`codex-chatgpt.json`. Linux directories are owner-only `0700`, and files are
+Files are `opencode-go-api-key`, `opencode-zen-api-key`, `codex-api-key`,
+`codex-chatgpt.json`, and the non-secret `codex-auth-mode`. Linux directories are owner-only `0700`, and files are
 `0600`; Windows uses the protected profile directory's inherited ACLs. Reads
 reject symlinks and insecure files. API-key replacements use synchronized,
 same-directory temporary files and atomic replacement; directory metadata is
@@ -109,5 +112,7 @@ or paid calls: missing-key readiness, authenticated configuration via stdin/file
 and PUT, rejected input and insecure storage, active-turn credential snapshots,
 restart precedence, credential isolation from transcripts/logs, callback denial,
 duplicate/conflicting login IDs, stable host identity, and pending-login shutdown.
+It also runs real daemon/CLI text turns through offline Zen Chat Completions and
+Codex Responses fixtures, including saved-key activation after restart.
 Existing native auth fixtures cover signed ID tokens and token rotation/storage.
 No live ChatGPT login or inference is established by these checks.

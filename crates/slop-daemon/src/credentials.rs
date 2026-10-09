@@ -1,7 +1,7 @@
 //! Daemon-owned provider secrets, separate from conversation data and events.
 
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
@@ -11,8 +11,10 @@ use slop_protocol::providers::{LoginResponse, LoginStatus, MAX_API_KEY_BYTES, Pr
 use slop_runtime::{
     chat::ChatRuntime,
     providers::{
+        ProviderClient,
         chatgpt_auth::{ChatGptConnection, ChatGptLogin},
         codex::CodexClient,
+        opencode_go::OpencodeGoClient,
         opencode_zen::OpencodeZenClient,
     },
 };
@@ -49,13 +51,16 @@ pub enum CredentialError {
 pub struct ProviderCredentials {
     directory: PathBuf,
     host_id: String,
+    zen_base_url: Option<String>,
+    codex_base_url: Option<String>,
     state: Mutex<CredentialState>,
     shutdown: watch::Sender<bool>,
 }
 
 struct CredentialState {
-    api_keys: HashSet<String>,
+    api_keys: HashMap<String, String>,
     chatgpt: Option<Arc<ChatGptConnection>>,
+    active_codex_auth: Option<String>,
     login: Option<LoginRecord>,
     stopping: bool,
 }
@@ -93,26 +98,39 @@ fn validate_key(key: &str) -> Result<&str, CredentialError> {
 fn status(state: &CredentialState, provider: &str) -> ProviderStatus {
     ProviderStatus {
         provider: provider.to_owned(),
-        api_key_configured: state.api_keys.contains(provider),
+        api_key_configured: state.api_keys.contains_key(provider),
         chatgpt_configured: provider == "codex" && state.chatgpt.is_some(),
-        execution_supported: provider == "opencode-go",
+        execution_supported: true,
+        active_auth_mode: (provider == "codex")
+            .then(|| state.active_codex_auth.clone())
+            .flatten(),
     }
 }
 
 impl ProviderCredentials {
     /// Restore private records. Legacy environment keys are imported only when
     /// a stored key does not exist; saved runtime changes win on every restart.
+    #[cfg(test)]
     pub async fn load(
         data_dir: &Path,
         host_id: String,
         bootstrap: Vec<(String, String)>,
     ) -> Result<(Arc<Self>, Option<String>), CredentialError> {
+        Self::load_with_endpoints(data_dir, host_id, bootstrap, None, None).await
+    }
+
+    pub async fn load_with_endpoints(
+        data_dir: &Path,
+        host_id: String,
+        bootstrap: Vec<(String, String)>,
+        zen_base_url: Option<String>,
+        codex_base_url: Option<String>,
+    ) -> Result<(Arc<Self>, Option<String>), CredentialError> {
         let directory = data_dir.join("credentials");
         let read_directory = directory.clone();
-        let (api_keys, go_key, has_chatgpt) = tokio::task::spawn_blocking(move || {
+        let (api_keys, has_chatgpt) = tokio::task::spawn_blocking(move || {
             create_private_dir(&read_directory).map_err(|_| CredentialError::Storage)?;
-            let mut api_keys = HashSet::new();
-            let mut go_key = None;
+            let mut api_keys = HashMap::new();
             for (provider, _) in PROVIDERS {
                 let path = key_path(&read_directory, provider);
                 let key = match std::fs::symlink_metadata(&path) {
@@ -146,10 +164,7 @@ impl ProviderCredentials {
                     Err(_) => return Err(CredentialError::Storage),
                 };
                 if let Some(key) = key {
-                    api_keys.insert((*provider).to_owned());
-                    if *provider == "opencode-go" {
-                        go_key = Some(key);
-                    }
+                    api_keys.insert((*provider).to_owned(), key);
                 }
             }
             let chatgpt_path = read_directory.join("codex-chatgpt.json");
@@ -161,7 +176,7 @@ impl ProviderCredentials {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                 Err(_) => return Err(CredentialError::Storage),
             };
-            Ok((api_keys, go_key, has_chatgpt))
+            Ok((api_keys, has_chatgpt))
         })
         .await
         .map_err(|_| CredentialError::Storage)??;
@@ -174,21 +189,105 @@ impl ProviderCredentials {
         } else {
             None
         };
+        let mode_path = directory.join("codex-auth-mode");
+        let saved_mode = match std::fs::symlink_metadata(&mode_path) {
+            Ok(_) => {
+                let mut bytes = Vec::new();
+                open_private_file(&mode_path)
+                    .map_err(|_| CredentialError::Storage)?
+                    .take(16)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| CredentialError::Storage)?;
+                let mode = String::from_utf8(bytes).map_err(|_| CredentialError::Storage)?;
+                if mode != "api_key" && mode != "chatgpt" {
+                    return Err(CredentialError::Storage);
+                }
+                Some(mode)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if chatgpt.is_some() {
+                    Some("chatgpt".to_owned())
+                } else if api_keys.contains_key("codex") {
+                    Some("api_key".to_owned())
+                } else {
+                    None
+                }
+            }
+            Err(_) => return Err(CredentialError::Storage),
+        };
         let (shutdown, _) = watch::channel(false);
+        let go_key = api_keys.get("opencode-go").cloned();
         Ok((
             Arc::new(Self {
                 directory,
                 host_id,
+                zen_base_url,
+                codex_base_url,
                 shutdown,
                 state: Mutex::new(CredentialState {
                     api_keys,
                     chatgpt,
+                    active_codex_auth: saved_mode,
                     login: None,
                     stopping: false,
                 }),
             }),
             go_key,
         ))
+    }
+
+    /// Build the complete provider set before the scheduler starts claiming work.
+    pub async fn provider_clients(
+        &self,
+        go_base_url: Option<&str>,
+    ) -> Result<HashMap<String, Arc<dyn ProviderClient>>, CredentialError> {
+        let state = self.state.lock().await;
+        let mut clients = HashMap::new();
+        for (provider, key) in &state.api_keys {
+            if provider == "codex" && state.active_codex_auth.as_deref() == Some("chatgpt") {
+                continue;
+            }
+            let client: Arc<dyn ProviderClient> = match provider.as_str() {
+                "opencode-go" => Arc::new(
+                    match go_base_url {
+                        Some(url) => OpencodeGoClient::new_with_base_url(key, url),
+                        None => OpencodeGoClient::new(key),
+                    }
+                    .map_err(|_| CredentialError::InvalidKey)?,
+                ),
+                "opencode-zen" => Arc::new(
+                    match self.zen_base_url.as_deref() {
+                        Some(url) => OpencodeZenClient::new_with_base_url(key, url),
+                        None => OpencodeZenClient::new(key),
+                    }
+                    .map_err(|_| CredentialError::InvalidKey)?,
+                ),
+                "codex" => Arc::new(
+                    match self.codex_base_url.as_deref() {
+                        Some(url) => CodexClient::new_with_base_url(key, url),
+                        None => CodexClient::new(key),
+                    }
+                    .map_err(|_| CredentialError::InvalidKey)?,
+                ),
+                _ => continue,
+            };
+            clients.insert(provider.clone(), client);
+        }
+        if let Some(connection) = &state.chatgpt
+            && state.active_codex_auth.as_deref() == Some("chatgpt")
+        {
+            let client: Arc<dyn ProviderClient> = Arc::new(
+                match self.codex_base_url.as_deref() {
+                    Some(url) => {
+                        CodexClient::from_chatgpt_with_base_url(Arc::clone(connection), url)
+                    }
+                    None => CodexClient::from_chatgpt(Arc::clone(connection)),
+                }
+                .map_err(|_| CredentialError::Storage)?,
+            );
+            clients.insert("codex".to_owned(), client);
+        }
+        Ok(clients)
     }
 
     pub async fn statuses(&self) -> Vec<ProviderStatus> {
@@ -214,31 +313,44 @@ impl ProviderCredentials {
             if state.stopping {
                 return Err(CredentialError::Stopping);
             }
-            let go_client = match provider.as_str() {
-                "opencode-go" => Some(
-                    runtime
-                        .prepare_api_key(&key)
-                        .map_err(|_| CredentialError::InvalidKey)?,
+            let client: Arc<dyn ProviderClient> = match provider.as_str() {
+                "opencode-go" => runtime
+                    .prepare_api_key(&key)
+                    .map_err(|_| CredentialError::InvalidKey)?,
+                "opencode-zen" => Arc::new(
+                    match owner.zen_base_url.as_deref() {
+                        Some(url) => OpencodeZenClient::new_with_base_url(&key, url),
+                        None => OpencodeZenClient::new(&key),
+                    }
+                    .map_err(|_| CredentialError::InvalidKey)?,
                 ),
-                "opencode-zen" => {
-                    OpencodeZenClient::new(&key).map_err(|_| CredentialError::InvalidKey)?;
-                    None
-                }
-                "codex" => {
-                    CodexClient::new(&key).map_err(|_| CredentialError::InvalidKey)?;
-                    None
-                }
+                "codex" => Arc::new(
+                    match owner.codex_base_url.as_deref() {
+                        Some(url) => CodexClient::new_with_base_url(&key, url),
+                        None => CodexClient::new(&key),
+                    }
+                    .map_err(|_| CredentialError::InvalidKey)?,
+                ),
                 _ => return Err(CredentialError::Unsupported),
             };
             let path = key_path(&owner.directory, &provider);
-            tokio::task::spawn_blocking(move || write_private_file(&path, key.as_bytes()))
-                .await
-                .map_err(|_| CredentialError::Storage)?
-                .map_err(|_| CredentialError::Storage)?;
-            if let Some(client) = go_client {
-                runtime.replace_provider(client);
+            let persisted_key = key.clone();
+            tokio::task::spawn_blocking(move || {
+                write_private_file(&path, persisted_key.as_bytes())
+            })
+            .await
+            .map_err(|_| CredentialError::Storage)?
+            .map_err(|_| CredentialError::Storage)?;
+            if provider == "codex" {
+                let mode_path = owner.directory.join("codex-auth-mode");
+                tokio::task::spawn_blocking(move || write_private_file(&mode_path, b"api_key"))
+                    .await
+                    .map_err(|_| CredentialError::Storage)?
+                    .map_err(|_| CredentialError::Storage)?;
+                state.active_codex_auth = Some("api_key".to_owned());
             }
-            state.api_keys.insert(provider.clone());
+            runtime.replace_provider(client);
+            state.api_keys.insert(provider.clone(), key);
             Ok(status(&state, &provider))
         })
         .await
@@ -248,6 +360,7 @@ impl ProviderCredentials {
     pub async fn start_login(
         self: &Arc<Self>,
         command_id: String,
+        runtime: Option<ChatRuntime>,
     ) -> Result<LoginResponse, CredentialError> {
         if command_id.is_empty()
             || command_id.len() > 128
@@ -285,18 +398,55 @@ impl ProviderCredentials {
         };
         let owner = Arc::clone(self);
         let mut shutdown = self.shutdown.subscribe();
+        let existing = state.chatgpt.clone();
         let task = tokio::spawn(async move {
-            let outcome = login
-                .finish_with_cancellation(owner.directory.join("codex-chatgpt.json"), async {
-                    if !*shutdown.borrow() {
-                        let _ = shutdown.changed().await;
-                    }
-                })
-                .await;
+            let outcome = if let Some(connection) = existing {
+                connection
+                    .finish_login_into(login, async {
+                        if !*shutdown.borrow() {
+                            let _ = shutdown.changed().await;
+                        }
+                    })
+                    .await
+                    .map(|()| connection)
+            } else {
+                login
+                    .finish_with_cancellation(owner.directory.join("codex-chatgpt.json"), async {
+                        if !*shutdown.borrow() {
+                            let _ = shutdown.changed().await;
+                        }
+                    })
+                    .await
+                    .map(Arc::new)
+            };
             let mut state = owner.state.lock().await;
             let succeeded = match outcome {
                 Ok(connection) => {
-                    state.chatgpt = Some(Arc::new(connection));
+                    let mode_path = owner.directory.join("codex-auth-mode");
+                    let persisted = tokio::task::spawn_blocking(move || {
+                        write_private_file(&mode_path, b"chatgpt")
+                    })
+                    .await
+                    .is_ok_and(|result| result.is_ok());
+                    if !persisted {
+                        if let Some(login) = &mut state.login {
+                            login.status.status = "failed".to_owned();
+                            login.status.error_code =
+                                Some("credential_storage_unavailable".to_owned());
+                        }
+                        return;
+                    }
+                    state.active_codex_auth = Some("chatgpt".to_owned());
+                    state.chatgpt = Some(Arc::clone(&connection));
+                    let client_result = match owner.codex_base_url.as_deref() {
+                        Some(url) => {
+                            CodexClient::from_chatgpt_with_base_url(Arc::clone(&connection), url)
+                        }
+                        None => CodexClient::from_chatgpt(Arc::clone(&connection)),
+                    };
+                    if let (Some(runtime), Ok(client)) = (runtime.as_ref(), client_result) {
+                        runtime.replace_provider(Arc::new(client));
+                    }
                     true
                 }
                 Err(_) => false,
@@ -381,8 +531,8 @@ mod tests {
         let (owner, _) = ProviderCredentials::load(directory.path(), "stable-host".into(), vec![])
             .await
             .unwrap();
-        let first = owner.start_login("login-1".into()).await.unwrap();
-        let repeated = owner.start_login("login-1".into()).await.unwrap();
+        let first = owner.start_login("login-1".into(), None).await.unwrap();
+        let repeated = owner.start_login("login-1".into(), None).await.unwrap();
         assert_eq!(first.authorization_url, repeated.authorization_url);
         assert!(
             first
@@ -390,7 +540,7 @@ mod tests {
                 .contains("ext_agent_host_id=stable-host")
         );
         assert!(matches!(
-            owner.start_login("login-2".into()).await,
+            owner.start_login("login-2".into(), None).await,
             Err(CredentialError::LoginPending)
         ));
         tokio::time::timeout(std::time::Duration::from_secs(2), owner.shutdown())

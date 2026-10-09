@@ -61,8 +61,9 @@ The structured `ProviderClient::infer` path now accepts blocks, tool definitions
 and generation settings. Go/Zen implement all three wire shapes; Codex uses an
 explicit text-only bridge. Private completed continuation is stored by the
 daemon and replayed only within its provider/model/connection scope. The public
-Go surface includes model capabilities, per-turn selection, structured messages,
-request/tool records, streamed IDs, and artifacts. The older text methods retain
+Go/Zen surface includes model capabilities, per-turn selection, structured messages,
+request/tool records, streamed IDs, and artifacts. Codex is selectable for
+text-only turns through Platform keys or ChatGPT authorization. The older text methods retain
 their strict text-only decoders. Account-scoped discovery, media blocks, summaries,
 and the complete target `ProviderAdapter` lifecycle remain proposed.
 
@@ -80,9 +81,9 @@ requires `None` and rejects an explicit cap. Developer messages retain their
 role on Responses/Chat and are rejected for Anthropic Messages. Subscription
 requests reject system messages instead of changing their priority; use an
 explicit developer role. All three clients share the bounded wire decoders.
-The daemon implements anonymous health and authenticated node, Go text-chat,
-and provider credential APIs. Codex/Zen runtime adapters and saved credentials
-do not imply those providers support daemon session execution.
+The daemon implements anonymous health and authenticated node, shared Go/Zen/
+Codex text-chat selection, and provider credential APIs. Local readiness does
+not prove account entitlement or upstream availability.
 
 ### Implemented OpenCode adapters
 
@@ -107,8 +108,8 @@ The Zen execution catalog follows its documented endpoint table, checked on
 they use Messages on Go. The adapter keeps these mappings separate. Advertised
 IDs outside the execution catalog remain visible in `list_models`, but fail
 validation before dispatch. Zen's Gemini/Google and Jev/System One formats are
-unsupported. Account-scoped capabilities, tools, structured output,
-continuation, and Zen daemon execution remain proposed. Go now supplies the
+unsupported. Account-scoped capabilities, media blocks, and summaries remain
+proposed. Go and Zen supply the
 daemon's [durable text-chat slice](text-chat.md), including cancellation and
 public history/event replay.
 

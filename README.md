@@ -21,7 +21,7 @@ Implemented:
   API credentials, and bounded shutdown.
 - Durable text chats with atomic command receipts, ordered history/events,
   visible checkpoints, terminal replies/usage, and restart reconciliation.
-- Daemon-owned OpenCode Go inference with bounded concurrency, one active turn
+- Daemon-owned OpenCode Go, OpenCode Zen, and Codex inference with bounded concurrency, one active turn
   per session, and explicit cancellation. CLI exit leaves accepted work alive.
 - A consumer CLI with interactive and one-shot chat, session inspection,
   stdin/file prompts, event following, and JSON output through the public API.
@@ -29,14 +29,14 @@ Implemented:
 - A daemon/CLI smoke check and a Linux/Windows CI workflow.
 - OpenCode Go and Zen integrations through the shared
   `ProviderClient` interface, with model discovery and streaming/non-streaming text turns across
-  Chat Completions, Responses, and Messages. Go is wired through the daemon;
-  Zen remains a runtime adapter.
+  Chat Completions, Responses, and Messages. Both are selectable through the
+  daemon using `--model provider/model`.
 - A native headless Codex connection through the same interface, with ChatGPT
   subscription login, protected credentials and serialized refresh. See the
   [Codex setup guide](docs/codex-connection.md). Platform API keys are also supported.
 - Runtime provider credential configuration through authenticated API/CLI
-  commands, private XDG storage, immediate Go key replacement, and daemon-owned
-  ChatGPT login. See [provider credentials](docs/provider-credentials.md).
+  commands, private XDG storage, immediate key replacement for new turns, and
+  daemon-owned ChatGPT login. See [provider credentials](docs/provider-credentials.md).
 - Daemon-owned coding tools limited to `read`, `write`, `edit`, and `bash`, with
   workspace policies, durable invocation/results, bounded output, artifacts,
   cancellation, and recovery without replay. See [structured execution](docs/structured-execution.md).
@@ -115,8 +115,10 @@ time limits. Windows tool use requires `bash.exe` on PATH (for example, Git for
 Windows); native builds do not require it.
 
 Use `provider login codex` to authorize a ChatGPT subscription through the
-daemon. Zen/Codex credentials can be saved now, but their daemon chat execution
-remains planned. See [runtime credentials](docs/provider-credentials.md).
+daemon, or configure a Codex Platform API key with `provider set-key codex`.
+Zen and Codex support text turns; Go and Zen support structured tool turns.
+Select a model with `chat --model provider/model`. See
+[runtime credentials](docs/provider-credentials.md).
 
 Use `--command-id ID` for a script's stable mutation identity. After uncertain
 delivery, retry the same operation with the same ID and input. Completed history

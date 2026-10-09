@@ -9,10 +9,10 @@ with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterw
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
 shutdown. Durable text chat now adds sessions, idempotent message acceptance,
-paginated history/events, daemon-owned Go inference, cancellation, and a consumer
-CLI. Runtime provider credential commands now persist secrets in private XDG
-storage, replace Go credentials without restart, and own ChatGPT authorization
-in the daemon. Structured Go execution now adds explicit workspace tools, durable
+paginated history/events, daemon-owned Go/Zen/Codex provider selection,
+cancellation, and a consumer CLI. Runtime provider credential commands persist
+secrets in private XDG storage, replace active provider connections without
+restart, and own ChatGPT authorization in the daemon. Structured Go/Zen execution adds explicit workspace tools, durable
 request/invocation records, artifacts, block-aware streaming, and per-turn model
 settings. The 2026-10-09 tool update limits coding tools to `read`, `write`,
 `edit`, and `bash`. General task orchestration remains planned. Commands,

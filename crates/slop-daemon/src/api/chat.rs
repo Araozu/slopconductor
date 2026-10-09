@@ -172,33 +172,47 @@ async fn artifact_content(State(state): State<Arc<AppState>>, Path(id): Path<Str
 }
 
 async fn models(State(state): State<Arc<AppState>>) -> Response {
-    let reason = state.runtime.provider_reason().map(str::to_owned);
-    let items = slop_runtime::providers::opencode_go::MODELS
-        .iter()
-        .map(|model| ModelResponse {
-            id: format!("opencode-go/{}", model.id),
-            provider: "opencode-go".to_owned(),
-            model: model.id.to_owned(),
-            display_name: model.display_name.to_owned(),
-            ready: state.runtime.provider_ready(),
-            is_default: format!("opencode-go/{}", model.id) == state.runtime.default_model(),
-            reason: reason.clone(),
-            capabilities: slop_protocol::execution::ModelCapabilities {
-                tools: slop_runtime::providers::inference::capabilities(
-                    slop_runtime::providers::opencode_go::OpencodeGoProvider::instance(),
-                    model.id,
-                )
-                .tools,
-                reasoning_efforts: slop_runtime::providers::inference::capabilities(
-                    slop_runtime::providers::opencode_go::OpencodeGoProvider::instance(),
-                    model.id,
-                )
-                .reasoning_efforts,
-                incremental_streaming: true,
-                max_output_tokens: 65_536,
-            },
-        })
-        .collect::<Vec<_>>();
+    let mut items = Vec::new();
+    for id in slop_core::provider::ProviderId::all() {
+        let Some(provider) = slop_runtime::providers::provider(*id) else {
+            continue;
+        };
+        let client = state.runtime.provider_client(id.as_str());
+        let ready = client.is_some() && state.runtime.accepting_work();
+        let reason = if ready {
+            None
+        } else if !state.runtime.accepting_work() {
+            Some("chat runtime is unavailable".to_owned())
+        } else {
+            Some(format!("{} credentials are unavailable", id.as_str()))
+        };
+        for model in provider.models() {
+            let client_caps = client.as_ref().map(|c| c.capabilities(model.id));
+            let tools = *id != slop_core::provider::ProviderId::Codex;
+            let subscription = client.as_ref().is_some_and(|c| {
+                c.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription
+            });
+            let cap_supported = !subscription;
+            items.push(ModelResponse {
+                id: format!("{}/{}", id.as_str(), model.id),
+                provider: id.as_str().to_owned(),
+                model: model.id.to_owned(),
+                display_name: model.display_name.to_owned(),
+                ready,
+                is_default: format!("{}/{}", id.as_str(), model.id)
+                    == state.runtime.default_model(),
+                reason: reason.clone(),
+                capabilities: slop_protocol::execution::ModelCapabilities {
+                    tools,
+                    reasoning_efforts: client_caps
+                        .map_or_else(Vec::new, |caps| caps.reasoning_efforts),
+                    incremental_streaming: true,
+                    max_output_tokens: if cap_supported { 65_536 } else { 0 },
+                    output_token_cap_supported: cap_supported,
+                },
+            });
+        }
+    }
     Json(items).into_response()
 }
 
@@ -228,10 +242,80 @@ async fn create_session(
             "The chat execution runtime is unavailable.",
         );
     }
+    match state.store.command_seen(&request.command_id).await {
+        Ok(true) => return accepted(state.store.create_session(request).await),
+        Err(error) => return store_error(error),
+        Ok(false) => {}
+    }
+    let selected_client = state.runtime.provider_client(&request.provider);
+    let selected_subscription = selected_client.as_ref().is_some_and(|client| {
+        client.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription
+    });
+    {
+        let Some(provider_id) = request
+            .provider
+            .parse::<slop_core::provider::ProviderId>()
+            .ok()
+        else {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_model",
+                "The requested model is not supported.",
+            );
+        };
+        let Some(provider) = slop_runtime::providers::provider(provider_id) else {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_model",
+                "The requested model is not supported.",
+            );
+        };
+        if provider.wire_protocol(&request.model).is_err() {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_model",
+                "The requested model is not supported.",
+            );
+        }
+        let explicitly_capped = request.max_tokens.is_some()
+            || request
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.max_output_tokens.is_some());
+        if provider_id == slop_core::provider::ProviderId::Codex
+            && selected_subscription
+            && explicitly_capped
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_capability",
+                "ChatGPT subscription requests do not support an output-token cap.",
+            );
+        }
+        if provider_id == slop_core::provider::ProviderId::Codex
+            && request
+                .execution
+                .as_ref()
+                .is_some_and(|policy| !policy.allowed_tools.is_empty())
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_capability",
+                "Codex text requests do not support workspace tools.",
+            );
+        }
+    }
     accepted(
         state
             .store
-            .create_session_with_default_max_tokens(request, state.runtime.max_tokens())
+            .create_session_with_default_max_tokens(
+                request,
+                if selected_subscription {
+                    None
+                } else {
+                    Some(state.runtime.max_tokens())
+                },
+            )
             .await,
     )
 }
@@ -271,7 +355,154 @@ async fn send_message(
             "The chat execution runtime is unavailable.",
         );
     }
-    accepted(state.store.send_message(&session_id, request).await)
+    match state.store.command_seen(&request.command_id).await {
+        Ok(true) => return accepted(state.store.send_message(&session_id, request).await),
+        Err(error) => return store_error(error),
+        Ok(false) => {}
+    }
+    let session = match state.store.session(&session_id).await {
+        Ok(session) => session,
+        Err(error) => return store_error(error),
+    };
+    let full_model = request
+        .model
+        .clone()
+        .unwrap_or_else(|| format!("{}/{}", session.provider, session.model));
+    let Ok(model_ref) = full_model.parse::<slop_core::provider::ProviderModelRef>() else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_model",
+            "The requested model is not supported.",
+        );
+    };
+    let Some(provider) = slop_runtime::providers::provider(model_ref.provider()) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_model",
+            "The requested model is not supported.",
+        );
+    };
+    if provider.wire_protocol(model_ref.model()).is_err() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "unsupported_model",
+            "The requested model is not supported.",
+        );
+    }
+    // Keep one auth/capability snapshot through preflight and settings freeze.
+    let client = state.runtime.provider_client(model_ref.provider().as_str());
+    let subscription = client.as_ref().is_some_and(|client| {
+        client.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription
+    });
+    {
+        let cap = request
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.max_output_tokens)
+            .or(session.settings.max_output_tokens);
+        if model_ref.provider() == slop_core::provider::ProviderId::Codex
+            && subscription
+            && cap.is_some()
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_capability",
+                "ChatGPT subscription requests do not support an output-token cap.",
+            );
+        }
+        if model_ref.provider() == slop_core::provider::ProviderId::Codex
+            && session
+                .execution
+                .as_ref()
+                .is_some_and(|policy| !policy.allowed_tools.is_empty())
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_capability",
+                "Codex text requests do not support workspace tools.",
+            );
+        }
+        let (has_non_text, required) = match state.store.context_requirements(&session_id).await {
+            Ok(value) => value,
+            Err(error) => return store_error(error),
+        };
+        let requested_wire = provider
+            .wire_protocol(model_ref.model())
+            .ok()
+            .map(|value| value.as_str().to_owned());
+        if context_incompatibility(
+            model_ref.provider().as_str(),
+            model_ref.model(),
+            requested_wire.as_deref().unwrap_or_default(),
+            has_non_text,
+            required,
+        )
+        .is_some()
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "context_incompatible",
+                "The selected model cannot replay the stored structured context or required provider continuation.",
+            );
+        }
+    }
+    let mut effective = request
+        .settings
+        .clone()
+        .unwrap_or_else(|| session.settings.clone());
+    effective.max_output_tokens = effective
+        .max_output_tokens
+        .or(session.settings.max_output_tokens);
+    if effective.max_output_tokens.is_none() && !subscription {
+        effective.max_output_tokens = Some(state.runtime.max_tokens());
+    }
+    {
+        if provider.requires_output_limit() && effective.max_output_tokens.is_none() {
+            effective.max_output_tokens = Some(state.runtime.max_tokens());
+        }
+        let caps = client.as_ref().map_or_else(
+            || slop_runtime::providers::inference::capabilities(provider, model_ref.model()),
+            |client| client.capabilities(model_ref.model()),
+        );
+        if effective
+            .reasoning_effort
+            .as_ref()
+            .is_some_and(|effort| !caps.reasoning_efforts.contains(effort))
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_capability",
+                "The selected model does not support the requested reasoning setting.",
+            );
+        }
+    }
+    accepted(
+        state
+            .store
+            .send_message_with_effective_settings(&session_id, request, Some(effective))
+            .await,
+    )
+}
+
+fn context_incompatibility(
+    provider: &str,
+    model: &str,
+    wire: &str,
+    has_non_text: bool,
+    required: Vec<(String, String, String)>,
+) -> Option<&'static str> {
+    if provider == "codex" && has_non_text {
+        return Some("context_incompatible");
+    }
+    if required
+        .into_iter()
+        .any(|(saved_provider, saved_model, saved_wire)| {
+            saved_provider != provider || saved_model != model || saved_wire != wire
+        })
+    {
+        return Some("context_incompatible");
+    }
+    None
 }
 
 async fn turn(State(state): State<Arc<AppState>>, Path(turn_id): Path<String>) -> Response {
@@ -561,5 +792,56 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         error(self.status, self.code, self.message)
+    }
+}
+
+#[cfg(test)]
+mod provider_preflight_tests {
+    use super::context_incompatibility;
+
+    #[test]
+    fn rejects_known_incompatible_continuation_but_allows_fresh_go_to_zen_context() {
+        assert!(
+            context_incompatibility(
+                "codex",
+                "gpt-6.1-sol",
+                "responses",
+                false,
+                vec![(
+                    "opencode-go".into(),
+                    "gpt-6.1-sol".into(),
+                    "responses".into()
+                )],
+            )
+            .is_some()
+        );
+        assert!(
+            context_incompatibility("codex", "gpt-6.1-sol", "responses", true, vec![]).is_some()
+        );
+        assert!(
+            context_incompatibility("opencode-zen", "glm-5.3", "chat_completions", true, vec![])
+                .is_none()
+        );
+        assert!(
+            context_incompatibility(
+                "opencode-zen",
+                "glm-5.3",
+                "chat_completions",
+                false,
+                vec![
+                    (
+                        "opencode-zen".into(),
+                        "glm-5.3".into(),
+                        "chat_completions".into()
+                    ),
+                    (
+                        "opencode-go".into(),
+                        "glm-5.3-flash".into(),
+                        "chat_completions".into()
+                    ),
+                ],
+            )
+            .is_some()
+        );
     }
 }

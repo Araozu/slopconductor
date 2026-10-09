@@ -17,11 +17,13 @@ The same interface now includes headless Codex access through the public
 Responses API, with native ChatGPT subscription login or Platform API keys;
 see [Codex connection](codex-connection.md). All three clients share bounded
 wire decoders. Responses preserve terminal outcomes, optional usage/provenance,
-and requested/reported model IDs. The daemon now composes Go with a bounded
-turn supervisor, durable repository port, session/workspace serialization, visible
-checkpoints, cancellation, and a bounded file/shell tool loop. See
-[text chat](text-chat.md) and [structured execution](structured-execution.md).
-Zen/Codex daemon selection and general task/child orchestration remain proposed.
+and requested/reported model IDs. The daemon composes all three providers with
+a bounded turn supervisor, durable repository port, session/workspace
+serialization, visible checkpoints, and cancellation. Go and Zen support the
+bounded file/shell tool loop; Codex is text-only. Provider clients are selected
+per turn and snapshotted at admission. See [text chat](text-chat.md) and
+[structured execution](structured-execution.md). General task/child
+orchestration remains proposed.
 
 ## Agent loop
 
@@ -69,16 +71,16 @@ it and the corresponding completed turn has committed.
 
 ## Provider boundary
 
-The [shared provider interface](provider-interface.md) specifies the proposed
-runtime operations, capability validation, structured content, terminal outcomes,
+The [shared provider interface](provider-interface.md) specifies the runtime
+operations, capability validation, structured content, terminal outcomes,
 and conformance criteria. It also defines the daemon's mapping to a common public
 surface for every client. The registry `Provider` trait implements metadata;
 `ProviderClient::infer` implements structured text/refusal/tool blocks, settings,
-private continuation, and normalized incremental events for Go/Zen; Codex retains
-a text-only bridge with explicit unsupported errors. The Go public API projects
-canonical messages, tools, artifacts, capabilities, usage, and cancellation; it
-does not expose private provider events. Account-scoped discovery and the broader
-contract remain proposed.
+private continuation, and normalized incremental events for Go/Zen; Codex uses
+a text-only bridge with explicit unsupported errors. The public API projects
+canonical messages, provider capabilities, usage, and cancellation; Go/Zen also
+expose tools and artifacts. Private provider events stay internal. Account-scoped
+discovery and broader task orchestration remain proposed.
 
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.

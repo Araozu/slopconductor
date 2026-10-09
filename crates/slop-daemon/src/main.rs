@@ -78,22 +78,27 @@ async fn run(args: Args) -> Result<()> {
                 .map(|key| ((*provider).to_owned(), key))
         })
         .collect();
-    let (credentials, go_key) = credentials::ProviderCredentials::load(
+    let (credentials, _go_key) = credentials::ProviderCredentials::load_with_endpoints(
         &config.data_dir,
         store_client.node().await?.node_id,
         bootstrap,
+        config.opencode_zen_base_url.clone(),
+        config.codex_base_url.clone(),
     )
     .await?;
     // Bind first so a port/configuration failure cannot start queued inference
     // without a service that can acknowledge or observe it.
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
+    let provider_clients = credentials
+        .provider_clients(config.provider_base_url.as_deref())
+        .await?;
     let tools = Arc::new(slop_runtime::tools::ToolService::new(
         config.data_dir.join("artifacts"),
     )?);
-    let chat_runtime = slop_runtime::chat::start_with_tools(
+    let chat_runtime = slop_runtime::chat::start_with_provider_clients(
         Arc::new(store_client.clone()),
-        go_key,
+        provider_clients,
         config.provider_base_url.clone(),
         config.execution_concurrency,
         Some(config.default_model.clone()),

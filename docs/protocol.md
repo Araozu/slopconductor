@@ -18,8 +18,8 @@ IDs, and per-turn model/settings. Its DTOs live in `slop_protocol::execution`.
 Resource summaries and the larger command/error envelope below remain proposed.
 The [provider credential surface](provider-credentials.md#public-api) is also
 implemented, with wire structs in `slop_protocol::providers`: private API-key
-replacement, safe credential status, and daemon-owned ChatGPT login. This setup
-surface does not enable Codex/Zen session execution.
+replacement, safe credential status, and daemon-owned ChatGPT login. Saved Go,
+Zen, and Codex credentials enable execution through the common session surface.
 
 The native client currently accepts an HTTP(S) origin without path, query,
 fragment, or embedded credentials. It applies connect/request timeouts, avoids
@@ -106,7 +106,7 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/health | Implemented: anonymous service identity/capabilities |
 | GET /v1/node | Implemented: authenticated durable node ID, name, and OS; resource summary remains proposed |
 | GET /v1/capabilities | Implemented: tool schemas, per-turn selection support, and loop bounds |
-| GET /v1/models | Implemented: known Go models and local credential readiness; account entitlement is not probed |
+| GET /v1/models | Implemented: known Go/Zen/Codex models, capabilities, and local credential readiness; account entitlement is not probed |
 | GET /v1/providers | Implemented: safe credential presence and daemon execution support |
 | PUT /v1/providers/{provider}/api-key | Implemented: persist an API key and activate new supported requests without restart |
 | POST /v1/providers/codex/login | Implemented: start/reuse the current ChatGPT authorization attempt |

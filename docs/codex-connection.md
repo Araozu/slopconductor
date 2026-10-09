@@ -1,11 +1,13 @@
 # Headless Codex connection
 
-**Implemented runtime adapter and daemon credential setup, 2026-10-08.** Codex implements the same
+**Implemented runtime adapter and daemon text-chat selection, 2026-10-09.** Codex implements the same
 `ProviderClient` as OpenCode Go: validation, model listing, collected completion
 and incremental text completion. The daemon owns runtime login and private XDG
 credential storage through [provider commands/endpoints](provider-credentials.md).
-Codex session execution and richer account capabilities remain planned; the
-daemon's implemented text-chat execution currently uses Go.
+The daemon can select Codex text turns by `codex/model` through the public API
+and CLI. Structured tools and unsupported history/settings remain rejected;
+account capabilities beyond the local static model catalog remain upstream
+decisions.
 
 ## ChatGPT subscription login
 
@@ -111,7 +113,8 @@ request restrictions, terminal failures, token rotation/persistence, signed
 ID-token validation, callback binding and safe diagnostics. Existing OpenCode Go
 decoder tests exercise the shared bounded HTTP/SSE implementation.
 
-The separately selected live check uses `SLOP_CODEX_CREDENTIAL_FILE` and optionally
+The real daemon/CLI smoke check uses an offline Responses fixture with a saved
+Platform key, including restart activation. The separately selected live check uses `SLOP_CODEX_CREDENTIAL_FILE` and optionally
 `SLOP_CODEX_MODEL`. It makes one discovery request and one streamed inference
 request without a generation-token cap. Select a live credential and usage
 budget before running:
@@ -121,5 +124,5 @@ cargo test -p slop-runtime --test codex_live --locked -- --ignored
 ```
 
 No live login or inference is established by the offline suite. Account-picker
-UI, remote sign-out/revocation, Codex inference cancellation, capability snapshots
-and Codex daemon chat execution remain planned work.
+UI, remote sign-out/revocation, and Codex inference cancellation remain planned
+work. Codex daemon text chat is implemented with the restrictions above.

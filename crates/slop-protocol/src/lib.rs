@@ -72,6 +72,8 @@ pub mod providers {
         pub api_key_configured: bool,
         pub chatgpt_configured: bool,
         pub execution_supported: bool,
+        #[serde(default)]
+        pub active_auth_mode: Option<String>,
     }
 
     /// The URL is an ephemeral authorization link, never an access token.

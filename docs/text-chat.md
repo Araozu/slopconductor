@@ -1,9 +1,10 @@
 # Durable local text chat
 
 This slice connects the public API, the daemon's native execution supervisor,
-SQLite, and the consumer CLI. It uses the existing OpenCode Go adapter directly.
-Zen and Codex remain available as runtime adapters; their daemon integration is
-separate work. [Structured execution](structured-execution.md) now extends these
+SQLite, and the consumer CLI through the shared `ProviderClient` interface.
+OpenCode Go and Zen provide structured text/tool requests; Codex provides
+text-only requests through Platform keys or saved ChatGPT authorization.
+[Structured execution](structured-execution.md) now extends these
 turns with opt-in workspace tools, artifacts, and per-turn model/settings.
 Projects, worktrees, and general task/run orchestration remain future work.
 
@@ -67,7 +68,7 @@ anonymous. The daemon accepts loopback listeners only.
 
 | Method and route | Behavior |
 | --- | --- |
-| GET /v1/models | Known executable Go models and local credential readiness |
+| GET /v1/models | Known executable Go, Zen, and Codex models with per-provider readiness and capabilities |
 | GET, POST /v1/sessions | Paginated listing or durable creation |
 | GET /v1/sessions/{id} | Session configuration, revision, and event watermark |
 | GET, POST /v1/sessions/{id}/messages | Paginated history or durable message/turn acceptance |
@@ -85,7 +86,10 @@ new admissions use the saved connection and active turns retain their original
 connection. Legacy environment keys are imported only when no saved key exists.
 
 The default model is `opencode-go/glm-5.3-flash`, with a 4,096-token output cap
-and four concurrent requests across sessions. `default_model`,
+for providers that accept a cap and four concurrent requests across sessions.
+Codex's ChatGPT subscription mode has no output cap; explicitly requested caps
+are rejected before acceptance. Platform Codex and Go/Zen defaults retain the
+configured cap. `default_model`,
 `max_output_tokens`, and `execution_concurrency` can be set in the daemon TOML
 configuration; session defaults and accepted per-turn overrides are frozen
 for execution. The execution
@@ -95,11 +99,13 @@ dispatching inference. Visible text is limited to 1 MiB. Lists have at most 200
 items per page, and history pages also have a 16 MiB encoded JSON bound.
 
 `--default-model`/`SLOP_DEFAULT_MODEL` overrides the configured model.
-`--provider-base-url`/`SLOP_PROVIDER_BASE_URL` selects an explicitly trusted
-provider endpoint, principally for local transport fixtures. HTTP is limited to
-loopback hosts; other endpoints require HTTPS. Embedded credentials, query, and
-fragment components are rejected. This setting selects the destination to
-which the daemon sends its provider credential.
+`--provider-base-url`/`SLOP_PROVIDER_BASE_URL` selects an explicitly trusted Go
+endpoint. `--opencode-zen-base-url`/`SLOP_OPENCODE_ZEN_BASE_URL` and
+`--codex-base-url`/`SLOP_CODEX_BASE_URL` select the corresponding endpoints.
+These overrides support controlled gateways and local transport fixtures. HTTP
+is limited to loopback hosts; other endpoints require HTTPS. Embedded credentials,
+query, and fragment components are rejected. Each setting controls only the
+destination that receives that provider's credential.
 
 Event replay reads committed facts after the cursor. Streaming subscribers have
 bounded buffering and can reconnect using the last durable sequence. Losing
@@ -118,7 +124,8 @@ Workspace checks exercise transactional command deduplication, state/event
 agreement, ordered context, session serialization, cancellation, and recovery.
 The real-binary smoke check uses an isolated local HTTP fixture which speaks the
 existing provider wire protocol. It exercises the daemon and CLI without cloud
-credentials or paid calls. Live provider tests remain explicit opt-ins with
+credentials or paid calls. The real-binary credential smoke now includes offline
+Zen and Codex text turns and verifies key activation after restart. Live provider tests remain explicit opt-ins with
 request/token budgets.
 
 The crash fixture emits visible text and synthetic reasoning, waits for a

@@ -194,6 +194,17 @@ impl OpencodeZenClient {
         })
     }
 
+    /// Build with an explicitly trusted base URL for controlled gateways and fixtures.
+    pub fn new_with_base_url(api_key: &str, base_url: &str) -> Result<Self, ProviderError> {
+        Ok(Self {
+            inner: super::opencode::OpencodeClient::new_with_base_url(
+                OpencodeZenProvider::instance(),
+                api_key,
+                Some(base_url),
+            )?,
+        })
+    }
+
     /// Build from `OPENCODE_ZEN_API_KEY`. No fallback to another gateway's credential.
     pub fn from_env() -> Result<Self, ProviderError> {
         Ok(Self {

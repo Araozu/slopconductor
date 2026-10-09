@@ -10,7 +10,7 @@ use std::{
 use clap::Args;
 use serde::Deserialize;
 use slop_core::provider::ProviderModelRef;
-use slop_runtime::providers::opencode_go::{MODELS, OpencodeGoClient};
+use slop_runtime::providers::opencode_go::OpencodeGoClient;
 use thiserror::Error;
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -34,6 +34,10 @@ pub struct StartupArgs {
     /// operated by the user and controlled local fixtures.
     #[arg(long, env = "SLOP_PROVIDER_BASE_URL")]
     pub provider_base_url: Option<String>,
+    #[arg(long, env = "SLOP_OPENCODE_ZEN_BASE_URL")]
+    pub opencode_zen_base_url: Option<String>,
+    #[arg(long, env = "SLOP_CODEX_BASE_URL")]
+    pub codex_base_url: Option<String>,
     #[arg(long, env = "SLOP_DEFAULT_MODEL")]
     pub default_model: Option<String>,
 }
@@ -47,6 +51,8 @@ pub struct Config {
     pub shutdown_timeout: Duration,
     pub data_dir: PathBuf,
     pub provider_base_url: Option<String>,
+    pub opencode_zen_base_url: Option<String>,
+    pub codex_base_url: Option<String>,
     pub default_model: String,
     pub max_output_tokens: u32,
     pub execution_concurrency: usize,
@@ -74,6 +80,8 @@ struct FileConfig {
     database_busy_timeout_ms: Option<u64>,
     shutdown_timeout_ms: Option<u64>,
     provider_base_url: Option<String>,
+    opencode_zen_base_url: Option<String>,
+    codex_base_url: Option<String>,
     default_model: Option<String>,
     max_output_tokens: Option<u32>,
     execution_concurrency: Option<usize>,
@@ -196,6 +204,18 @@ pub fn load_with_environment_and_name(
             ConfigError::Invalid("provider_base_url is not an allowed endpoint".into())
         })?;
     }
+    let opencode_zen_base_url = args.opencode_zen_base_url.or(file.opencode_zen_base_url);
+    if let Some(base_url) = opencode_zen_base_url.as_deref() {
+        OpencodeGoClient::validate_base_url(base_url).map_err(|_| {
+            ConfigError::Invalid("opencode_zen_base_url is not an allowed endpoint".into())
+        })?;
+    }
+    let codex_base_url = args.codex_base_url.or(file.codex_base_url);
+    if let Some(base_url) = codex_base_url.as_deref() {
+        OpencodeGoClient::validate_base_url(base_url).map_err(|_| {
+            ConfigError::Invalid("codex_base_url is not an allowed endpoint".into())
+        })?;
+    }
     let default_model = args
         .default_model
         .or(file.default_model)
@@ -203,11 +223,11 @@ pub fn load_with_environment_and_name(
     let model_ref = default_model.parse::<ProviderModelRef>().map_err(|_| {
         ConfigError::Invalid("default_model must be a supported opencode-go/model id".into())
     })?;
-    if model_ref.provider().as_str() != "opencode-go"
-        || !MODELS.iter().any(|model| model.id == model_ref.model())
-    {
+    let supported_default = slop_runtime::providers::provider(model_ref.provider())
+        .is_some_and(|provider| provider.wire_protocol(model_ref.model()).is_ok());
+    if !supported_default {
         return Err(ConfigError::Invalid(
-            "default_model must be in the OpenCode Go catalog".into(),
+            "default_model must identify a model supported by a compiled provider".into(),
         ));
     }
     let max_output_tokens = file
@@ -259,6 +279,8 @@ pub fn load_with_environment_and_name(
         shutdown_timeout: Duration::from_millis(shutdown_timeout_ms),
         data_dir,
         provider_base_url,
+        opencode_zen_base_url,
+        codex_base_url,
         default_model,
         max_output_tokens,
         execution_concurrency,
@@ -364,6 +386,8 @@ mod tests {
                 config: None,
                 data_dir: None,
                 provider_base_url: None,
+                opencode_zen_base_url: None,
+                codex_base_url: None,
                 default_model: None,
             },
             &env,
@@ -379,6 +403,8 @@ mod tests {
                 config: None,
                 data_dir: Some("relative".into()),
                 provider_base_url: None,
+                opencode_zen_base_url: None,
+                codex_base_url: None,
                 default_model: None,
             },
             &env,
@@ -399,6 +425,8 @@ mod tests {
                     config: Some(missing),
                     data_dir: None,
                     provider_base_url: None,
+                    opencode_zen_base_url: None,
+                    codex_base_url: None,
                     default_model: None
                 },
                 &environment
@@ -414,6 +442,8 @@ mod tests {
                     config: Some(config_path),
                     data_dir: None,
                     provider_base_url: None,
+                    opencode_zen_base_url: None,
+                    codex_base_url: None,
                     default_model: None
                 },
                 &environment
@@ -434,6 +464,8 @@ mod tests {
                 config: Some(config_path),
                 data_dir: Some(temp.path().join("data")),
                 provider_base_url: None,
+                opencode_zen_base_url: None,
+                codex_base_url: None,
                 default_model: None,
             },
             &environment,
@@ -455,6 +487,8 @@ mod tests {
                         config: None,
                         data_dir: None,
                         provider_base_url: None,
+                        opencode_zen_base_url: None,
+                        codex_base_url: None,
                         default_model: None
                     },
                     &environment
