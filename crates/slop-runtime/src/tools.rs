@@ -17,15 +17,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::providers::inference::ToolDefinition;
 
-pub const NAMES: &[&str] = &[
-    "list_files",
-    "read_file",
-    "write_file",
-    "apply_patch",
-    "shell",
-];
+pub const NAMES: &[&str] = &["read", "write", "edit", "bash"];
 pub const MAX_FILE_BYTES: usize = 1024 * 1024;
 pub const PREVIEW_BYTES: usize = 16 * 1024;
+const MAX_READ_BYTES: usize = 256 * 1024;
+const MAX_READ_LINES: usize = 2000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -179,11 +175,14 @@ impl ToolService {
         if *cancel.borrow() {
             return ToolOutcome::failed("cancelled", false);
         }
-        if name == "shell" {
-            return self.shell(&policy, arguments, &mut cancel, on_output).await;
+        if !validate_arguments(name, &arguments) {
+            return ToolOutcome::failed("invalid_arguments", false);
+        }
+        if name == "bash" {
+            return self.bash(&policy, arguments, &mut cancel, on_output).await;
         }
         let output_limit = policy.max_output_bytes;
-        let writes = matches!(name, "write_file" | "apply_patch");
+        let writes = matches!(name, "write" | "edit");
         let name = name.to_owned();
         let blocking_permit = Arc::clone(&_permit);
         let result = tokio::task::spawn_blocking(move || {
@@ -208,7 +207,17 @@ impl ToolService {
                 )
                 .await
             }
-            Ok(Err(code)) => ToolOutcome::failed(code, writes && code == "file_write_failed"),
+            Ok(Err(code)) => ToolOutcome::failed(
+                code,
+                writes
+                    && matches!(
+                        code,
+                        "directory_create_failed"
+                            | "file_write_failed"
+                            | "file_create_failed"
+                            | "file_replace_failed"
+                    ),
+            ),
             Err(_) => ToolOutcome::failed("tool_worker_failed", true),
         }
     }
@@ -279,37 +288,29 @@ impl ToolService {
         })
     }
 
-    async fn shell(
+    async fn bash(
         &self,
         policy: &WorkspacePolicy,
         arguments: Value,
         cancel: &mut tokio::sync::watch::Receiver<bool>,
         on_output: &mut (dyn FnMut(&str, &str) + Send),
     ) -> ToolOutcome {
-        let args: ShellArgs = match serde_json::from_value(arguments) {
+        let args: BashArgs = match serde_json::from_value(arguments) {
             Ok(args) => args,
             Err(_) => return ToolOutcome::failed("invalid_arguments", false),
         };
-        if args.command.is_empty() || args.command.len() > 64 * 1024 || args.command.contains('\0')
-        {
-            return ToolOutcome::failed("invalid_arguments", false);
-        }
-        let relative = match relative_path(&args.cwd) {
-            Ok(path) => path,
-            Err(code) => return ToolOutcome::failed(code, false),
-        };
-        let cwd = match std::fs::canonicalize(Path::new(&policy.root).join(relative)) {
+        let cwd = match std::fs::canonicalize(&policy.root) {
             Ok(cwd) if cwd.starts_with(&policy.root) && cwd.is_dir() => cwd,
             _ => return ToolOutcome::failed("workspace_path_denied", false),
         };
         use process_wrap::tokio::*;
         #[cfg(unix)]
-        let mut command = CommandWrap::with_new("/bin/sh", |c| {
-            c.args(["-c", &args.command]);
+        let mut command = CommandWrap::with_new("/bin/bash", |c| {
+            c.args(["--noprofile", "--norc", "-c", &args.command]);
         });
         #[cfg(windows)]
-        let mut command = CommandWrap::with_new("powershell.exe", |c| {
-            c.args(["-NoProfile", "-NonInteractive", "-Command", &args.command]);
+        let mut command = CommandWrap::with_new("bash.exe", |c| {
+            c.args(["--noprofile", "--norc", "-c", &args.command]);
         });
         command
             .command_mut()
@@ -344,7 +345,12 @@ impl ToolService {
         let child = &mut guard.0;
         let mut stdout = child.stdout().take().expect("piped stdout");
         let mut stderr = child.stderr().take().expect("piped stderr");
-        let deadline = tokio::time::sleep(Duration::from_millis(policy.shell_timeout_ms));
+        let timeout = args
+            .timeout
+            .map(Duration::from_secs_f64)
+            .unwrap_or(Duration::from_millis(policy.shell_timeout_ms))
+            .min(Duration::from_millis(policy.shell_timeout_ms));
+        let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
         let mut out = Vec::new();
         let mut err = Vec::new();
@@ -433,32 +439,25 @@ impl ToolService {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ShellArgs {
+struct BashArgs {
     command: String,
-    #[serde(default = "dot")]
-    cwd: String,
+    timeout: Option<f64>,
 }
-fn dot() -> String {
-    ".".into()
+fn first_line() -> usize {
+    1
 }
 fn read_limit() -> usize {
-    64 * 1024
+    MAX_READ_LINES
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadArgs {
     path: String,
-    #[serde(default)]
+    #[serde(default = "first_line")]
     offset: usize,
     #[serde(default = "read_limit")]
     limit: usize,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ListArgs {
-    #[serde(default = "dot")]
-    path: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -467,11 +466,47 @@ struct WriteArgs {
     content: String,
 }
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PatchArgs {
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SingleEditArgs {
     path: String,
     old_text: String,
     new_text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct Replacement {
+    old_text: String,
+    new_text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MultipleEditArgs {
+    path: String,
+    edits: Vec<Replacement>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum EditArgs {
+    Single(SingleEditArgs),
+    Multiple(MultipleEditArgs),
+}
+
+impl EditArgs {
+    fn into_parts(self) -> (String, Vec<Replacement>) {
+        match self {
+            Self::Single(args) => (
+                args.path,
+                vec![Replacement {
+                    old_text: args.old_text,
+                    new_text: args.new_text,
+                }],
+            ),
+            Self::Multiple(args) => (args.path, args.edits),
+        }
+    }
 }
 
 fn relative_path(value: &str) -> std::result::Result<&Path, &'static str> {
@@ -525,104 +560,158 @@ fn file_tool(
     let dir = Dir::open_ambient_dir(&policy.root, cap_std::ambient_authority())
         .map_err(|_| "workspace_unavailable")?;
     match name {
-        "read_file" => {
+        "read" => {
             let args: ReadArgs =
                 serde_json::from_value(arguments).map_err(|_| "invalid_arguments")?;
-            if args.limit == 0 || args.limit > 256 * 1024 {
+            if args.offset == 0 || args.limit == 0 {
                 return Err("invalid_arguments");
             }
             let text = read_bounded(&dir, relative_path(&args.path)?)?;
-            if args.offset > text.len() || !text.is_char_boundary(args.offset) {
+            let total_lines = text.split('\n').count();
+            if args.offset > total_lines {
                 return Err("invalid_offset");
             }
-            let mut end = args.offset.saturating_add(args.limit).min(text.len());
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            Ok(json!({"path":args.path,"offset":args.offset,"next_offset":if end<text.len(){Some(end)}else{None},"text":&text[args.offset..end]}).to_string())
-        }
-        "list_files" => {
-            let args: ListArgs =
-                serde_json::from_value(arguments).map_err(|_| "invalid_arguments")?;
-            let subdir = dir
-                .open_dir(relative_path(&args.path)?)
-                .map_err(|_| "directory_open_failed")?;
-            let mut names = Vec::new();
-            for entry in subdir.entries().map_err(|_| "directory_read_failed")? {
-                if names.len() >= 512 {
-                    return Err("directory_entry_limit");
+            let mut selected = String::new();
+            let mut count = 0;
+            for line in text
+                .split('\n')
+                .skip(args.offset - 1)
+                .take(args.limit.min(MAX_READ_LINES))
+            {
+                let separator = usize::from(count > 0);
+                if selected.len() + separator + line.len() > MAX_READ_BYTES {
+                    if count == 0 {
+                        return Err("read_line_limit");
+                    }
+                    break;
                 }
-                let entry = entry.map_err(|_| "directory_read_failed")?;
-                names.push(entry.file_name().to_string_lossy().into_owned());
+                if count > 0 {
+                    selected.push('\n');
+                }
+                selected.push_str(line);
+                count += 1;
             }
-            names.sort();
-            Ok(json!({"path":args.path,"entries":names}).to_string())
+            let next = args.offset + count;
+            Ok(json!({"path":args.path,"offset":args.offset,"next_offset":if next<=total_lines{Some(next)}else{None},"total_lines":total_lines,"text":selected}).to_string())
         }
-        "write_file" => {
+        "write" => {
             let args: WriteArgs =
                 serde_json::from_value(arguments).map_err(|_| "invalid_arguments")?;
             if args.content.len() > MAX_FILE_BYTES {
                 return Err("file_size_limit");
             }
             let path = relative_path(&args.path)?;
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            let mut file = dir
-                .open_with(path, &options)
-                .map_err(|_| "file_create_failed")?;
-            file.write_all(args.content.as_bytes())
-                .and_then(|_| file.sync_all())
-                .map_err(|_| "file_write_failed")?;
+            if path.file_name().is_none() {
+                return Err("workspace_path_denied");
+            }
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                dir.create_dir_all(parent)
+                    .map_err(|_| "directory_create_failed")?;
+            }
+            replace_file(&dir, path, &args.content, None)?;
             Ok(json!({"path":args.path,"bytes_written":args.content.len()}).to_string())
         }
-        "apply_patch" => {
-            let args: PatchArgs =
+        "edit" => {
+            let args: EditArgs =
                 serde_json::from_value(arguments).map_err(|_| "invalid_arguments")?;
-            if args.old_text.is_empty() {
+            let (path_string, edits) = args.into_parts();
+            if edits.is_empty() || edits.iter().any(|edit| edit.old_text.is_empty()) {
                 return Err("invalid_arguments");
             }
-            let path = relative_path(&args.path)?;
+            let path = relative_path(&path_string)?;
             let old = read_bounded(&dir, path)?;
-            if old.matches(&args.old_text).count() != 1 {
-                return Err("patch_precondition_failed");
+            let mut matches = Vec::new();
+            let mut size = old.len();
+            for edit in &edits {
+                let start = old.find(&edit.old_text).ok_or("edit_precondition_failed")?;
+                if old.rfind(&edit.old_text) != Some(start) {
+                    return Err("edit_precondition_failed");
+                }
+                matches.push((start, start + edit.old_text.len(), &edit.new_text));
+                size = size
+                    .checked_add(edit.new_text.len())
+                    .ok_or("file_size_limit")?;
             }
-            let new = old.replacen(&args.old_text, &args.new_text, 1);
-            if new.len() > MAX_FILE_BYTES {
+            matches.sort_by_key(|(start, _, _)| *start);
+            let mut end = 0;
+            for &(start, next_end, _) in &matches {
+                if start < end {
+                    return Err("edit_precondition_failed");
+                }
+                size -= next_end - start;
+                end = next_end;
+            }
+            if size > MAX_FILE_BYTES {
                 return Err("file_size_limit");
             }
-            let mut random = [0u8; 16];
-            getrandom::fill(&mut random).map_err(|_| "entropy_unavailable")?;
-            let temp = path.with_file_name(format!(".slop-{:x}.tmp", u128::from_le_bytes(random)));
-            let result = (|| {
-                let mut options = OpenOptions::new();
-                options.write(true).create_new(true);
-                let mut file = dir
-                    .open_with(&temp, &options)
-                    .map_err(|_| "file_create_failed")?;
-                file.set_permissions(
-                    dir.metadata(path)
-                        .map_err(|_| "file_metadata_failed")?
-                        .permissions(),
-                )
-                .map_err(|_| "file_permissions_failed")?;
-                file.write_all(new.as_bytes())
-                    .and_then(|_| file.sync_all())
-                    .map_err(|_| "file_write_failed")?;
-                drop(file);
-                if read_bounded(&dir, path)? != old {
-                    return Err("patch_precondition_failed");
-                }
-                dir.rename(&temp, &dir, path)
-                    .map_err(|_| "file_replace_failed")?;
-                Ok(json!({"path":args.path,"bytes_written":new.len()}).to_string())
-            })();
-            if result.is_err() {
-                let _ = dir.remove_file(&temp);
+            let mut new = String::with_capacity(size);
+            end = 0;
+            for (start, next_end, replacement) in matches {
+                new.push_str(&old[end..start]);
+                new.push_str(replacement);
+                end = next_end;
             }
-            result
+            new.push_str(&old[end..]);
+            replace_file(&dir, path, &new, Some(&old))?;
+            Ok(
+                json!({"path":path_string,"bytes_written":new.len(),"edits_applied":edits.len()})
+                    .to_string(),
+            )
         }
         _ => Err("unknown_tool"),
     }
+}
+
+// Keep all replacement operations relative to an opened parent directory.
+// Renaming a synced temporary file avoids partially overwriting the destination.
+fn replace_file(
+    dir: &Dir,
+    path: &Path,
+    content: &str,
+    expected: Option<&str>,
+) -> std::result::Result<(), &'static str> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let dir = dir.open_dir(parent).map_err(|_| "directory_open_failed")?;
+    let name = path.file_name().ok_or("workspace_path_denied")?;
+    let path = Path::new(name);
+    let permissions = match dir.symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
+        Ok(_) => return Err("not_regular_file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected.is_none() => None,
+        Err(_) => return Err("file_metadata_failed"),
+    };
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|_| "entropy_unavailable")?;
+    let temp = PathBuf::from(format!(".slop-{:x}.tmp", u128::from_le_bytes(random)));
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = dir
+            .open_with(&temp, &options)
+            .map_err(|_| "file_create_failed")?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)
+                .map_err(|_| "file_permissions_failed")?;
+        }
+        file.write_all(content.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "file_write_failed")?;
+        drop(file);
+        if let Some(expected) = expected
+            && read_bounded(&dir, path)? != expected
+        {
+            return Err("edit_precondition_failed");
+        }
+        dir.rename(&temp, &dir, path)
+            .map_err(|_| "file_replace_failed")
+    })();
+    if result.is_err() {
+        let _ = dir.remove_file(&temp);
+    }
+    result
 }
 
 pub fn definitions() -> Vec<ToolDefinition> {
@@ -635,45 +724,58 @@ pub fn definitions() -> Vec<ToolDefinition> {
     };
     vec![
         tool(
-            "list_files",
-            "List at most 512 names in a workspace-relative directory. Parent traversal and escapes are rejected. Large directories return an explicit limit error.",
-            json!({"path":{"type":"string"}}),
-            vec![],
-        ),
-        tool(
-            "read_file",
-            "Read a bounded UTF-8 byte range of a workspace file up to 1 MiB. Offset must fall on a UTF-8 boundary; next_offset indicates remaining content. Limit defaults to 65536 and cannot exceed 262144.",
-            json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":262144}}),
+            "read",
+            "Read a UTF-8 workspace-relative file up to 1 MiB. Offset is a 1-based line number (default 1); limit is a line count (default 2000). Returns at most 2000 complete lines and 256 KiB, with next_offset to continue. A single oversized line fails with read_line_limit. Absolute paths, parent traversal, and escapes are rejected. Images are not supported.",
+            json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}}),
             vec!["path"],
         ),
         tool(
-            "write_file",
-            "Create a new UTF-8 file in the workspace. Existing files are never overwritten; use apply_patch to modify them. Parent directories must already exist.",
+            "write",
+            "Create or overwrite a workspace-relative file with UTF-8 content up to 1 MiB. Creates parent directories as needed. Uses atomic replacement and preserves existing permissions. Use edit for targeted changes. Absolute paths, parent traversal, symlink destinations, and escapes are rejected.",
             json!({"path":{"type":"string"},"content":{"type":"string"}}),
             vec!["path", "content"],
         ),
         tool(
-            "apply_patch",
-            "Replace exactly one occurrence of old_text in a workspace file with new_text. The old text must be nonempty and uniquely match. Replacement uses an atomic rename and preserves permissions; ambiguous or stale patches fail.",
-            json!({"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}}),
-            vec!["path", "old_text", "new_text"],
+            "edit",
+            "Edit a UTF-8 workspace-relative file using exact text replacement. Supply edits with oldText/newText for one or more replacements. Every oldText must be nonempty and uniquely match a non-overlapping region of the original file. A single top-level oldText/newText pair is also accepted. Replacement is atomic and preserves permissions. Ambiguous or stale edits fail; file size is capped at 1 MiB.",
+            json!({"path":{"type":"string"},"oldText":{"type":"string","minLength":1},"newText":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","properties":{"oldText":{"type":"string","minLength":1},"newText":{"type":"string"}},"required":["oldText","newText"],"additionalProperties":false}}}),
+            vec!["path"],
         ),
         tool(
-            "shell",
-            "Execute a shell command with a workspace-relative working directory, a filtered environment, a deadline, and bounded stdout/stderr. Linux uses /bin/sh; Windows uses PowerShell without profiles. Shell access is not sandboxed and may cause external changes. Background descendants are terminated when the invocation ends.",
-            json!({"command":{"type":"string"},"cwd":{"type":"string"}}),
+            "bash",
+            "Execute a Bash command from the workspace root with no startup profiles, a filtered environment, and bounded stdout/stderr. Optional timeout is in seconds and can shorten the workspace deadline. Linux uses /bin/bash; Windows requires bash.exe on PATH. Commands may use cd for subdirectories. Bash is not sandboxed and may cause external changes. Background descendants are terminated when the invocation ends.",
+            json!({"command":{"type":"string","minLength":1,"maxLength":65536},"timeout":{"type":"number","minimum":0.001,"maximum":300}}),
             vec!["command"],
         ),
-    ]
+    ].into_iter().map(|mut definition| {
+        if definition.name == "edit" {
+            definition.parameters["oneOf"] = json!([
+                {"required":["oldText","newText"],"not":{"required":["edits"]}},
+                {"required":["edits"],"not":{"anyOf":[{"required":["oldText"]},{"required":["newText"]}]}}
+            ]);
+        }
+        definition
+    }).collect()
 }
 
 pub fn validate_arguments(name: &str, arguments: &Value) -> bool {
     match name {
-        "list_files" => serde_json::from_value::<ListArgs>(arguments.clone()).is_ok(),
-        "read_file" => serde_json::from_value::<ReadArgs>(arguments.clone()).is_ok(),
-        "write_file" => serde_json::from_value::<WriteArgs>(arguments.clone()).is_ok(),
-        "apply_patch" => serde_json::from_value::<PatchArgs>(arguments.clone()).is_ok(),
-        "shell" => serde_json::from_value::<ShellArgs>(arguments.clone()).is_ok(),
+        "read" => serde_json::from_value::<ReadArgs>(arguments.clone())
+            .is_ok_and(|args| args.offset > 0 && args.limit > 0),
+        "write" => serde_json::from_value::<WriteArgs>(arguments.clone())
+            .is_ok_and(|args| args.content.len() <= MAX_FILE_BYTES),
+        "edit" => serde_json::from_value::<EditArgs>(arguments.clone()).is_ok_and(|args| {
+            let (_, edits) = args.into_parts();
+            !edits.is_empty() && edits.iter().all(|edit| !edit.old_text.is_empty())
+        }),
+        "bash" => serde_json::from_value::<BashArgs>(arguments.clone()).is_ok_and(|args| {
+            !args.command.is_empty()
+                && args.command.len() <= 64 * 1024
+                && !args.command.contains('\0')
+                && args
+                    .timeout
+                    .is_none_or(|timeout| timeout.is_finite() && (0.001..=300.0).contains(&timeout))
+        }),
         _ => false,
     }
 }
@@ -692,7 +794,7 @@ mod tests {
         }
     }
     #[test]
-    fn patches_require_a_unique_precondition_and_writes_cannot_clobber_files() {
+    fn edits_require_unique_nonoverlapping_preconditions() {
         let root = tempfile::tempdir().unwrap();
         let policy = policy(root.path());
         let path = root.path().join("file.txt");
@@ -700,52 +802,189 @@ mod tests {
         assert_eq!(
             file_tool(
                 &policy,
-                "apply_patch",
-                json!({"path":"file.txt","old_text":"old","new_text":"new"})
+                "edit",
+                json!({"path":"file.txt","oldText":"old","newText":"new"})
             ),
-            Err("patch_precondition_failed")
-        );
-        assert_eq!(
-            file_tool(
-                &policy,
-                "write_file",
-                json!({"path":"file.txt","content":"new"})
-            ),
-            Err("file_create_failed")
+            Err("edit_precondition_failed")
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old old");
         file_tool(
             &policy,
-            "apply_patch",
-            json!({"path":"file.txt","old_text":"old old","new_text":"new"}),
+            "edit",
+            json!({"path":"file.txt","oldText":"old old","newText":"new"}),
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
-        assert!(file_tool(&policy, "read_file", json!({"path":"../outside"})).is_err());
+        std::fs::write(&path, "alpha beta gamma").unwrap();
+        file_tool(
+            &policy,
+            "edit",
+            json!({"path":"file.txt","edits":[
+                {"oldText":"gamma","newText":"alpha"},
+                {"oldText":"alpha","newText":"gamma"}
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "gamma beta alpha");
+        for arguments in [
+            json!({"path":"file.txt","oldText":"missing","newText":"bad"}),
+            json!({"path":"file.txt","edits":[
+                {"oldText":"gamma beta","newText":"bad"},
+                {"oldText":"beta alpha","newText":"bad"}
+            ]}),
+        ] {
+            assert_eq!(
+                file_tool(&policy, "edit", arguments),
+                Err("edit_precondition_failed")
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "gamma beta alpha");
+        }
+        let dir = Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+        assert_eq!(
+            replace_file(&dir, Path::new("file.txt"), "bad", Some("stale")),
+            Err("edit_precondition_failed")
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        std::fs::write(&path, "aaa").unwrap();
+        assert_eq!(
+            file_tool(
+                &policy,
+                "edit",
+                json!({"path":"file.txt","oldText":"aa","newText":"bad"})
+            ),
+            Err("edit_precondition_failed")
+        );
+        assert!(file_tool(&policy, "read", json!({"path":"../outside"})).is_err());
         assert!(!validate_arguments(
-            "shell",
+            "bash",
             &json!({"command":"echo","environment":{"SECRET":"value"}})
+        ));
+    }
+    #[test]
+    fn writes_create_parents_and_atomically_overwrite_bounded_files() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = policy(root.path());
+        let path = root.path().join("nested/deeper/file.txt");
+        for content in ["original", "new 🦀", ""] {
+            file_tool(
+                &policy,
+                "write",
+                json!({"path":"nested/deeper/file.txt","content":content}),
+            )
+            .unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+            assert_eq!(
+                std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+                1
+            );
+        }
+        assert_eq!(
+            file_tool(
+                &policy,
+                "write",
+                json!({"path":"too-large/file","content":"x".repeat(MAX_FILE_BYTES+1)})
+            ),
+            Err("file_size_limit")
+        );
+        assert!(!root.path().join("too-large").exists());
+        assert_eq!(
+            file_tool(&policy, "write", json!({"path":"nested","content":"bad"})),
+            Err("not_regular_file")
+        );
+    }
+    #[test]
+    fn reads_page_complete_utf8_lines_with_one_based_offsets_and_bounds() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = policy(root.path());
+        std::fs::write(root.path().join("file"), "first\r\n🦀 second\r\nthird").unwrap();
+        let output =
+            file_tool(&policy, "read", json!({"path":"file","offset":2,"limit":1})).unwrap();
+        let value: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["text"], "🦀 second\r");
+        assert_eq!(value["next_offset"], 3);
+        let output = file_tool(&policy, "read", json!({"path":"file","offset":3})).unwrap();
+        let value: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["text"], "third");
+        assert!(value["next_offset"].is_null());
+        assert_eq!(
+            file_tool(&policy, "read", json!({"path":"file","offset":4})),
+            Err("invalid_offset")
+        );
+        std::fs::write(root.path().join("file"), "x\n".repeat(MAX_READ_LINES + 1)).unwrap();
+        let output = file_tool(&policy, "read", json!({"path":"file","limit":usize::MAX})).unwrap();
+        let value: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["next_offset"], MAX_READ_LINES + 1);
+        assert_eq!(
+            value["text"].as_str().unwrap().split('\n').count(),
+            MAX_READ_LINES
+        );
+        std::fs::write(
+            root.path().join("file"),
+            format!("{}\n🦀", "x".repeat(MAX_READ_BYTES)),
+        )
+        .unwrap();
+        let output = file_tool(&policy, "read", json!({"path":"file"})).unwrap();
+        let value: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["next_offset"], 2);
+        std::fs::write(root.path().join("file"), "x".repeat(MAX_READ_BYTES + 1)).unwrap();
+        assert_eq!(
+            file_tool(&policy, "read", json!({"path":"file"})),
+            Err("read_line_limit")
+        );
+        std::fs::write(root.path().join("file"), "").unwrap();
+        let output = file_tool(&policy, "read", json!({"path":"file"})).unwrap();
+        let value: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["text"], "");
+        assert!(value["next_offset"].is_null());
+        assert!(!validate_arguments(
+            "read",
+            &json!({"path":"file","offset":0})
+        ));
+        assert!(!validate_arguments(
+            "read",
+            &json!({"path":"file","limit":0})
+        ));
+        assert!(!validate_arguments(
+            "edit",
+            &json!({"path":"file","edits":[]})
         ));
     }
     #[cfg(unix)]
     #[test]
-    fn directory_handles_prevent_symlink_escapes_and_patches_preserve_permissions() {
+    fn directory_handles_prevent_symlink_escapes_and_mutations_preserve_permissions() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("secret"), "outside").unwrap();
         symlink(outside.path(), root.path().join("escape")).unwrap();
         let policy = policy(root.path());
-        assert!(file_tool(&policy, "read_file", json!({"path":"escape/secret"})).is_err());
+        assert!(file_tool(&policy, "read", json!({"path":"escape/secret"})).is_err());
         assert!(
             file_tool(
                 &policy,
-                "write_file",
+                "write",
                 json!({"path":"escape/new","content":"bad"})
             )
             .is_err()
         );
         assert!(!outside.path().join("new").exists());
+        symlink(outside.path().join("secret"), root.path().join("link")).unwrap();
+        assert_eq!(
+            file_tool(&policy, "write", json!({"path":"link","content":"bad"})),
+            Err("not_regular_file")
+        );
+        assert_eq!(
+            file_tool(
+                &policy,
+                "edit",
+                json!({"path":"escape/secret","oldText":"outside","newText":"bad"})
+            ),
+            Err("file_open_failed")
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret")).unwrap(),
+            "outside"
+        );
         std::fs::write(root.path().join("file"), "old").unwrap();
         std::fs::set_permissions(
             root.path().join("file"),
@@ -754,8 +993,22 @@ mod tests {
         .unwrap();
         file_tool(
             &policy,
-            "apply_patch",
-            json!({"path":"file","old_text":"old","new_text":"new"}),
+            "edit",
+            json!({"path":"file","oldText":"old","newText":"new"}),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(root.path().join("file"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        file_tool(
+            &policy,
+            "write",
+            json!({"path":"file","content":"replacement"}),
         )
         .unwrap();
         assert_eq!(
@@ -776,7 +1029,7 @@ mod tests {
         let result = service
             .run(
                 policy(root.path()),
-                "read_file",
+                "read",
                 json!({"path":"large"}),
                 cancel,
                 &mut |_, _| {},
@@ -792,14 +1045,62 @@ mod tests {
     }
     #[cfg(unix)]
     #[tokio::test]
-    async fn shell_filters_credentials_caps_noisy_output_and_kills_descendants_on_cancel() {
+    async fn bash_honors_deadlines_and_reports_nonzero_exits_without_replay() {
+        let root = tempfile::tempdir().unwrap();
+        let service = ToolService::new(root.path().join("artifacts")).unwrap();
+        for timeout in [0.0, -1.0, 301.0] {
+            let (_sender, cancel) = tokio::sync::watch::channel(false);
+            let result = service
+                .run(
+                    policy(root.path()),
+                    "bash",
+                    json!({"command":"touch invalid","timeout":timeout}),
+                    cancel,
+                    &mut |_, _| {},
+                )
+                .await;
+            assert_eq!(result.error_code.as_deref(), Some("invalid_arguments"));
+            assert!(!result.effects_unknown);
+            assert!(!root.path().join("invalid").exists());
+        }
+        for (policy_timeout, requested_timeout) in [(2000, 0.05), (50, 2.0)] {
+            let mut policy = policy(root.path());
+            policy.shell_timeout_ms = policy_timeout;
+            let (_sender, cancel) = tokio::sync::watch::channel(false);
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                service.run(
+                    policy,
+                    "bash",
+                    json!({"command":"sleep 30","timeout":requested_timeout}),
+                    cancel,
+                    &mut |_, _| {},
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.error_code.as_deref(), Some("tool_timeout"));
+            assert!(result.effects_unknown);
+        }
+        let (_sender, cancel) = tokio::sync::watch::channel(false);
+        let result = service.run(policy(root.path()), "bash", json!({"command":"items=(one two); printf '%s' \"${items[1]}\"; printf 'error' >&2; exit 7"}), cancel, &mut |_, _| {}).await;
+        assert_eq!(result.error_code.as_deref(), Some("process_exit_failed"));
+        assert!(!result.effects_unknown);
+        let output: Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(output["stdout"], "two");
+        assert_eq!(output["stderr"], "error");
+        assert_eq!(output["exit_code"], 7);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_filters_credentials_caps_noisy_output_and_kills_descendants_on_cancel() {
         let root = tempfile::tempdir().unwrap();
         let service = Arc::new(ToolService::new(root.path().join("artifacts")).unwrap());
         let (_sender, cancel) = tokio::sync::watch::channel(false);
         let result = service
             .run(
                 policy(root.path()),
-                "shell",
+                "bash",
                 json!({"command":"printf '%s' \"${OPENCODE_GO_API_KEY-unset}\""}),
                 cancel,
                 &mut |_, _| {},
@@ -814,7 +1115,7 @@ mod tests {
         let result = service
             .run(
                 cap,
-                "shell",
+                "bash",
                 json!({"command":"yes noisy"}),
                 cancel,
                 &mut |_, text| streamed += text.len(),
@@ -831,7 +1132,7 @@ mod tests {
             running_service
                 .run(
                     p,
-                    "shell",
+                    "bash",
                     json!({"command":"sleep 30 & echo $! > child.pid; wait"}),
                     cancel,
                     &mut |_, _| {},

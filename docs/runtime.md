@@ -144,19 +144,22 @@ endpoint support it; local data must remain sufficient for supported export.
 
 ## Initial tools
 
-Filesystem tools: inspect/list files, read bounded ranges, write files, and apply
-validated patches within the selected workspace policy.
+The implemented tool set is exactly `read`, `write`, `edit`, and `bash`, following
+[pi's basic coding tools](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/src/core/tools).
+`read` pages UTF-8 text by 1-based line offsets; `write` creates or overwrites
+files and missing parent directories; `edit` validates unique, non-overlapping
+exact text replacements before an atomic file update. `bash` runs actual Bash
+from the workspace root with a filtered environment, output bounds, a policy
+deadline, cancellation, and streamed stdout/stderr. Windows requires Bash on
+PATH. The four tools are native Rust implementations with the existing workspace
+policy, durable invocation records, and artifact storage; no pi/JS runtime is
+used. See [structured execution](structured-execution.md) for schemas and limits.
 
-Shell tool: executable, argument vector, explicit working directory, environment
-policy, timeout, cancellation handle, and streamed stdout/stderr. Use argument
-vectors for structured operations; an explicitly requested shell command can
-use the configured shell. Linux and Windows shell defaults are separate.
-
-Git tools: register a repository, inspect status/diff, create managed worktrees,
+Dedicated Git tools remain proposed: register a repository, inspect status/diff, create managed worktrees,
 track base commits, and produce artifacts. Commits, merges, pushes, and cleanup
 have explicit policies. Starting a task does not silently merge its edits.
 
-Native orchestration tools: create a child task/session, inspect/wait for a child,
+Native orchestration tools also remain proposed: create a child task/session, inspect/wait for a child,
 send a message, and consume an artifact. Use the same service-level command
 validation as the public API.
 

@@ -37,20 +37,22 @@ class ToolFixture:
                     self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
                     self.wfile.flush()
 
-                if prompt in {"workflow", "workflow incomplete", "cancel shell", "crash shell", "malformed", "limited"} and not completed_tools:
+                if prompt in {"workflow", "workflow incomplete", "cancel shell", "crash shell", "malformed", "limited", "restricted"} and not completed_tools:
                     if prompt in {"workflow", "workflow incomplete"}:
                         command = "if [ -n \"${OPENCODE_GO_API_KEY+x}\" ]; then exit 9; fi; printf '%024000d' 0"
-                        if os.name == "nt":
-                            command = "if (Test-Path Env:OPENCODE_GO_API_KEY) {exit 9}; 'x' * 24000"
-                        calls = [("read_file", {"path": "file.txt"}), ("apply_patch", {"path": "file.txt", "old_text": "before", "new_text": "after"}), ("shell", {"command": command})]
+                        calls = [
+                            ("read", {"path": "file.txt", "offset": 2, "limit": 1}),
+                            ("write", {"path": "nested/new.txt", "content": "created"}),
+                            ("write", {"path": "nested/new.txt", "content": "overwritten"}),
+                            ("edit", {"path": "file.txt", "edits": [{"oldText": "before", "newText": "after"}]}),
+                            ("bash", {"command": command, "timeout": 5}),
+                        ]
                     elif prompt in {"cancel shell", "crash shell"}:
                         seconds = 25 if prompt == "cancel shell" else 2
                         command = f"echo $$ > '{prompt.split()[0]}.pid'; sleep {seconds}"
-                        if os.name == "nt":
-                            command = f"$PID | Out-File '{prompt.split()[0]}.pid'; Start-Sleep -Seconds {seconds}"
-                        calls = [("shell", {"command": command})]
+                        calls = [("bash", {"command": command})]
                     else:
-                        calls = [("write_file", {"path": "must-not-exist.txt", "content": "unsafe"})]
+                        calls = [("write", {"path": "must-not-exist.txt", "content": "unsafe"})]
                     emit({"content": "Inspecting workspace. ", "reasoning_content": "private synthetic continuation"})
                     for i, (name, args) in enumerate(calls):
                         encoded = json.dumps(args) if prompt not in {"malformed", "limited"} else '{"path":'
@@ -100,7 +102,7 @@ def check_tools(daemon_binary, cli_binary, root):
         data = root / "data"
         workspace = root / "workspace"
         workspace.mkdir(parents=True)
-        (workspace / "file.txt").write_text("before", encoding="utf-8")
+        (workspace / "file.txt").write_text("header\nbefore\nfooter", encoding="utf-8")
         daemon, endpoint, log = start_daemon(daemon_binary, root / "first", data, env)
         token_path = data / "credentials" / "local-api-token"
         token = token_path.read_text(encoding="ascii").strip()
@@ -122,33 +124,43 @@ def check_tools(daemon_binary, cli_binary, root):
         def create(command):
             status, receipt = request(endpoint, token, "POST", {
                 "command_id": command.replace(" ", "-"), "provider": "opencode-go", "model": "glm-5.3-flash",
-                "execution": {"root": str(workspace), "allowed_tools": ["read_file", "apply_patch", "shell", "write_file"]},
+                "execution": {"root": str(workspace), "allowed_tools": ["read", "edit", "bash", "write"]},
             }, "/v1/sessions")
             assert status == 202, (status, receipt)
             return receipt["session_id"]
 
-        assert get("/v1/capabilities")["per_turn_model_selection"]
-        result = cli("chat", "--workspace", str(workspace), "--tool", "read_file", "--tool", "apply_patch", "--tool", "shell", "--prompt", "workflow", "--command-id", "tool-cli")
+        capabilities = get("/v1/capabilities")
+        assert capabilities["per_turn_model_selection"]
+        descriptors = {tool["name"]: tool for tool in capabilities["tools"]}
+        assert set(descriptors) == {"read", "write", "edit", "bash"}, descriptors
+        assert descriptors["read"]["side_effects"] == "read"
+        assert all(descriptors[name]["side_effects"] == "write" for name in ["write", "edit", "bash"])
+        result = cli("chat", "--workspace", str(workspace), "--prompt", "workflow", "--command-id", "tool-cli")
         frames = [json.loads(line) for line in result.stdout.splitlines()]
         receipt = next(f["receipt"] for f in frames if f["type"] == "receipt")
         session, turn = receipt["session_id"], receipt["turn_id"]
         state = get(f"/v1/turns/{turn}")
         assert state["status"] == "completed"
         assert state["usage"]["total_tokens"] == 20
-        assert (workspace / "file.txt").read_text() == "after"
-        assert len(state["model_request_ids"]) == 2 and len(state["tool_invocation_ids"]) == 3
+        assert (workspace / "file.txt").read_text() == "header\nafter\nfooter"
+        assert (workspace / "nested/new.txt").read_text() == "overwritten"
+        assert len(state["model_request_ids"]) == 2 and len(state["tool_invocation_ids"]) == 5
         tools = get(f"/v1/turns/{turn}/tools")["items"]
         assert all(t["status"] == "completed" for t in tools), tools
-        assert len([f for f in frames if f["type"] == "tool_snapshot"]) == 3
+        assert len([f for f in frames if f["type"] == "tool_snapshot"]) == 5
         assert any(f["type"] == "delta" and f["kind"] == "tool_arguments" and f["block_id"] and f["request_id"] for f in frames)
         history = get(f"/v1/sessions/{session}/messages")["items"]
-        assert [m["role"] for m in history] == ["user", "assistant", "tool", "tool", "tool", "assistant"]
+        assert [m["role"] for m in history] == ["user", "assistant", *(["tool"] * 5), "assistant"]
         public = json.dumps(history) + result.stdout + json.dumps(tools)
         assert "private synthetic continuation" not in public
         wire = fixture.snapshot()[1]
         assert any(m.get("reasoning_content") == "private synthetic continuation" for m in wire["messages"])
-        assert len([m for m in wire["messages"] if m["role"] == "tool"]) == 3
-        artifact = tools[2]["artifact_ids"][0]
+        wire_tools = [m for m in wire["messages"] if m["role"] == "tool"]
+        assert len(wire_tools) == 5
+        read_result = json.loads(json.loads(wire_tools[0]["content"])["output"])
+        assert read_result["text"] == "before" and read_result["next_offset"] == 3, read_result
+        assert {tool["function"]["name"] for tool in wire["tools"]} == {"read", "write", "edit", "bash"}
+        artifact = tools[4]["artifact_ids"][0]
         metadata = get(f"/v1/artifacts/{artifact}")
         downloaded = root / "download.json"
         cli("artifact", "download", artifact, "--output", str(downloaded))
@@ -159,8 +171,22 @@ def check_tools(daemon_binary, cli_binary, root):
             status, _ = request(endpoint, None, path=path)
             assert status == 401, (path, status)
         count = len(fixture.snapshot())
-        cli("chat", "--workspace", str(workspace), "--tool", "read_file", "--tool", "apply_patch", "--tool", "shell", "--prompt", "workflow", "--command-id", "tool-cli", "--detach")
+        cli("chat", "--workspace", str(workspace), "--prompt", "workflow", "--command-id", "tool-cli", "--detach")
         assert len(fixture.snapshot()) == count
+        result = cli("chat", "--workspace", str(workspace), "--tool", "read", "--prompt", "restricted", "--command-id", "read-only-cli")
+        frames_restricted = [json.loads(line) for line in result.stdout.splitlines()]
+        restricted_receipt = next(f["receipt"] for f in frames_restricted if f["type"] == "receipt")
+        restricted_tools = get(f"/v1/turns/{restricted_receipt['turn_id']}/tools")["items"]
+        assert len(restricted_tools) == 1 and restricted_tools[0]["error_code"] == "tool_not_allowed", restricted_tools
+        assert not restricted_tools[0]["effects_unknown"]
+        assert not (workspace / "must-not-exist.txt").exists()
+        assert {tool["function"]["name"] for tool in fixture.snapshot()[-1]["tools"]} == {"read"}
+        status, error = request(endpoint, token, "POST", {
+            "command_id": "unsupported-tool", "provider": "opencode-go", "model": "glm-5.3-flash",
+            "execution": {"root": str(workspace), "allowed_tools": ["list_files"]},
+        }, "/v1/sessions")
+        assert status == 400, (status, error)
+        count = len(fixture.snapshot())
         status, error = request(endpoint, token, "POST", {"command_id": "effort-rejected", "text": "hello", "settings": {"reasoning_effort": "high"}}, f"/v1/sessions/{session}/messages")
         assert status == 400 and error["code"] == "unsupported_capability"
         assert len(fixture.snapshot()) == count
@@ -172,14 +198,14 @@ def check_tools(daemon_binary, cli_binary, root):
             assert not (workspace / "must-not-exist.txt").exists()
 
         incomplete_session = create("create-incomplete-workflow")
-        (workspace / "file.txt").write_text("before", encoding="utf-8")
+        (workspace / "file.txt").write_text("header\nbefore\nfooter", encoding="utf-8")
         receipt, _ = send(incomplete_session, "workflow incomplete", "incomplete-workflow")
         wait_turn(endpoint, token, receipt["turn_id"], {"incomplete"})
-        assert (workspace / "file.txt").read_text() == "after"
+        assert (workspace / "file.txt").read_text() == "header\nafter\nfooter"
         assert all(t["status"] == "completed" for t in get(f"/v1/turns/{receipt['turn_id']}/tools")["items"])
         receipt, _ = send(incomplete_session, "inspect incomplete effects", "inspect-incomplete")
         wait_turn(endpoint, token, receipt["turn_id"], {"completed"})
-        assert len([m for m in fixture.snapshot()[-1]["messages"] if m["role"] == "tool"]) == 3
+        assert len([m for m in fixture.snapshot()[-1]["messages"] if m["role"] == "tool"]) == 5
 
         # Switching is safe in plain text context, with settings frozen for each turn.
         status, plain = request(endpoint, token, "POST", {"command_id": "plain", "provider": "opencode-go", "model": "glm-5.3-flash"}, "/v1/sessions")
@@ -230,7 +256,7 @@ def check_tools(daemon_binary, cli_binary, root):
         assert tool["error_code"] == "daemon_restarted" and tool["effects_unknown"]
         assert len(fixture.snapshot()) == count
         assert get(f"/v1/artifacts/{artifact}") == metadata
-        assert len(get(f"/v1/sessions/{session}/messages")["items"]) == 6
+        assert len(get(f"/v1/sessions/{session}/messages")["items"]) == 8
         receipt, _ = send(crashed_session, "inspect recovery", "inspect-recovery")
         wait_turn(endpoint, token, receipt["turn_id"], {"completed"})
         assert any(m["role"] == "tool" and json.loads(m["content"])["effects_unknown"] for m in fixture.snapshot()[-1]["messages"])

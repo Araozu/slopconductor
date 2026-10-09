@@ -40,20 +40,20 @@ mod tests {
             )],
             tools: crate::tools::definitions()
                 .into_iter()
-                .filter(|d| d.name == "read_file")
+                .filter(|d| d.name == "read")
                 .collect(),
         }
     }
     fn terminal(wire: WireProtocol) -> Value {
         match wire {
             WireProtocol::OpenAiChatCompletions => {
-                json!({"model":"resolved","choices":[{"finish_reason":"tool_calls","message":{"content":"Inspecting.","reasoning_content":"private thinking","tool_calls":[{"id":"provider-call","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"Cargo.toml\"}"}}]}}],"usage":{"prompt_tokens":7,"completion_tokens":3}})
+                json!({"model":"resolved","choices":[{"finish_reason":"tool_calls","message":{"content":"Inspecting.","reasoning_content":"private thinking","tool_calls":[{"id":"provider-call","type":"function","function":{"name":"read","arguments":"{\"path\":\"Cargo.toml\"}"}}]}}],"usage":{"prompt_tokens":7,"completion_tokens":3}})
             }
             WireProtocol::OpenAiResponses => {
-                json!({"model":"resolved","status":"completed","output":[{"id":"reason","type":"reasoning","encrypted_content":"private opaque"},{"type":"message","content":[{"type":"output_text","text":"Inspecting."}]},{"type":"function_call","status":"completed","call_id":"provider-call","name":"read_file","arguments":"{\"path\":\"Cargo.toml\"}"}],"usage":{"input_tokens":7,"output_tokens":3}})
+                json!({"model":"resolved","status":"completed","output":[{"id":"reason","type":"reasoning","encrypted_content":"private opaque"},{"type":"message","content":[{"type":"output_text","text":"Inspecting."}]},{"type":"function_call","status":"completed","call_id":"provider-call","name":"read","arguments":"{\"path\":\"Cargo.toml\"}"}],"usage":{"input_tokens":7,"output_tokens":3}})
             }
             WireProtocol::AnthropicMessages => {
-                json!({"model":"resolved","stop_reason":"tool_use","content":[{"type":"thinking","thinking":"private thinking","signature":"signed"},{"type":"text","text":"Inspecting."},{"type":"tool_use","id":"provider-call","name":"read_file","input":{"path":"Cargo.toml"}}],"usage":{"input_tokens":7,"output_tokens":3}})
+                json!({"model":"resolved","stop_reason":"tool_use","content":[{"type":"thinking","thinking":"private thinking","signature":"signed"},{"type":"text","text":"Inspecting."},{"type":"tool_use","id":"provider-call","name":"read","input":{"path":"Cargo.toml"}}],"usage":{"input_tokens":7,"output_tokens":3}})
             }
         }
     }
@@ -132,7 +132,7 @@ mod tests {
     fn streamed_call_arguments_survive_every_byte_boundary_and_require_terminal_evidence() {
         let input = request(WireProtocol::OpenAiChatCompletions);
         let values = [
-            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider-call","type":"function","function":{"name":"read_file","arguments":"{\"pa"}}]},"finish_reason":null}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider-call","type":"function","function":{"name":"read","arguments":"{\"pa"}}]},"finish_reason":null}]}),
             json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"☃\"}"}}]},"finish_reason":null}]}),
             json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             json!({"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3}}),
@@ -246,7 +246,7 @@ mod tests {
         let mut fold = StructuredFold::new(WireProtocol::AnthropicMessages);
         for value in [
             json!({"type":"message_start","message":{"content":[],"model":"minimax-m3"}}),
-            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"provider-call","name":"read_file","input":{}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"provider-call","name":"read","input":{}}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}),
             json!({"type":"content_block_stop","index":0}),
             json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"}}),
@@ -272,7 +272,7 @@ mod tests {
     fn tool_indexes_and_result_pairing_are_checked_and_refusals_are_explicit() {
         let mut input = request(WireProtocol::OpenAiChatCompletions);
         let mut fold = StructuredFold::new(WireProtocol::OpenAiChatCompletions);
-        fold.feed("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2,\"id\":\"id\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",&mut |_| {}).unwrap();
+        fold.feed("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2,\"id\":\"id\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",&mut |_| {}).unwrap();
         assert!(fold.finish(&input, ProviderId::OpencodeGo).is_err());
         let refusal =
             json!({"choices":[{"message":{"refusal":"Cannot comply"},"finish_reason":"stop"}]});
@@ -352,7 +352,7 @@ mod tests {
         let mut fold = StructuredFold::new(WireProtocol::AnthropicMessages);
         for value in [
             json!({"type":"message_start","message":{"model":"minimax-m3","content":[],"usage":{"input_tokens":7}}}),
-            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"provider-call","name":"read_file","input":{}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"provider-call","name":"read","input":{}}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"Cargo.toml\"}"}}),
             json!({"type":"content_block_stop","index":0}),
             json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}),

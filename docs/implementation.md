@@ -27,7 +27,9 @@ daemon-owned ChatGPT login. The [credential guide](provider-credentials.md)
 specifies the implemented surface; Zen/Codex chat wiring remains planned.
 Structured Go turns now persist blocks/private continuation, frozen per-turn
 model/settings, model requests, file/shell invocations, artifacts, and recovery
-results. Worktrees, batch execution, and peer control remain next-stage work.
+results. Its only coding tools are `read`, `write`, `edit`, and `bash`, implemented
+in Rust; workspace chats enable all four unless an explicit allowlist restricts
+them. Worktrees, batch execution, and peer control remain next-stage work.
 
 ## Suggested module growth
 
@@ -198,9 +200,11 @@ test budget. Pure persistence/scheduler/protocol checks do not require one.
 
 ## Step 5: bounded tools, steering, and recovery
 
-Start with file reads and validated patch/write operations. Add supervised shell
-commands with explicit cwd, argument/environment policy, output limits, timeout,
-and process-tree cancellation.
+The basic coding-tool slice is implemented: line-based `read`, creating and
+overwriting `write`, validated exact-text `edit`, and supervised `bash`, with
+workspace authority, environment/output limits, deadlines, and process-tree
+cancellation. See [structured execution](structured-execution.md). Additional
+tool families remain separate work.
 
 Persist invocation intent and known outcome. Discard interrupted thinking after a
 crash. Mark unfinished tools failed due to daemon/process failure without

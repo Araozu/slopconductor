@@ -37,8 +37,11 @@ Implemented:
 - Runtime provider credential configuration through authenticated API/CLI
   commands, private XDG storage, immediate Go key replacement, and daemon-owned
   ChatGPT login. See [provider credentials](docs/provider-credentials.md).
+- Daemon-owned coding tools limited to `read`, `write`, `edit`, and `bash`, with
+  workspace policies, durable invocation/results, bounded output, artifacts,
+  cancellation, and recovery without replay. See [structured execution](docs/structured-execution.md).
 
-Planned: more daemon provider options, coding tools, worktrees, batch execution, child tasks, remote
+Planned: more daemon provider options, worktrees, batch execution, child tasks, remote
 control, additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
 
@@ -61,6 +64,8 @@ cargo run -- --json status
 cargo run -- --json node
 cargo run -- models
 cargo run -- chat --prompt "Reply with a short greeting."
+cargo run -- chat --workspace /absolute/project --prompt "Fix the failing test."
+cargo run -- chat --workspace /absolute/project --tool read --prompt "Review the code."
 cargo run -- chat --session SESSION_ID
 cargo run -- --json session history SESSION_ID
 cargo run -- turn cancel TURN_ID
@@ -101,6 +106,13 @@ is `opencode-go/glm-5.3-flash`; select another verified Go model with
 `chat --model opencode-go/MODEL`. `--prompt-file PATH` and piped stdin are also
 supported. One-shot chat waits for completion unless `--detach` is supplied.
 Ctrl-C while following detaches; cancellation is an explicit command.
+
+`chat --workspace PATH` enables the four coding tools. Repeated `--tool` options
+restrict that set; `--tool read` permits only file reads. `read` uses 1-based line
+offsets, `write` creates or overwrites files, and `edit` makes exact text
+replacements. `bash` runs from the workspace root under the daemon's output and
+time limits. Windows tool use requires `bash.exe` on PATH (for example, Git for
+Windows); native builds do not require it.
 
 Use `provider login codex` to authorize a ChatGPT subscription through the
 daemon. Zen/Codex credentials can be saved now, but their daemon chat execution

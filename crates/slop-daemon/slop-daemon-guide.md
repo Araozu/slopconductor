@@ -2,7 +2,7 @@
 
 This guide follows the code that exists today. The short version is: **the daemon is the local service that owns sessions, accepts commands over HTTP, saves their durable state, and coordinates model calls.** Clients such as `slop` are replaceable remote controls. They do not own a conversation or call the model themselves.
 
-The current daemon runs on one machine, listens on loopback, stores its authoritative data locally, and executes text chat with OpenCode Go. Coding tools, worktrees, remote access, session replication, and graphical clients are later work.
+The current daemon runs on one machine, listens on loopback, stores its authoritative data locally, and executes text chat with OpenCode Go. Workspace sessions can use the four native coding tools (`read`, `write`, `edit`, and `bash`); see [structured execution](../../docs/structured-execution.md). Worktrees, remote access, session replication, and graphical clients are later work.
 
 ## The map
 
@@ -215,8 +215,8 @@ Both mutations return a receipt with a session ID, revision, and event sequence;
 - **A session belongs to this daemon.** Its `owner_node_id` and machine-local history are authoritative here. There is no remote ownership transfer or replication in this crate today.
 - **Local bearer auth is not remote auth.** It protects the loopback API and is stored privately, but peer enrollment and network authorization are future work.
 - **The provider call is external; SQLite is local.** A transaction can atomically commit the accepted message, receipt, and event, but it cannot make an external provider request exactly-once. Idempotency prevents duplicate *acceptance* on HTTP retry; restart policy avoids blind *inference replay*.
-- **There are no tools in the text-chat loop.** This daemon slice does not run shell commands, edit files, create Git worktrees, or launch an external agent CLI. The runtime uses direct provider APIs.
-- **The current work has explicit bounds.** Database submission, queued turns, provider concurrency, context, output, history pages, and event subscribers are bounded so slow clients or large transcripts cannot create unlimited in-memory work. Tool execution bounds will matter when tools are implemented; this chat slice executes no tools.
+- **Workspace tools are daemon-owned.** Sessions with an explicit workspace policy can run `read`, `write`, `edit`, and `bash`. The daemon records intent before execution and known outcomes afterward, with no automatic replay after a crash. Chats without a workspace remain text-only. Managed Git worktrees remain planned; provider calls use direct APIs.
+- **The current work has explicit bounds.** Database submission, queued turns, provider concurrency, context, output, history pages, event subscribers, and tool execution are bounded so slow clients or large transcripts cannot create unlimited in-memory work. Bash subprocesses have output limits, deadlines, and process-tree cancellation.
 
 ## Where to read next
 

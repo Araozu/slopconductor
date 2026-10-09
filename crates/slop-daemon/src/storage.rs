@@ -1789,7 +1789,7 @@ mod tests {
         let client = store.client();
         let policy = WorkspacePolicy {
             root: workspace.path().to_str().unwrap().into(),
-            allowed_tools: vec!["read_file".into()],
+            allowed_tools: vec!["read".into()],
             shell_timeout_ms: 1000,
             max_output_bytes: 1024,
             max_tool_calls: 4,
@@ -1938,7 +1938,7 @@ mod tests {
                 result_message_id: format!("result-{i}"),
                 call_id: format!("call-{i}"),
                 provider_call_id: format!("provider-{i}"),
-                name: "read_file".into(),
+                name: "read".into(),
                 arguments: serde_json::json!({"path":"file"}),
             })
             .collect();

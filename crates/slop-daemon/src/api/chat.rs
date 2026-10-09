@@ -77,12 +77,7 @@ async fn capabilities() -> Json<slop_protocol::execution::CapabilitiesResponse> 
         tools: slop_runtime::tools::definitions()
             .into_iter()
             .map(|d| slop_protocol::execution::ToolDescriptor {
-                side_effects: if matches!(d.name.as_str(), "read_file" | "list_files") {
-                    "read"
-                } else {
-                    "write"
-                }
-                .into(),
+                side_effects: if d.name == "read" { "read" } else { "write" }.into(),
                 name: d.name,
                 description: d.description,
                 parameters: d.parameters,

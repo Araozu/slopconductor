@@ -61,7 +61,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
             std::path::absolute(root).map(|root| slop_protocol::execution::WorkspacePolicy {
                 root: root.to_string_lossy().into_owned(),
                 allowed_tools: if tools.is_empty() {
-                    vec!["read_file".into(), "list_files".into()]
+                    vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
                 } else {
                     tools
                 },

@@ -7,6 +7,10 @@ execution. Zen has the same structured runtime adapter but is not selectable
 for daemon sessions. Codex retains its text-only adapter bridge and rejects
 structured tools or required continuation it cannot support.
 
+**Tool set updated, 2026-10-09.** The native runtime exposes only pi's four basic
+coding tools: `read`, `write`, `edit`, and `bash`. Their implementation stays in
+Rust; pi is a design reference, not a runtime dependency.
+
 ## Request and conversation model
 
 A user turn can contain several model requests, assistant messages, tool
@@ -83,21 +87,37 @@ Managed Git worktrees and project reservations are future work.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_files` | Sorted, bounded directory entries within the workspace |
-| `read_file` | Bounded UTF-8 reads with byte offsets and a continuation offset |
-| `write_file` | Create a new UTF-8 file; existing files are never overwritten |
-| `apply_patch` | Replace one unique exact text match; reject stale/ambiguous matches, preserve permissions, and rename atomically |
-| `shell` | Supervised shell command with bounded output, timeout, cancellation, and process-group/Job Object cleanup |
+| `read` | Read UTF-8 text with a 1-based line `offset` (default 1), line `limit` (default 2000), and a continuation `next_offset` |
+| `write` | Create or overwrite a UTF-8 file, create missing parent directories, preserve existing permissions, and rename atomically |
+| `edit` | Apply unique, non-overlapping exact text replacements against the original file; reject stale/ambiguous matches, preserve permissions, and rename atomically |
+| `bash` | Supervised Bash command with bounded output, timeout, cancellation, and process-group/Job Object cleanup |
+
+`edit` accepts `{"path":"file","edits":[{"oldText":"before","newText":"after"}]}`.
+For a single replacement, top-level `oldText`/`newText` is also accepted. Matching
+uses the exact UTF-8 text, including line endings. All replacements are validated
+before changing the file. File tools accept workspace-relative paths; media/image
+reads are outside this text-only slice. Directory listing and search use `bash`
+commands such as `ls`, `find`, and `rg` when available on the daemon's machine.
+
+These names replace `list_files`, `read_file`, `write_file`, `apply_patch`, and
+`shell`; the old names are not aliases or advertised tools. Existing history and
+results keep their original records. Recreate tool-enabled sessions with the new
+allowlist before continuing work; saved policies are not automatically converted
+to broader write or shell authority.
 
 File tools use directory handles to reject absolute paths, traversal, and
-symlink escapes. Special files are rejected; Unix opens are nonblocking so a
-FIFO cannot occupy a worker indefinitely. File work runs on a bounded blocking
+symlink escapes. Mutation destinations cannot be symlinks. Special files are
+rejected; Unix opens are nonblocking so a FIFO cannot occupy a worker indefinitely.
+File work runs on a bounded blocking
 path, with a shared four-slot tool limit. Once a file operation starts,
 cancellation waits for its actual outcome; dropping an awaiter cannot free its
 slot while the blocking operation continues.
 
-Shell uses `/bin/sh -c` on Unix and PowerShell without profiles on Windows.
-Its working directory must be within the workspace. Only PATH, SystemRoot,
+Bash uses `/bin/bash` on Unix and requires `bash.exe` on PATH on Windows
+(for example, Git for Windows). It runs without startup profiles, from the
+workspace root; commands can `cd` to a subdirectory. Optional `timeout` is in
+seconds (0.001–300) and can shorten, but never extend, the workspace's
+`shell_timeout_ms` deadline. Only PATH, SystemRoot,
 WINDIR, TEMP, TMP, LANG, and LC_ALL are inherited. Provider credentials are not
 forwarded. The command itself grants the shell the user's machine permissions;
 working-directory policy is not an OS sandbox. Shell commands can invoke Git
@@ -175,7 +195,8 @@ upstream payloads.
 ## Limits and CLI
 
 Context is at most 256 messages/1 MiB; individual files at most 1 MiB; a read
-returns at most 256 KiB; a directory returns at most 512 entries. Each model
+returns at most 2000 complete lines/256 KiB. A single line exceeding the read
+byte cap returns `read_line_limit`; Bash can inspect a smaller byte range. Each model
 response proposes at most 16 tools, with at most 64 KiB of arguments per call.
 Visible assistant output is at most 1 MiB and encoded history pages at most
 16 MiB (text and blocks coexist for compatibility).
@@ -190,7 +211,8 @@ memory/performance benchmark.
 
 ```sh
 slop chat --workspace /absolute/project --prompt "Inspect this project."
-slop chat --workspace /absolute/project --tool read_file --tool apply_patch --tool shell --prompt "Fix the failing test."
+slop chat --workspace /absolute/project --tool read --prompt "Review this project without changing files."
+slop chat --workspace /absolute/project --tool read --tool edit --tool bash --prompt "Fix the failing test."
 slop chat --session SESSION_ID --model opencode-go/glm-5.3 --max-output-tokens 512 --prompt "Review this."
 slop capabilities
 slop turn requests TURN_ID
@@ -198,8 +220,9 @@ slop turn tools TURN_ID
 slop artifact download ARTIFACT_ID --output output.json
 ```
 
-`--workspace` alone enables `read_file` and `list_files`. Specifying `--tool`
-sets the exact allowlist; writes and shell need explicit selection. Workspace
+`--workspace` alone enables all four tools: `read`, `write`, `edit`, and `bash`.
+Specifying `--tool` sets the exact allowlist; use `--tool read` for read-only file
+access. Chats without `--workspace` keep plain text behavior. Workspace
 policy is chosen at session creation. `--model`/settings on a new chat set its
 defaults; on a resumed chat they override the next turn. JSON following includes
 canonical message/tool snapshots, deltas, receipts, and terminal records.
@@ -208,10 +231,12 @@ Closing the CLI detaches; `slop turn cancel TURN_ID` explicitly cancels executio
 ## Verification and remaining scope
 
 Rust fixtures cover all three structured wire shapes, byte-split SSE/Unicode,
-private continuation, incomplete/malformed proposals, exact patch preconditions,
+private continuation, incomplete/malformed proposals, line pagination, write
+creation/overwrite, single/multiple exact edit preconditions,
 symlink escapes, output bounds, process cancellation, workspace leases,
 frozen settings, migration, recovery, and artifact integrity. The real-binary
-smoke check adds a complete file/patch/shell workflow, canonical client rendering,
+smoke check adds a complete read/write/edit/Bash workflow, the exact four-tool
+capability set and restricted allowlists, canonical client rendering,
 authentication on new routes, restart without tool replay, and per-turn selection.
 All provider traffic in the new checks is offline. Linux is exercised; Windows
 supervision is implemented but needs a native Windows run. No new live tool call

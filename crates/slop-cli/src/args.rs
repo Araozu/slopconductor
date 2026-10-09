@@ -166,8 +166,8 @@ pub struct ChatArgs {
     /// Explicit workspace on the daemon's machine for a new tool-enabled session.
     #[arg(long, conflicts_with = "session")]
     pub workspace: Option<PathBuf>,
-    /// Tool to allow; repeat to allow additional tools. Requires --workspace.
-    #[arg(long="tool", requires="workspace", value_parser=["read_file","list_files","write_file","apply_patch","shell"])]
+    /// Tool to allow; repeat to restrict the default read/write/edit/bash set. Requires --workspace.
+    #[arg(long="tool", requires="workspace", value_parser=["read","write","edit","bash"])]
     pub tools: Vec<String>,
     #[arg(long)]
     pub effort: Option<String>,

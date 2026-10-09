@@ -4,7 +4,7 @@ These documents capture the application idea, accepted constraints, proposed
 design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
-**Status as of 2026-10-08:** milestone M0 is a repository/bootstrap foundation,
+**Status as of 2026-10-09:** milestone M0 is a repository/bootstrap foundation,
 with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
@@ -14,7 +14,8 @@ CLI. Runtime provider credential commands now persist secrets in private XDG
 storage, replace Go credentials without restart, and own ChatGPT authorization
 in the daemon. Structured Go execution now adds explicit workspace tools, durable
 request/invocation records, artifacts, block-aware streaming, and per-turn model
-settings. General task orchestration remains planned. Commands,
+settings. The 2026-10-09 tool update limits coding tools to `read`, `write`,
+`edit`, and `bash`. General task orchestration remains planned. Commands,
 schemas, and workflows marked proposed describe future work.
 
 ## Reading order
