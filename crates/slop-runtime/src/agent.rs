@@ -106,7 +106,7 @@ pub(crate) async fn execute<R: ChatRepository>(
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
     tools: Arc<ToolService>,
 ) -> bool {
-    let mut total = Usage::default();
+    let mut total = work.initial_usage;
     if *shutdown.borrow() {
         return stop(
             repository.as_ref(),
@@ -176,18 +176,16 @@ pub(crate) async fn execute<R: ChatRepository>(
                 .collect()
         })
         .unwrap_or_default();
-    let max_requests = work
-        .execution
-        .as_ref()
-        .map_or(1, |policy| policy.max_model_requests);
+    let max_requests = work.max_model_requests.max(1);
     let max_tools = work
         .execution
         .as_ref()
         .map_or(0, |policy| policy.max_tool_calls);
-    let mut tool_count = 0;
+    let mut tool_count = work.tool_calls_used;
+    let mut ordinal = work.next_request_ordinal.max(1);
     let mut cancel_tick = tokio::time::interval(Duration::from_millis(100));
     cancel_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    for ordinal in 1..=max_requests {
+    while ordinal <= max_requests {
         if *shutdown.borrow() {
             return stop(
                 repository.as_ref(),
@@ -197,10 +195,30 @@ pub(crate) async fn execute<R: ChatRepository>(
             )
             .await;
         }
-        match repository.cancellation_requested(&work.turn_id).await {
-            Ok(true) => return stop(repository.as_ref(), &work.turn_id, canceled(), total).await,
-            Ok(false) => {}
+        let control = match repository.turn_control(&work.turn_id).await {
+            Ok(control) => control,
             Err(_) => return false,
+        };
+        if control.cancellation_requested {
+            return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+        }
+        if control.pause_requested {
+            return stop(
+                repository.as_ref(),
+                &work.turn_id,
+                steering_yield("pause_turn", total),
+                total,
+            )
+            .await;
+        }
+        if control.steering_pending {
+            return stop(
+                repository.as_ref(),
+                &work.turn_id,
+                steering_yield("steering_resume", total),
+                total,
+            )
+            .await;
         }
         let request_id = match new_id() {
             Ok(id) => id,
@@ -253,6 +271,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             };
             return stop(repository.as_ref(), &work.turn_id, outcome, total).await;
         }
+        let is_first_request = ordinal == 1;
         let intent = RequestIntent {
             id: request_id.clone(),
             message_id: message_id.clone(),
@@ -261,13 +280,32 @@ pub(crate) async fn execute<R: ChatRepository>(
             requested_settings: work.requested_settings.clone(),
             settings: settings.clone(),
         };
-        if repository
-            .begin_request(&work.turn_id, intent)
-            .await
-            .is_err()
-        {
-            return false;
+        let started = match repository.begin_request(&work.turn_id, intent).await {
+            Ok(started) => started,
+            Err(_) => return false,
+        };
+        if !started {
+            let control = match repository.turn_control(&work.turn_id).await {
+                Ok(control) => control,
+                Err(_) => return false,
+            };
+            if control.cancellation_requested {
+                return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+            }
+            let code = if control.pause_requested {
+                "pause_turn"
+            } else {
+                "steering_resume"
+            };
+            return stop(
+                repository.as_ref(),
+                &work.turn_id,
+                steering_yield(code, total),
+                total,
+            )
+            .await;
         }
+        ordinal = ordinal.saturating_add(1);
         let visible = Arc::new(Mutex::new(BTreeMap::<usize, String>::new()));
         let stream_visible = Arc::clone(&visible);
         let stream_deltas = deltas.clone();
@@ -321,9 +359,18 @@ pub(crate) async fn execute<R: ChatRepository>(
             tokio::select! {
                 result=&mut inference=>break result,
                 _=shutdown.changed()=>{drop(inference);let _=repository.fail_request(&work.turn_id,&request_id,"daemon_shutdown").await;return stop(repository.as_ref(),&work.turn_id,interrupted_shutdown(),total).await;},
-                _=cancel_tick.tick()=>match repository.cancellation_requested(&work.turn_id).await{
-                    Ok(true)=>{drop(inference);let _=repository.fail_request(&work.turn_id,&request_id,"cancelled").await;return stop(repository.as_ref(),&work.turn_id,canceled(),total).await;},
-                    Ok(false)=>{},Err(_)=>{drop(inference);return false;}
+                _=cancel_tick.tick()=>match repository.turn_control(&work.turn_id).await{
+                    Ok(control) if control.cancellation_requested=>{
+                        drop(inference);
+                        let _=repository.fail_request(&work.turn_id,&request_id,"cancelled").await;
+                        return stop(repository.as_ref(),&work.turn_id,canceled(),total).await;
+                    },
+                    Ok(control) if control.immediate_requested=>{
+                        drop(inference);
+                        let _=repository.fail_request(&work.turn_id,&request_id,"steering_interrupted").await;
+                        return stop(repository.as_ref(),&work.turn_id,steering_yield("steering_resume_unknown",Usage::default()),Usage::default()).await;
+                    },
+                    Ok(_)=>{},Err(_)=>{drop(inference);return false;}
                 },
                 _=checkpoint.tick()=>{
                     let partial=snapshot(&request,&visible);let text=partial.visible_text();
@@ -353,7 +400,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                 return stop(repository.as_ref(), &work.turn_id, outcome, total).await;
             }
         };
-        total = aggregate(total, response.usage, ordinal == 1);
+        total = aggregate(total, response.usage, is_first_request);
         let mut invocations = Vec::new();
         for block in &response.message.blocks {
             if let BlockContent::ToolCall {
@@ -458,19 +505,31 @@ pub(crate) async fn execute<R: ChatRepository>(
                 {
                     return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
                 }
-                if repository
-                    .start_tool(&work.turn_id, &invocation)
-                    .await
-                    .is_err()
-                {
-                    if repository
-                        .cancellation_requested(&work.turn_id)
-                        .await
-                        .unwrap_or(false)
-                    {
-                        return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+                match repository.start_tool(&work.turn_id, &invocation).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let control = match repository.turn_control(&work.turn_id).await {
+                            Ok(control) => control,
+                            Err(_) => return false,
+                        };
+                        if control.cancellation_requested {
+                            return stop(repository.as_ref(), &work.turn_id, canceled(), total)
+                                .await;
+                        }
+                        let code = if control.pause_requested {
+                            "pause_turn"
+                        } else {
+                            "steering_resume"
+                        };
+                        return stop(
+                            repository.as_ref(),
+                            &work.turn_id,
+                            steering_yield(code, total),
+                            total,
+                        )
+                        .await;
                     }
-                    return false;
+                    Err(_) => return false,
                 }
                 let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
                 let session_id = work.session_id.clone();
@@ -505,7 +564,10 @@ pub(crate) async fn execute<R: ChatRepository>(
                     tokio::select! {
                         outcome=&mut execution=>break outcome,
                         _=shutdown.changed()=>{cancel_tx.send_replace(true);break execution.await;},
-                        _=cancel_tick.tick()=>if repository.cancellation_requested(&work.turn_id).await.unwrap_or(true){cancel_tx.send_replace(true);break execution.await;},
+                        _=cancel_tick.tick()=>match repository.turn_control(&work.turn_id).await{
+                            Ok(control) if control.cancellation_requested || control.immediate_requested=>{cancel_tx.send_replace(true);break execution.await;},
+                            Ok(_)=>{},Err(_)=>{cancel_tx.send_replace(true);break execution.await;}
+                        },
                     }
                 }
             };
@@ -565,4 +627,15 @@ pub(crate) async fn execute<R: ChatRepository>(
         total,
     )
     .await
+}
+
+fn steering_yield(code: &str, usage: Usage) -> ChatOutcome {
+    ChatOutcome {
+        text: String::new(),
+        resolved_model: None,
+        usage,
+        status: ChatStatus::Interrupted,
+        error_code: Some(code.to_owned()),
+        error_message: Some("The active turn yielded at an execution boundary.".to_owned()),
+    }
 }

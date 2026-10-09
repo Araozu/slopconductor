@@ -17,8 +17,9 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction};
 use slop_protocol::{
     NodeResponse,
     chat::{
-        CancelTurnRequest, CommandReceipt, CreateSessionRequest, EventResponse, MessageResponse,
-        Page, SendMessageRequest, SessionResponse, TurnResponse, UsageResponse,
+        CancelTurnRequest, CommandReceipt, CreateSessionRequest, DeliveryMode, EventResponse,
+        MessageResponse, Page, SendMessageRequest, SessionResponse, SteeringInstructionResponse,
+        TurnControlRequest, TurnResponse, UsageResponse,
     },
 };
 use tokio::sync::oneshot;
@@ -27,7 +28,7 @@ mod execution;
 
 const DATABASE_FILE: &str = "state.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const MINIMUM_SQLITE_VERSION: i32 = 3_051_003;
 const MAX_QUEUE_CAPACITY: usize = 4096;
 const MAX_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -72,6 +73,10 @@ pub enum StoreError {
     Limit,
     #[error("unsupported execution capability: {0}")]
     Unsupported(&'static str),
+    #[error("active-turn steering cannot change its frozen model or settings")]
+    ActiveTurnOverride,
+    #[error("message preflight failed: {0}")]
+    Preflight(&'static str, &'static str),
 }
 
 type StoreResult<T> = Result<T, StoreError>;
@@ -362,7 +367,27 @@ impl StoreClient {
     ) -> StoreResult<CommandReceipt> {
         let session_id = session_id.to_owned();
         self.submit(move |connection| {
-            send_message(connection, &session_id, request, effective_settings)
+            send_message(connection, &session_id, request, effective_settings, None)
+        })
+        .await
+    }
+
+    pub async fn send_message_preflighted(
+        &self,
+        session_id: &str,
+        request: SendMessageRequest,
+        effective_settings: slop_protocol::execution::GenerationSettings,
+        idle_failure: Option<(&'static str, &'static str)>,
+    ) -> StoreResult<CommandReceipt> {
+        let session_id = session_id.to_owned();
+        self.submit(move |connection| {
+            send_message(
+                connection,
+                &session_id,
+                request,
+                Some(effective_settings),
+                idle_failure,
+            )
         })
         .await
     }
@@ -407,6 +432,39 @@ impl StoreClient {
             .await
     }
 
+    pub async fn pause_turn(
+        &self,
+        turn_id: &str,
+        request: TurnControlRequest,
+    ) -> StoreResult<CommandReceipt> {
+        let turn_id = turn_id.to_owned();
+        self.submit(move |connection| turn_control(connection, &turn_id, request, "pause"))
+            .await
+    }
+
+    pub async fn resume_turn(
+        &self,
+        turn_id: &str,
+        request: TurnControlRequest,
+    ) -> StoreResult<CommandReceipt> {
+        let turn_id = turn_id.to_owned();
+        self.submit(move |connection| turn_control(connection, &turn_id, request, "resume"))
+            .await
+    }
+
+    pub async fn steering_instructions(
+        &self,
+        session_id: &str,
+        after: Option<u64>,
+        limit: usize,
+    ) -> StoreResult<Page<SteeringInstructionResponse>> {
+        let session_id = session_id.to_owned();
+        let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
+        let limit = page_limit(limit)?;
+        self.submit(move |connection| list_steering(connection, &session_id, after, limit))
+            .await
+    }
+
     pub async fn claim_next_turn(&self) -> StoreResult<Option<slop_runtime::chat::TurnWork>> {
         self.submit(claim_next_turn).await
     }
@@ -432,6 +490,27 @@ impl StoreClient {
         let turn_id = turn_id.to_owned();
         self.submit(move |connection| cancellation_requested(connection, &turn_id))
             .await
+    }
+
+    pub async fn turn_control(
+        &self,
+        turn_id: &str,
+    ) -> StoreResult<slop_runtime::chat::TurnControl> {
+        let turn_id = turn_id.to_owned();
+        self.submit(move |connection| turn_control_state(connection, &turn_id))
+            .await
+    }
+
+    pub async fn retain_provider_snapshot(&self, turn_id: &str) -> StoreResult<bool> {
+        let turn_id = turn_id.to_owned();
+        self.submit(move |connection| {
+            let queued: bool = connection.query_row(
+                "SELECT status IN ('queued','running') AND EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='applied') FROM turns WHERE id=?1",
+                [&turn_id],
+                |row| row.get(0),
+            ).optional().map_err(|_| StoreError::Database)?.ok_or(StoreError::NotFound)?;
+            Ok(queued)
+        }).await
     }
 
     async fn submit<T, F>(&self, operation: F) -> StoreResult<T>
@@ -714,6 +793,9 @@ where
     if existing_version < 3 {
         execution::migrate(&tx)?;
     }
+    if existing_version < 4 {
+        steering_migrate(&tx)?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|_| StoreError::Database)?;
     hook(&tx)?;
@@ -786,6 +868,30 @@ fn create_chat_schema(tx: &Transaction<'_>) -> StoreResult<()> {
     )
     .map_err(|_| StoreError::Database)
 }
+
+fn steering_migrate(tx: &Transaction<'_>) -> StoreResult<()> {
+    tx.execute_batch(
+        "ALTER TABLE turns ADD COLUMN immediate_requested INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE turns ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE turns ADD COLUMN usage_unknown INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE turns ADD COLUMN resume_count INTEGER NOT NULL DEFAULT 0;
+         CREATE TABLE steering_instructions (
+            id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            delivery TEXT NOT NULL CHECK(delivery IN ('next-boundary','immediate')),
+            status TEXT NOT NULL CHECK(status IN ('accepted','applied','rejected')),
+            error_code TEXT,
+            created_order INTEGER NOT NULL UNIQUE
+         );
+         CREATE INDEX steering_turn_status ON steering_instructions(turn_id,status,created_order);",
+    )
+    .map_err(|_| StoreError::Database)
+}
+
+const MAX_PENDING_STEERING_PER_TURN: i64 = 32;
 
 fn default_node_name() -> String {
     env::var("COMPUTERNAME")
@@ -1100,6 +1206,7 @@ fn send_message(
     session_id: &str,
     request: SendMessageRequest,
     effective_settings: Option<slop_protocol::execution::GenerationSettings>,
+    idle_failure: Option<(&'static str, &'static str)>,
 ) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.text.trim().is_empty()
@@ -1125,6 +1232,77 @@ fn send_message(
         .is_some_and(|revision| revision != session.revision)
     {
         return Err(StoreError::Conflict);
+    }
+    let delivery = request.delivery.unwrap_or_default();
+    if delivery != DeliveryMode::AfterTurn {
+        let active_turn: Option<String> = tx
+            .query_row(
+                "SELECT id FROM turns t WHERE session_id=?1 AND (status='running' OR status='paused' OR (status='queued' AND EXISTS(SELECT 1 FROM model_requests r WHERE r.turn_id=t.id))) ORDER BY ordinal LIMIT 1",
+                [session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::Database)?;
+        if let Some(active_turn) = active_turn {
+            if request.model.is_some() || request.settings.is_some() {
+                return Err(StoreError::ActiveTurnOverride);
+            }
+            let pending: i64 = tx
+                .query_row(
+                    "SELECT count(*) FROM steering_instructions WHERE turn_id=?1 AND status='accepted'",
+                    [&active_turn],
+                    |row| row.get(0),
+                )
+                .map_err(|_| StoreError::Database)?;
+            if pending >= MAX_PENDING_STEERING_PER_TURN {
+                return Err(StoreError::Limit);
+            }
+            let instruction_id = opaque_id()?;
+            tx.execute(
+                "INSERT INTO steering_instructions(id,command_id,session_id,turn_id,text,delivery,status,created_order) VALUES(?1,?2,?3,?4,?5,?6,'accepted',(SELECT COALESCE(MAX(created_order),0)+1 FROM steering_instructions))",
+                rusqlite::params![
+                    instruction_id,
+                    request.command_id,
+                    session_id,
+                    active_turn,
+                    request.text,
+                    match delivery {
+                        DeliveryMode::NextBoundary => "next-boundary",
+                        DeliveryMode::Immediate => "immediate",
+                        DeliveryMode::AfterTurn => unreachable!(),
+                    }
+                ],
+            )
+            .map_err(|_| StoreError::Database)?;
+            if delivery == DeliveryMode::Immediate {
+                tx.execute(
+                    "UPDATE turns SET immediate_requested=1 WHERE id=?1 AND status='running'",
+                    [&active_turn],
+                )
+                .map_err(|_| StoreError::Database)?;
+            }
+            let (revision, event_sequence) = append_event(
+                &tx,
+                session_id,
+                "steering_instruction_accepted",
+                Some(&active_turn),
+                Some(&instruction_id),
+            )?;
+            let receipt = make_receipt(
+                &request.command_id,
+                session_id,
+                Some(active_turn),
+                Some(instruction_id),
+                revision,
+                event_sequence,
+            );
+            commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
+            tx.commit().map_err(|_| StoreError::Database)?;
+            return Ok(receipt);
+        }
+    }
+    if let Some((code, message)) = idle_failure {
+        return Err(StoreError::Preflight(code, message));
     }
     let queued_session: i64 = tx
         .query_row(
@@ -1339,9 +1517,10 @@ fn cancel_turn(
         .map_err(|_| StoreError::Database)?
         .ok_or(StoreError::NotFound)?;
     let kind = match status.as_str() {
-        "queued" => {
+        "queued" | "paused" => {
             tx.execute("UPDATE turns SET status='cancelled' WHERE id=?1", [turn_id])
                 .map_err(|_| StoreError::Database)?;
+            reject_steering_tx(&tx, turn_id, "turn_cancelled")?;
             "turn_cancelled"
         }
         "running" => {
@@ -1395,9 +1574,237 @@ fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
         )
         .map_err(|_| StoreError::Database)?;
         tx.execute("UPDATE turns SET status='interrupted',error_code='daemon_restarted',error_message='The daemon restarted during this turn.' WHERE id=?1",[&turn_id]).map_err(|_|StoreError::Database)?;
+        reject_steering_tx(&tx, &turn_id, "daemon_restarted")?;
         append_event(&tx, &session_id, "turn_interrupted", Some(&turn_id), None)?;
     }
     tx.commit().map_err(|_| StoreError::Database)
+}
+
+fn turn_control(
+    connection: &Connection,
+    turn_id: &str,
+    request: TurnControlRequest,
+    action: &'static str,
+) -> StoreResult<CommandReceipt> {
+    if !valid_command_id(&request.command_id) {
+        return Err(StoreError::Invalid);
+    }
+    let scope = format!("turn:{turn_id}:{action}");
+    let payload = canonical(&request)?;
+    if let Some(receipt) = prior_receipt(connection, &request.command_id, &scope, &payload)? {
+        return Ok(receipt);
+    }
+    let tx = connection
+        .unchecked_transaction()
+        .map_err(|_| StoreError::Database)?;
+    if let Some(receipt) = prior_receipt(&tx, &request.command_id, &scope, &payload)? {
+        return Ok(receipt);
+    }
+    let (session_id, status, resume_count): (String, String, i64) = tx
+        .query_row(
+            "SELECT session_id,status,resume_count FROM turns WHERE id=?1",
+            [turn_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|_| StoreError::Database)?
+        .ok_or(StoreError::NotFound)?;
+    let kind = match (action, status.as_str()) {
+        ("pause", "running") => {
+            tx.execute("UPDATE turns SET pause_requested=1 WHERE id=?1", [turn_id])
+                .map_err(|_| StoreError::Database)?;
+            "turn_pause_requested"
+        }
+        ("pause", "queued") => {
+            tx.execute("UPDATE turns SET status='paused' WHERE id=?1", [turn_id])
+                .map_err(|_| StoreError::Database)?;
+            "turn_paused"
+        }
+        ("resume", "paused") if resume_count < 64 => {
+            // A paused turn is already at a durable safe boundary. Apply
+            // accepted inbox entries before explicit readmission.
+            apply_steering_tx(&tx, turn_id)?;
+            tx.execute(
+                "UPDATE turns SET status='queued',pause_requested=0,resume_count=resume_count+1 WHERE id=?1",
+                [turn_id],
+            )
+            .map_err(|_| StoreError::Database)?;
+            "turn_resumed"
+        }
+        _ => return Err(StoreError::Conflict),
+    };
+    let (revision, event_sequence) = append_event(&tx, &session_id, kind, Some(turn_id), None)?;
+    let receipt = make_receipt(
+        &request.command_id,
+        &session_id,
+        Some(turn_id.to_owned()),
+        None,
+        revision,
+        event_sequence,
+    );
+    commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
+    tx.commit().map_err(|_| StoreError::Database)?;
+    Ok(receipt)
+}
+
+fn list_steering(
+    connection: &Connection,
+    session_id: &str,
+    after: i64,
+    limit: usize,
+) -> StoreResult<Page<SteeringInstructionResponse>> {
+    let _ = get_session(connection, session_id)?;
+    let mut statement = connection
+        .prepare("SELECT id,turn_id,text,delivery,status,error_code,created_order FROM steering_instructions WHERE session_id=?1 AND created_order>?2 ORDER BY created_order LIMIT ?3")
+        .map_err(|_| StoreError::Database)?;
+    let mut rows = statement
+        .query(rusqlite::params![session_id, after, (limit + 1) as i64])
+        .map_err(|_| StoreError::Database)?;
+    let mut items = Vec::new();
+    let mut next_after = None;
+    while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
+        if items.len() == limit {
+            break;
+        }
+        let delivery: String = row.get(3).map_err(|_| StoreError::Database)?;
+        items.push(SteeringInstructionResponse {
+            id: row.get(0).map_err(|_| StoreError::Database)?,
+            turn_id: row.get(1).map_err(|_| StoreError::Database)?,
+            text: row.get(2).map_err(|_| StoreError::Database)?,
+            delivery: match delivery.as_str() {
+                "next-boundary" => DeliveryMode::NextBoundary,
+                "immediate" => DeliveryMode::Immediate,
+                _ => return Err(StoreError::Database),
+            },
+            status: row.get(4).map_err(|_| StoreError::Database)?,
+            error_code: row.get(5).map_err(|_| StoreError::Database)?,
+        });
+        next_after = Some(row.get::<_, i64>(6).map_err(|_| StoreError::Database)? as u64);
+    }
+    let more = next_after.is_some_and(|cursor| {
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM steering_instructions WHERE session_id=?1 AND created_order>?2)",
+                rusqlite::params![session_id, cursor as i64],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false)
+    });
+    if !more {
+        next_after = None;
+    }
+    Ok(Page { items, next_after })
+}
+
+fn turn_control_state(
+    connection: &Connection,
+    turn_id: &str,
+) -> StoreResult<slop_runtime::chat::TurnControl> {
+    connection
+        .query_row(
+            "SELECT cancellation_requested,immediate_requested,pause_requested,EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') FROM turns WHERE id=?1",
+            [turn_id],
+            |row| {
+                Ok(slop_runtime::chat::TurnControl {
+                    cancellation_requested: row.get::<_, i64>(0)? != 0,
+                    immediate_requested: row.get::<_, i64>(1)? != 0,
+                    pause_requested: row.get::<_, i64>(2)? != 0,
+                    steering_pending: row.get(3)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| StoreError::Database)?
+        .ok_or(StoreError::NotFound)
+}
+
+fn apply_steering_tx(tx: &Transaction<'_>, turn_id: &str) -> StoreResult<usize> {
+    let session_id: String = tx
+        .query_row(
+            "SELECT session_id FROM turns WHERE id=?1",
+            [turn_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    let mut statement = tx
+        .prepare("SELECT id,text FROM steering_instructions WHERE turn_id=?1 AND status='accepted' ORDER BY created_order LIMIT ?2")
+        .map_err(|_| StoreError::Database)?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![turn_id, MAX_PENDING_STEERING_PER_TURN],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .map_err(|_| StoreError::Database)?;
+    let instructions: Vec<_> = rows
+        .collect::<rusqlite::Result<_>>()
+        .map_err(|_| StoreError::Database)?;
+    drop(statement);
+    for (id, text) in &instructions {
+        let ordinal = execution::next_message_ordinal(tx, turn_id)?;
+        tx.execute(
+            "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'user',?5,'completed')",
+            rusqlite::params![id, session_id, turn_id, ordinal, text],
+        )
+        .map_err(|_| StoreError::Database)?;
+        tx.execute(
+            "UPDATE steering_instructions SET status='applied' WHERE id=?1 AND status='accepted'",
+            [id],
+        )
+        .map_err(|_| StoreError::Database)?;
+        append_event(
+            tx,
+            &session_id,
+            "steering_instruction_applied",
+            Some(turn_id),
+            Some(id),
+        )?;
+    }
+    tx.execute(
+        "UPDATE turns SET immediate_requested=0 WHERE id=?1",
+        [turn_id],
+    )
+    .map_err(|_| StoreError::Database)?;
+    Ok(instructions.len())
+}
+
+fn reject_steering_tx(tx: &Transaction<'_>, turn_id: &str, cause: &str) -> StoreResult<()> {
+    let session_id: String = tx
+        .query_row(
+            "SELECT session_id FROM turns WHERE id=?1",
+            [turn_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    let mut statement = tx
+        .prepare("SELECT id FROM steering_instructions WHERE turn_id=?1 AND status='accepted' ORDER BY created_order")
+        .map_err(|_| StoreError::Database)?;
+    let rows = statement
+        .query_map([turn_id], |row| row.get::<_, String>(0))
+        .map_err(|_| StoreError::Database)?;
+    let ids: Vec<String> = rows
+        .collect::<rusqlite::Result<_>>()
+        .map_err(|_| StoreError::Database)?;
+    drop(statement);
+    for id in ids {
+        tx.execute(
+            "UPDATE steering_instructions SET status='rejected',error_code=?1 WHERE id=?2",
+            rusqlite::params![cause, id],
+        )
+        .map_err(|_| StoreError::Database)?;
+        append_event(
+            tx,
+            &session_id,
+            "steering_instruction_rejected",
+            Some(turn_id),
+            Some(&id),
+        )?;
+    }
+    tx.execute(
+        "UPDATE turns SET immediate_requested=0 WHERE id=?1",
+        [turn_id],
+    )
+    .map_err(|_| StoreError::Database)?;
+    Ok(())
 }
 
 fn claim_next_turn(connection: &Connection) -> StoreResult<Option<slop_runtime::chat::TurnWork>> {
@@ -1473,14 +1880,90 @@ fn finish_turn(
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
-    let (session_id,status,cancel_requested,existing):(String,String,bool,Option<String>)=tx.query_row("SELECT session_id,status,cancellation_requested,assistant_message_id FROM turns WHERE id=?1",[turn_id],|r|Ok((r.get(0)?,r.get(1)?,r.get::<_,i64>(2)?!=0,r.get(3)?))).optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
+    let (session_id,status,cancel_requested,pause_requested,already_unknown,existing):(String,String,bool,bool,bool,Option<String>)=tx.query_row("SELECT session_id,status,cancellation_requested,pause_requested,usage_unknown,assistant_message_id FROM turns WHERE id=?1",[turn_id],|r|Ok((r.get(0)?,r.get(1)?,r.get::<_,i64>(2)?!=0,r.get::<_,i64>(3)?!=0,r.get::<_,i64>(4)?!=0,r.get(5)?))).optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
     if status != "running" {
         return Err(StoreError::Conflict);
+    }
+    let pending_steering: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted')",
+            [turn_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    let steering_yield = matches!(
+        outcome.error_code.as_deref(),
+        Some("steering_resume" | "steering_resume_unknown")
+    ) || pending_steering && outcome.status == ChatStatus::Completed;
+    let pause_yield = outcome.error_code.as_deref() == Some("pause_turn")
+        || pause_requested && outcome.status == ChatStatus::Completed;
+    if !cancel_requested && (steering_yield || pause_yield) {
+        execution::reconcile_requests(&tx, turn_id, "steering_interrupted")?;
+        execution::reconcile_tools(&tx, turn_id, "steering_applied_before_dispatch")?;
+        apply_steering_tx(&tx, turn_id)?;
+        let paused = pause_yield || pause_requested;
+        if outcome.status == ChatStatus::Completed
+            && let Some(message_id) = &existing
+        {
+            tx.execute(
+                "UPDATE messages SET text=?1,status='completed' WHERE id=?2",
+                rusqlite::params![outcome.text, message_id],
+            )
+            .map_err(|_| StoreError::Database)?;
+        }
+        let unknown_now = outcome.error_code.as_deref() == Some("steering_resume_unknown");
+        let usage_unknown = already_unknown || unknown_now;
+        let usage = if usage_unknown {
+            slop_runtime::providers::Usage::default()
+        } else {
+            outcome.usage
+        };
+        use slop_runtime::providers::UsageSource;
+        let input = usage.input_tokens.map(|value| value.to_string());
+        let output = usage.output_tokens.map(|value| value.to_string());
+        let total = usage.total_tokens.map(|value| value.to_string());
+        let source = usage.total_source.map(|source| match source {
+            UsageSource::Reported => "reported",
+            UsageSource::Derived => "derived",
+        });
+        tx.execute(
+            "UPDATE turns SET status=?1,input_tokens=?2,output_tokens=?3,total_tokens=?4,total_source=?5,usage_unknown=?6,pause_requested=0,error_code=NULL,error_message=NULL WHERE id=?7",
+            rusqlite::params![
+                if paused { "paused" } else { "queued" },
+                input,
+                output,
+                total,
+                source,
+                usage_unknown,
+                turn_id
+            ],
+        )
+        .map_err(|_| StoreError::Database)?;
+        append_event(
+            &tx,
+            &session_id,
+            if paused {
+                "turn_paused"
+            } else {
+                "turn_steering_yielded"
+            },
+            Some(turn_id),
+            existing.as_deref(),
+        )?;
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(());
     }
     if cancel_requested {
         outcome.status = ChatStatus::Canceled;
         outcome.text.clear();
         outcome.resolved_model = None;
+        reject_steering_tx(&tx, turn_id, "turn_cancelled")?;
+    } else if outcome.status != ChatStatus::Completed {
+        reject_steering_tx(
+            &tx,
+            turn_id,
+            outcome.error_code.as_deref().unwrap_or("turn_failed"),
+        )?;
     }
     if outcome.status != ChatStatus::Completed {
         execution::reconcile_requests(
@@ -1596,7 +2079,7 @@ impl slop_runtime::chat::ChatRepository for StoreClient {
         &'a self,
         turn_id: &'a str,
         intent: slop_runtime::agent::RequestIntent,
-    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+    ) -> slop_runtime::chat::RepoFuture<'a, bool> {
         Box::pin(async move {
             let turn = turn_id.to_owned();
             self.submit(move |c| execution::begin_request(c, &turn, intent))
@@ -1649,7 +2132,7 @@ impl slop_runtime::chat::ChatRepository for StoreClient {
         &'a self,
         turn_id: &'a str,
         intent: &'a slop_runtime::agent::ToolIntent,
-    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+    ) -> slop_runtime::chat::RepoFuture<'a, bool> {
         Box::pin(async move {
             let turn = turn_id.to_owned();
             let intent = intent.clone();
@@ -1709,6 +2192,27 @@ impl slop_runtime::chat::ChatRepository for StoreClient {
     ) -> slop_runtime::chat::RepoFuture<'a, bool> {
         Box::pin(async move {
             self.turn_cancellation_requested(turn_id)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn turn_control<'a>(
+        &'a self,
+        turn_id: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, slop_runtime::chat::TurnControl> {
+        Box::pin(async move {
+            self.turn_control(turn_id)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+
+    fn retain_provider_snapshot<'a>(
+        &'a self,
+        turn_id: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, bool> {
+        Box::pin(async move {
+            self.retain_provider_snapshot(turn_id)
                 .await
                 .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
         })
@@ -1976,6 +2480,448 @@ mod tests {
             before
         );
         store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn boundary_steering_is_durable_idempotent_and_applied_before_readmission() {
+        use slop_runtime::chat::ChatRepository;
+        let dir = TempDir::new().unwrap();
+        let store = open_test(&dir, None).await;
+        let client = store.client();
+        let created = client
+            .create_session(create_request("steer-create", None))
+            .await
+            .unwrap();
+        let session = client.session(&created.session_id).await.unwrap();
+        let original = SendMessageRequest {
+            command_id: "steer-original".into(),
+            text: "first task".into(),
+            ..Default::default()
+        };
+        let original_receipt = client
+            .send_message(&created.session_id, original.clone())
+            .await
+            .unwrap();
+        let work = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(work.turn_id, original_receipt.turn_id.as_deref().unwrap());
+        client
+            .begin_request(
+                &work.turn_id,
+                slop_runtime::agent::RequestIntent {
+                    id: "steer-model-request".into(),
+                    message_id: "steer-assistant-message".into(),
+                    ordinal: 1,
+                    requested_model: work.requested_model.clone(),
+                    requested_settings: work.requested_settings.clone(),
+                    settings: work.settings.clone(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let steering = SendMessageRequest {
+            command_id: "steer-boundary".into(),
+            text: "change direction".into(),
+            delivery: Some(DeliveryMode::NextBoundary),
+            ..Default::default()
+        };
+        let accepted = client
+            .send_message_preflighted(
+                &created.session_id,
+                steering.clone(),
+                session.settings.clone(),
+                Some(("unsupported_capability", "idle fallback rejected")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(accepted.turn_id, original_receipt.turn_id);
+        let replay = client
+            .send_message(&created.session_id, steering)
+            .await
+            .unwrap();
+        assert_eq!(replay, accepted);
+        assert_eq!(
+            client
+                .steering_instructions(&created.session_id, None, 10)
+                .await
+                .unwrap()
+                .items[0]
+                .status,
+            "accepted"
+        );
+
+        client
+            .finish_chat_turn(
+                work.turn_id.clone().as_str(),
+                slop_runtime::chat::ChatOutcome {
+                    text: String::new(),
+                    resolved_model: Some(work.requested_model),
+                    usage: slop_runtime::providers::Usage {
+                        input_tokens: Some(13),
+                        output_tokens: Some(2),
+                        total_tokens: Some(15),
+                        total_source: Some(slop_runtime::providers::UsageSource::Reported),
+                    },
+                    status: slop_runtime::chat::ChatStatus::Completed,
+                    error_code: None,
+                    error_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let items = client
+            .steering_instructions(&created.session_id, None, 10)
+            .await
+            .unwrap()
+            .items;
+        assert_eq!(items[0].status, "applied");
+        let queued_instruction = client
+            .send_message_preflighted(
+                &created.session_id,
+                SendMessageRequest {
+                    command_id: "steer-queued-second".into(),
+                    text: "second direction".into(),
+                    delivery: Some(DeliveryMode::Immediate),
+                    ..Default::default()
+                },
+                session.settings.clone(),
+                Some(("unsupported_capability", "idle fallback rejected")),
+            )
+            .await;
+        assert_eq!(
+            queued_instruction.unwrap().turn_id.as_deref(),
+            Some(work.turn_id.as_str())
+        );
+        let idle_session = client
+            .create_session(create_request("steer-idle-create", None))
+            .await
+            .unwrap();
+        let idle_rejected = client
+            .send_message_preflighted(
+                &idle_session.session_id,
+                SendMessageRequest {
+                    command_id: "steer-idle-rejected".into(),
+                    text: "unsupported".into(),
+                    delivery: Some(DeliveryMode::Immediate),
+                    ..Default::default()
+                },
+                client
+                    .session(&idle_session.session_id)
+                    .await
+                    .unwrap()
+                    .settings,
+                Some(("unsupported_capability", "idle fallback rejected")),
+            )
+            .await;
+        assert!(matches!(
+            idle_rejected,
+            Err(StoreError::Preflight("unsupported_capability", _))
+        ));
+        let resumed = client.claim_next_turn().await.unwrap().unwrap();
+        assert!(
+            resumed
+                .messages
+                .iter()
+                .any(|message| message.text == "change direction")
+        );
+        assert_eq!(resumed.turn_id, work.turn_id);
+        assert_eq!(resumed.initial_usage.input_tokens, Some(13));
+        assert_eq!(resumed.initial_usage.output_tokens, Some(2));
+        assert_eq!(resumed.initial_usage.total_tokens, Some(15));
+        client
+            .finish_chat_turn(
+                &resumed.turn_id,
+                slop_runtime::chat::ChatOutcome {
+                    text: String::new(),
+                    resolved_model: Some(resumed.requested_model.clone()),
+                    usage: resumed.initial_usage,
+                    status: slop_runtime::chat::ChatStatus::Interrupted,
+                    error_code: Some("steering_resume".into()),
+                    error_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let resumed_again = client.claim_next_turn().await.unwrap().unwrap();
+        assert!(
+            resumed_again
+                .messages
+                .iter()
+                .any(|message| message.text == "change direction")
+        );
+        assert!(
+            resumed_again
+                .messages
+                .iter()
+                .any(|message| message.text == "second direction")
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_resume_is_durable_and_keeps_the_workspace_request_cap() {
+        use slop_protocol::execution::WorkspacePolicy;
+        let dir = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let store = open_test(&dir, None).await;
+        let client = store.client();
+        let mut request = create_request("pause-create", None);
+        request.execution = Some(WorkspacePolicy {
+            root: workspace.path().to_string_lossy().into_owned(),
+            allowed_tools: vec!["read".into()],
+            shell_timeout_ms: 1000,
+            max_output_bytes: 1024,
+            max_tool_calls: 4,
+            max_model_requests: 2,
+        });
+        let created = client.create_session(request).await.unwrap();
+        let receipt = client
+            .send_message(
+                &created.session_id,
+                SendMessageRequest {
+                    command_id: "pause-turn-message".into(),
+                    text: "do work".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let work = client.claim_next_turn().await.unwrap().unwrap();
+        client
+            .pause_turn(
+                work.turn_id.as_str(),
+                TurnControlRequest {
+                    command_id: "pause-command".into(),
+                },
+            )
+            .await
+            .unwrap();
+        client
+            .finish_chat_turn(
+                &work.turn_id,
+                slop_runtime::chat::ChatOutcome {
+                    text: String::new(),
+                    resolved_model: Some(work.requested_model.clone()),
+                    usage: slop_runtime::providers::Usage::default(),
+                    status: slop_runtime::chat::ChatStatus::Interrupted,
+                    error_code: Some("pause_turn".into()),
+                    error_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(client.turn(&work.turn_id).await.unwrap().status, "paused");
+        assert!(client.claim_next_turn().await.unwrap().is_none());
+        let paused_instruction = client
+            .send_message_preflighted(
+                &created.session_id,
+                SendMessageRequest {
+                    command_id: "paused-steering".into(),
+                    text: "resume with this".into(),
+                    delivery: Some(DeliveryMode::NextBoundary),
+                    ..Default::default()
+                },
+                client.session(&created.session_id).await.unwrap().settings,
+                Some(("unsupported_capability", "unused while paused")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            paused_instruction.turn_id.as_deref(),
+            Some(work.turn_id.as_str())
+        );
+        client
+            .resume_turn(
+                &work.turn_id,
+                TurnControlRequest {
+                    command_id: "resume-command".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let resumed = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(resumed.turn_id, receipt.turn_id.unwrap());
+        assert_eq!(resumed.max_model_requests, 2);
+        assert!(
+            resumed
+                .messages
+                .iter()
+                .any(|message| message.text == "resume with this")
+        );
+    }
+
+    #[tokio::test]
+    async fn canceling_paused_continuation_rejects_accepted_instructions() {
+        let dir = TempDir::new().unwrap();
+        let store = open_test(&dir, None).await;
+        let client = store.client();
+        let created = client
+            .create_session(create_request("cancel-paused-create", None))
+            .await
+            .unwrap();
+        let receipt = client
+            .send_message(
+                &created.session_id,
+                SendMessageRequest {
+                    command_id: "cancel-paused-turn".into(),
+                    text: "start".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let work = client.claim_next_turn().await.unwrap().unwrap();
+        client
+            .pause_turn(
+                &work.turn_id,
+                TurnControlRequest {
+                    command_id: "cancel-paused-pause".into(),
+                },
+            )
+            .await
+            .unwrap();
+        client
+            .finish_chat_turn(
+                &work.turn_id,
+                slop_runtime::chat::ChatOutcome {
+                    text: String::new(),
+                    resolved_model: Some(work.requested_model),
+                    usage: slop_runtime::providers::Usage::default(),
+                    status: slop_runtime::chat::ChatStatus::Interrupted,
+                    error_code: Some("pause_turn".into()),
+                    error_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        client
+            .send_message_preflighted(
+                &created.session_id,
+                SendMessageRequest {
+                    command_id: "cancel-paused-instruction".into(),
+                    text: "not applied".into(),
+                    delivery: Some(DeliveryMode::Immediate),
+                    ..Default::default()
+                },
+                client.session(&created.session_id).await.unwrap().settings,
+                None,
+            )
+            .await
+            .unwrap();
+        client
+            .cancel_turn(
+                &work.turn_id,
+                CancelTurnRequest {
+                    command_id: "cancel-paused-cmd".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            client.turn(&work.turn_id).await.unwrap().status,
+            "cancelled"
+        );
+        let instructions = client
+            .steering_instructions(&created.session_id, None, 10)
+            .await
+            .unwrap()
+            .items;
+        assert_eq!(instructions[0].status, "rejected");
+        assert_eq!(
+            instructions[0].error_code.as_deref(),
+            Some("turn_cancelled")
+        );
+        assert_eq!(receipt.turn_id.as_deref(), Some(work.turn_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn immediate_unknown_usage_resumes_without_replaying_or_fabricating_totals() {
+        use slop_runtime::chat::ChatRepository;
+        let dir = TempDir::new().unwrap();
+        let store = open_test(&dir, None).await;
+        let client = store.client();
+        let created = client
+            .create_session(create_request("unknown-usage-create", None))
+            .await
+            .unwrap();
+        let receipt = client
+            .send_message(
+                &created.session_id,
+                SendMessageRequest {
+                    command_id: "unknown-usage-turn".into(),
+                    text: "start".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let work = client.claim_next_turn().await.unwrap().unwrap();
+        let request_id = "unknown-running-request";
+        client
+            .begin_request(
+                &work.turn_id,
+                slop_runtime::agent::RequestIntent {
+                    id: request_id.into(),
+                    message_id: "unknown-running-message".into(),
+                    ordinal: 1,
+                    requested_model: work.requested_model.clone(),
+                    requested_settings: work.requested_settings.clone(),
+                    settings: work.settings.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        client
+            .send_message_preflighted(
+                &created.session_id,
+                SendMessageRequest {
+                    command_id: "unknown-immediate".into(),
+                    text: "rethink".into(),
+                    delivery: Some(DeliveryMode::Immediate),
+                    ..Default::default()
+                },
+                client.session(&created.session_id).await.unwrap().settings,
+                None,
+            )
+            .await
+            .unwrap();
+        client
+            .fail_request(&work.turn_id, request_id, "steering_interrupted")
+            .await
+            .unwrap();
+        client
+            .finish_chat_turn(
+                &work.turn_id,
+                slop_runtime::chat::ChatOutcome {
+                    text: String::new(),
+                    resolved_model: None,
+                    usage: slop_runtime::providers::Usage::default(),
+                    status: slop_runtime::chat::ChatStatus::Interrupted,
+                    error_code: Some("steering_resume_unknown".into()),
+                    error_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let requests = client
+            .model_requests(&work.turn_id, None, 10)
+            .await
+            .unwrap()
+            .items;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].status, "interrupted");
+        assert_eq!(requests[0].usage, None);
+        let resumed = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(resumed.turn_id, receipt.turn_id.unwrap());
+        assert_eq!(resumed.next_request_ordinal, 2);
+        assert_eq!(resumed.initial_usage.input_tokens, None);
+        assert_eq!(resumed.initial_usage.output_tokens, None);
+        assert_eq!(resumed.initial_usage.total_tokens, None);
+        assert!(
+            resumed
+                .messages
+                .iter()
+                .any(|message| message.text == "rethink")
+        );
     }
 
     #[tokio::test]

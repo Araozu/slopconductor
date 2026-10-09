@@ -229,6 +229,21 @@ fn running(tx: &Transaction<'_>, turn: &str) -> StoreResult<String> {
     }
     Ok(session)
 }
+fn running_for_step(tx: &Transaction<'_>, turn: &str) -> StoreResult<Option<String>> {
+    let (session, status, cancel): (String, String, bool) = tx
+        .query_row(
+            "SELECT session_id,status,cancellation_requested FROM turns WHERE id=?1",
+            [turn],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|_| StoreError::Database)?
+        .ok_or(StoreError::NotFound)?;
+    if status != "running" {
+        return Err(StoreError::Conflict);
+    }
+    Ok((!cancel).then_some(session))
+}
 fn event(
     tx: &Transaction<'_>,
     session: &str,
@@ -247,11 +262,25 @@ pub(super) fn begin_request(
     connection: &Connection,
     turn: &str,
     intent: RequestIntent,
-) -> StoreResult<()> {
+) -> StoreResult<bool> {
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
-    let session = running(&tx, turn)?;
+    let Some(session) = running_for_step(&tx, turn)? else {
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(false);
+    };
+    let yielding: bool = tx
+        .query_row(
+            "SELECT pause_requested!=0 OR EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') FROM turns WHERE id=?1",
+            [turn],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    if yielding {
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(false);
+    }
     let ordinal = next_message_ordinal(&tx, turn)?;
     tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,request_id) VALUES(?1,?2,?3,?4,'assistant','','pending',?5)",rusqlite::params![intent.message_id,session,turn,ordinal,intent.id]).map_err(|_|StoreError::Database)?;
     tx.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status) VALUES(?1,?2,?3,?4,?5,?6,?7,'running')",rusqlite::params![intent.id,turn,intent.message_id,intent.ordinal,intent.requested_model,canonical(&intent.requested_settings)?,canonical(&intent.settings)?]).map_err(|_|StoreError::Database)?;
@@ -269,7 +298,8 @@ pub(super) fn begin_request(
         Some(&intent.id),
         None,
     )?;
-    tx.commit().map_err(|_| StoreError::Database)
+    tx.commit().map_err(|_| StoreError::Database)?;
+    Ok(true)
 }
 pub(super) fn checkpoint_request(
     connection: &Connection,
@@ -402,7 +432,10 @@ pub(super) fn fail_request(
     if status != "running" {
         return Ok(());
     }
-    let status = if matches!(code, "cancelled" | "daemon_shutdown") {
+    let status = if matches!(
+        code,
+        "cancelled" | "daemon_shutdown" | "steering_interrupted"
+    ) {
         "interrupted"
     } else {
         "failed"
@@ -432,11 +465,25 @@ pub(super) fn start_tool(
     connection: &Connection,
     turn: &str,
     intent: &ToolIntent,
-) -> StoreResult<()> {
+) -> StoreResult<bool> {
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
-    let session = running(&tx, turn)?;
+    let Some(session) = running_for_step(&tx, turn)? else {
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(false);
+    };
+    let yielding: bool = tx
+        .query_row(
+            "SELECT pause_requested!=0 OR EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') FROM turns WHERE id=?1",
+            [turn],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    if yielding {
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(false);
+    }
     tx.execute("UPDATE tool_invocations SET status='running' WHERE id=?1 AND turn_id=?2 AND status='intent'",rusqlite::params![intent.id,turn]).map_err(|_|StoreError::Database)?;
     if tx.changes() != 1 {
         return Err(StoreError::Conflict);
@@ -450,7 +497,8 @@ pub(super) fn start_tool(
         Some(&intent.request_id),
         Some(&intent.id),
     )?;
-    tx.commit().map_err(|_| StoreError::Database)
+    tx.commit().map_err(|_| StoreError::Database)?;
+    Ok(true)
 }
 fn finish_tool_tx(
     tx: &Transaction<'_>,
@@ -628,21 +676,89 @@ pub(super) fn claim_next_turn(
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
-    type Queued = (String, String, String, String, String, Option<String>);
-    let next:Option<Queued>=tx.query_row("SELECT t.id,t.session_id,t.requested_model,t.settings,t.requested_settings,s.execution FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.status='queued'
+    type Queued = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+        bool,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i64,
+    );
+    let next:Option<Queued>=tx.query_row("SELECT t.id,t.session_id,t.requested_model,t.settings,t.requested_settings,s.execution,t.resume_count,t.usage_unknown,t.input_tokens,t.output_tokens,t.total_tokens,t.total_source,(SELECT COALESCE(MAX(ordinal),0) FROM model_requests WHERE turn_id=t.id) FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.status='queued'
         AND NOT EXISTS(SELECT 1 FROM turns active WHERE active.session_id=t.session_id AND active.status='running')
-        AND NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN('queued','running'))
+        AND NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN('queued','running','paused'))
         AND (s.workspace_root IS NULL OR NOT EXISTS(SELECT 1 FROM turns busy JOIN sessions bs ON bs.id=busy.session_id WHERE busy.status='running' AND bs.workspace_root=s.workspace_root))
-        ORDER BY t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional().map_err(|_|StoreError::Database)?;
-    let Some((turn_id, session_id, requested_model, settings, requested_settings, execution)) =
-        next
+        ORDER BY t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?,r.get(12)?))).optional().map_err(|_|StoreError::Database)?;
+    let Some((
+        turn_id,
+        session_id,
+        requested_model,
+        settings,
+        requested_settings,
+        execution,
+        resume_count,
+        usage_unknown,
+        input,
+        output,
+        total,
+        total_source,
+        previous_ordinal,
+    )) = next
     else {
         tx.commit().map_err(|_| StoreError::Database)?;
         return Ok(None);
     };
     let settings: inference::GenerationSettings = decode(&settings)?;
     let requested_settings = decode(&requested_settings)?;
-    let execution = execution.map(|value| decode(&value)).transpose()?;
+    let execution: Option<WorkspacePolicy> = execution.map(|value| decode(&value)).transpose()?;
+    let steering_count: i64 = tx
+        .query_row(
+            "SELECT count(*) FROM steering_instructions WHERE turn_id=?1 AND status IN ('accepted','applied')",
+            [&turn_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    let tool_calls_used: i64 = tx
+        .query_row(
+            "SELECT count(*) FROM tool_invocations WHERE turn_id=?1",
+            [&turn_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    let base_request_limit = execution
+        .as_ref()
+        .map_or(1_i64, |policy| i64::from(policy.max_model_requests));
+    // Workspace policy is an explicit cumulative hard cap. Plain text retains
+    // its one-request default, with a small bounded continuation allowance.
+    let max_model_requests = if execution.is_some() {
+        base_request_limit.clamp(1, 64) as u32
+    } else {
+        base_request_limit
+            .saturating_add(steering_count)
+            .saturating_add(resume_count)
+            .clamp(1, 64) as u32
+    };
+    let initial_usage = if usage_unknown {
+        slop_runtime::providers::Usage::default()
+    } else {
+        slop_runtime::providers::Usage {
+            input_tokens: input.and_then(|value| value.parse().ok()),
+            output_tokens: output.and_then(|value| value.parse().ok()),
+            total_tokens: total.and_then(|value| value.parse().ok()),
+            total_source: total_source.and_then(|value| match value.as_str() {
+                "reported" => Some(slop_runtime::providers::UsageSource::Reported),
+                "derived" => Some(slop_runtime::providers::UsageSource::Derived),
+                _ => None,
+            }),
+        }
+    };
     let mut statement=tx.prepare("SELECT m.id,m.role,m.text,m.blocks,m.continuation FROM messages m JOIN turns t ON t.id=m.turn_id
         WHERE m.session_id=?1 AND m.status='completed' AND (t.status='completed' OR m.turn_id=?2 OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
         ORDER BY m.ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
@@ -727,6 +843,11 @@ pub(super) fn claim_next_turn(
         settings,
         requested_settings,
         execution,
+        next_request_ordinal: previous_ordinal.saturating_add(1).max(1) as u32,
+        max_model_requests,
+        tool_calls_used: tool_calls_used as u32,
+        initial_usage,
+        resume_count: resume_count.clamp(0, u32::MAX as i64) as u32,
     }))
 }
 

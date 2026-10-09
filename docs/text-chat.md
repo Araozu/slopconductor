@@ -72,9 +72,11 @@ anonymous. The daemon accepts loopback listeners only.
 | GET, POST /v1/sessions | Paginated listing or durable creation |
 | GET /v1/sessions/{id} | Session configuration, revision, and event watermark |
 | GET, POST /v1/sessions/{id}/messages | Paginated history or durable message/turn acceptance |
+| GET /v1/sessions/{id}/instructions | Paginated durable steering instruction status/history |
 | GET /v1/sessions/{id}/events | Replay from `after`; optional NDJSON following |
 | GET /v1/turns/{id} | Outcome, message IDs, requested/resolved model, and usage |
 | POST /v1/turns/{id}/cancel | Idempotent explicit cancellation |
+| POST /v1/turns/{id}/pause, /resume | Durable pause at safe boundaries and explicit fresh admission |
 
 Model readiness reports local configuration. It does not prove account
 entitlement, provider availability, or a successful paid inference. Unsupported
@@ -84,6 +86,13 @@ and out of session records, public responses, and diagnostics. The
 [credential API/CLI](provider-credentials.md) sets keys while the daemon runs;
 new admissions use the saved connection and active turns retain their original
 connection. Legacy environment keys are imported only when no saved key exists.
+
+The steering inbox is bounded to 32 pending instructions per logical turn.
+Plain-text turns retain a one-request default and receive at most one additional
+model request per accepted steering instruction or explicit resume, capped at
+64 total requests. Workspace execution keeps its configured `max_model_requests`
+as a hard cumulative limit. `next-boundary` applies between completed inference
+and tool steps, never in the middle of a token stream.
 
 The default model is `opencode-go/glm-5.3-flash`, with a 4,096-token output cap
 for providers that accept a cap and four concurrent requests across sessions.

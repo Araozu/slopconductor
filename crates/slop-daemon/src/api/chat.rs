@@ -44,6 +44,10 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
             "/v1/sessions/{session_id}/messages",
             get(messages).post(send_message),
         )
+        .route(
+            "/v1/sessions/{session_id}/instructions",
+            get(steering_instructions),
+        )
         .route("/v1/sessions/{session_id}/events", get(events))
         .route("/v1/turns/{turn_id}", get(turn))
         .route("/v1/turns/{turn_id}/requests", get(model_requests))
@@ -53,6 +57,8 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/artifacts/{id}", get(artifact))
         .route("/v1/artifacts/{id}/content", get(artifact_content))
         .route("/v1/turns/{turn_id}/cancel", post(cancel_turn))
+        .route("/v1/turns/{turn_id}/pause", post(pause_turn))
+        .route("/v1/turns/{turn_id}/resume", post(resume_turn))
         .route_layer(middleware::from_fn(normalize_rejections))
         .route_layer(middleware::from_fn_with_state(token, authorize_request))
 }
@@ -85,7 +91,26 @@ async fn capabilities() -> Json<slop_protocol::execution::CapabilitiesResponse> 
             .collect(),
         max_model_requests_per_turn: 64,
         max_tool_calls_per_turn: 128,
+        execution_steering: true,
+        turn_pause_resume: true,
     })
+}
+
+async fn steering_instructions(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<PageQuery>,
+) -> Response {
+    let limit = match checked_limit(query.limit) {
+        Ok(limit) => limit,
+        Err(error) => return error.into_response(),
+    };
+    storage_response(
+        state
+            .store
+            .steering_instructions(&session_id, query.after, limit)
+            .await,
+    )
 }
 async fn model_requests(
     State(state): State<Arc<AppState>>,
@@ -364,124 +389,132 @@ async fn send_message(
         Ok(session) => session,
         Err(error) => return store_error(error),
     };
-    let full_model = request
-        .model
-        .clone()
-        .unwrap_or_else(|| format!("{}/{}", session.provider, session.model));
-    let Ok(model_ref) = full_model.parse::<slop_core::provider::ProviderModelRef>() else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "unsupported_model",
-            "The requested model is not supported.",
-        );
+    let fallback = preflight_turn(
+        &state,
+        &session_id,
+        &session,
+        request.model.as_deref(),
+        request.settings.as_ref(),
+    )
+    .await;
+    let (fallback_settings, fallback_error) = match fallback {
+        Ok(settings) => (settings, None),
+        Err((code, message)) => (session.settings.clone(), Some((code, message))),
     };
-    let Some(provider) = slop_runtime::providers::provider(model_ref.provider()) else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "unsupported_model",
-            "The requested model is not supported.",
-        );
-    };
-    if provider.wire_protocol(model_ref.model()).is_err() {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "unsupported_model",
-            "The requested model is not supported.",
-        );
-    }
-    // Keep one auth/capability snapshot through preflight and settings freeze.
-    let client = state.runtime.provider_client(model_ref.provider().as_str());
-    let subscription = client.as_ref().is_some_and(|client| {
-        client.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription
-    });
+    if request.delivery.unwrap_or_default() == slop_protocol::chat::DeliveryMode::AfterTurn
+        && let Some((code, message)) = fallback_error
     {
-        let cap = request
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.max_output_tokens)
-            .or(session.settings.max_output_tokens);
-        if model_ref.provider() == slop_core::provider::ProviderId::Codex
-            && subscription
-            && cap.is_some()
-        {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "unsupported_capability",
-                "ChatGPT subscription requests do not support an output-token cap.",
-            );
-        }
-        if model_ref.provider() == slop_core::provider::ProviderId::Codex
-            && session
-                .execution
-                .as_ref()
-                .is_some_and(|policy| !policy.allowed_tools.is_empty())
-        {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "unsupported_capability",
-                "Codex text requests do not support workspace tools.",
-            );
-        }
-        let (has_non_text, required) = match state.store.context_requirements(&session_id).await {
-            Ok(value) => value,
-            Err(error) => return store_error(error),
-        };
-        let requested_wire = provider
-            .wire_protocol(model_ref.model())
-            .ok()
-            .map(|value| value.as_str().to_owned());
-        if context_incompatibility(
-            model_ref.provider().as_str(),
-            model_ref.model(),
-            requested_wire.as_deref().unwrap_or_default(),
-            has_non_text,
-            required,
-        )
-        .is_some()
-        {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "context_incompatible",
-                "The selected model cannot replay the stored structured context or required provider continuation.",
-            );
-        }
-    }
-    let mut effective = request
-        .settings
-        .clone()
-        .unwrap_or_else(|| session.settings.clone());
-    effective.max_output_tokens = effective
-        .max_output_tokens
-        .or(session.settings.max_output_tokens);
-    if effective.max_output_tokens.is_none() && !subscription {
-        effective.max_output_tokens = Some(state.runtime.max_tokens());
-    }
-    {
-        if provider.requires_output_limit() && effective.max_output_tokens.is_none() {
-            effective.max_output_tokens = Some(state.runtime.max_tokens());
-        }
-        let caps = client.as_ref().map_or_else(
-            || slop_runtime::providers::inference::capabilities(provider, model_ref.model()),
-            |client| client.capabilities(model_ref.model()),
-        );
-        if effective
-            .reasoning_effort
-            .as_ref()
-            .is_some_and(|effort| !caps.reasoning_efforts.contains(effort))
-        {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "unsupported_capability",
-                "The selected model does not support the requested reasoning setting.",
-            );
-        }
+        return error(StatusCode::BAD_REQUEST, code, message);
     }
     accepted(
         state
             .store
-            .send_message_with_effective_settings(&session_id, request, Some(effective))
+            .send_message_preflighted(&session_id, request, fallback_settings, fallback_error)
             .await,
     )
+}
+
+async fn preflight_turn(
+    state: &AppState,
+    session_id: &str,
+    session: &slop_protocol::chat::SessionResponse,
+    selected_model: Option<&str>,
+    requested_settings: Option<&slop_protocol::execution::GenerationSettings>,
+) -> Result<slop_protocol::execution::GenerationSettings, (&'static str, &'static str)> {
+    use slop_core::provider::ProviderModelRef;
+    let full_model = selected_model.map_or_else(
+        || format!("{}/{}", session.provider, session.model),
+        str::to_owned,
+    );
+    let model_ref = full_model
+        .parse::<ProviderModelRef>()
+        .map_err(|_| ("unsupported_model", "The requested model is not supported."))?;
+    let provider = slop_runtime::providers::provider(model_ref.provider())
+        .ok_or(("unsupported_model", "The requested model is not supported."))?;
+    if provider.wire_protocol(model_ref.model()).is_err() {
+        return Err(("unsupported_model", "The requested model is not supported."));
+    }
+    let client = state.runtime.provider_client(model_ref.provider().as_str());
+    let subscription = client.as_ref().is_some_and(|client| {
+        client.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription
+    });
+    let mut effective = requested_settings
+        .cloned()
+        .unwrap_or_else(|| session.settings.clone());
+    effective.max_output_tokens = effective
+        .max_output_tokens
+        .or(session.settings.max_output_tokens);
+    if model_ref.provider() == slop_core::provider::ProviderId::Codex
+        && subscription
+        && effective.max_output_tokens.is_some()
+    {
+        return Err((
+            "unsupported_capability",
+            "ChatGPT subscription requests do not support an output-token cap.",
+        ));
+    }
+    if model_ref.provider() == slop_core::provider::ProviderId::Codex
+        && session
+            .execution
+            .as_ref()
+            .is_some_and(|policy| !policy.allowed_tools.is_empty())
+    {
+        return Err((
+            "unsupported_capability",
+            "Codex text requests do not support workspace tools.",
+        ));
+    }
+    let (has_non_text, required) =
+        state
+            .store
+            .context_requirements(session_id)
+            .await
+            .map_err(|_| {
+                (
+                    "storage_unavailable",
+                    "Stored context could not be checked.",
+                )
+            })?;
+    let wire = provider
+        .wire_protocol(model_ref.model())
+        .ok()
+        .map(|value| value.as_str().to_owned())
+        .unwrap_or_default();
+    if context_incompatibility(
+        model_ref.provider().as_str(),
+        model_ref.model(),
+        &wire,
+        has_non_text,
+        required,
+    )
+    .is_some()
+    {
+        return Err((
+            "context_incompatible",
+            "The selected model cannot replay the stored structured context or required provider continuation.",
+        ));
+    }
+    if effective.max_output_tokens.is_none() && !subscription {
+        effective.max_output_tokens = Some(state.runtime.max_tokens());
+    }
+    if provider.requires_output_limit() && effective.max_output_tokens.is_none() {
+        effective.max_output_tokens = Some(state.runtime.max_tokens());
+    }
+    let caps = client.as_ref().map_or_else(
+        || slop_runtime::providers::inference::capabilities(provider, model_ref.model()),
+        |client| client.capabilities(model_ref.model()),
+    );
+    if effective
+        .reasoning_effort
+        .as_ref()
+        .is_some_and(|effort| !caps.reasoning_efforts.contains(effort))
+    {
+        return Err((
+            "unsupported_capability",
+            "The selected model does not support the requested reasoning setting.",
+        ));
+    }
+    Ok(effective)
 }
 
 fn context_incompatibility(
@@ -522,6 +555,22 @@ async fn cancel_turn(
         );
     }
     accepted(state.store.cancel_turn(&turn_id, request).await)
+}
+
+async fn pause_turn(
+    State(state): State<Arc<AppState>>,
+    Path(turn_id): Path<String>,
+    Json(request): Json<slop_protocol::chat::TurnControlRequest>,
+) -> Response {
+    storage_response(state.store.pause_turn(&turn_id, request).await)
+}
+
+async fn resume_turn(
+    State(state): State<Arc<AppState>>,
+    Path(turn_id): Path<String>,
+    Json(request): Json<slop_protocol::chat::TurnControlRequest>,
+) -> Response {
+    storage_response(state.store.resume_turn(&turn_id, request).await)
 }
 
 async fn events(
@@ -739,6 +788,12 @@ fn store_error(store_error: StoreError) -> Response {
         StoreError::Unsupported(field) => {
             error(StatusCode::BAD_REQUEST, "unsupported_capability", field)
         }
+        StoreError::ActiveTurnOverride => error(
+            StatusCode::BAD_REQUEST,
+            "active_turn_override",
+            "An instruction attached to an active turn cannot change its frozen model or settings.",
+        ),
+        StoreError::Preflight(code, message) => error(StatusCode::BAD_REQUEST, code, message),
         StoreError::Limit => error(
             StatusCode::TOO_MANY_REQUESTS,
             "queue_limit",

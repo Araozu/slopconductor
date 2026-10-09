@@ -136,8 +136,8 @@ impl FixtureRepository {
 
 impl ChatRepository for FixtureRepository {
     // This fixture exercises text-only scheduling; tool persistence must fail closed.
-    fn begin_request<'a>(&'a self, _: &'a str, _: RequestIntent) -> RepoFuture<'a, ()> {
-        Box::pin(async { Ok(()) })
+    fn begin_request<'a>(&'a self, _: &'a str, _: RequestIntent) -> RepoFuture<'a, bool> {
+        Box::pin(async { Ok(true) })
     }
     fn checkpoint_request<'a>(
         &'a self,
@@ -160,7 +160,7 @@ impl ChatRepository for FixtureRepository {
     fn fail_request<'a>(&'a self, _: &'a str, _: &'a str, _: &'a str) -> RepoFuture<'a, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn start_tool<'a>(&'a self, _: &'a str, _: &'a ToolIntent) -> RepoFuture<'a, ()> {
+    fn start_tool<'a>(&'a self, _: &'a str, _: &'a ToolIntent) -> RepoFuture<'a, bool> {
         Box::pin(async { Err(io::Error::other("text fixture has no tools").into()) })
     }
     fn finish_tool<'a>(
@@ -209,6 +209,14 @@ impl ChatRepository for FixtureRepository {
     fn cancellation_requested<'a>(&'a self, _turn_id: &'a str) -> RepoFuture<'a, bool> {
         Box::pin(async move { Ok(self.cancellation) })
     }
+
+    fn turn_control<'a>(&'a self, _turn_id: &'a str) -> RepoFuture<'a, crate::chat::TurnControl> {
+        Box::pin(async { Ok(crate::chat::TurnControl::default()) })
+    }
+
+    fn retain_provider_snapshot<'a>(&'a self, _turn_id: &'a str) -> RepoFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
 }
 
 #[tokio::test]
@@ -223,7 +231,7 @@ async fn real_provider_transport_streams_visible_text_and_commits_terminal_respo
                 move |State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
                 requests.lock().unwrap().push(body);
                 let first = json!({"id":"fixture","model":"glm-5.3-flash","choices":[{"delta":{"content":expected_text,"reasoning_content":"private thought"},"finish_reason":null}]});
-                let terminal = json!({"id":"fixture","model":"glm-5.3-flash","choices":[{"delta":{},"finish_reason":"stop"}]});
+                let terminal = json!({"id":"fixture","model":"glm-5.3-flash","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":13,"completion_tokens":2,"total_tokens":15}});
                 let body = format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", first, terminal);
                 Response::builder()
                     .status(StatusCode::OK)
@@ -256,6 +264,9 @@ async fn real_provider_transport_streams_visible_text_and_commits_terminal_respo
     assert_eq!(outcome.status, chat::ChatStatus::Completed, "{outcome:?}");
     assert_eq!(outcome.text, expected_text);
     assert_eq!(outcome.resolved_model.as_deref(), Some("glm-5.3-flash"));
+    assert_eq!(outcome.usage.input_tokens, Some(13));
+    assert_eq!(outcome.usage.output_tokens, Some(2));
+    assert_eq!(outcome.usage.total_tokens, Some(15));
     assert_eq!(requests.lock().unwrap().len(), 1);
     assert_eq!(requests.lock().unwrap()[0]["model"], "glm-5.3-flash");
     let mut emitted = Vec::new();

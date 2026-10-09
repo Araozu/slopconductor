@@ -4,7 +4,7 @@
 //! Tokio runtime. A request connection never owns or waits for execution.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
     future::Future,
     pin::Pin,
@@ -33,7 +33,8 @@ pub type RepoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepoError>> +
 /// Storage boundary for accepted chat turns. Implementations own transaction
 /// semantics and wire-independent persistence; the runtime never sees SQL/DTOs.
 pub trait ChatRepository: Send + Sync + 'static {
-    fn begin_request<'a>(&'a self, turn_id: &'a str, intent: RequestIntent) -> RepoFuture<'a, ()>;
+    fn begin_request<'a>(&'a self, turn_id: &'a str, intent: RequestIntent)
+    -> RepoFuture<'a, bool>;
     fn checkpoint_request<'a>(
         &'a self,
         turn_id: &'a str,
@@ -52,7 +53,7 @@ pub trait ChatRepository: Send + Sync + 'static {
         request_id: &'a str,
         code: &'a str,
     ) -> RepoFuture<'a, ()>;
-    fn start_tool<'a>(&'a self, turn_id: &'a str, intent: &'a ToolIntent) -> RepoFuture<'a, ()>;
+    fn start_tool<'a>(&'a self, turn_id: &'a str, intent: &'a ToolIntent) -> RepoFuture<'a, bool>;
     fn finish_tool<'a>(
         &'a self,
         turn_id: &'a str,
@@ -69,6 +70,19 @@ pub trait ChatRepository: Send + Sync + 'static {
     /// Read the durable cancellation bit. Runtime polls it while inference is
     /// in flight; there is no automatic replay after interruption.
     fn cancellation_requested<'a>(&'a self, turn_id: &'a str) -> RepoFuture<'a, bool>;
+    /// Read durable boundary controls. A pending instruction never enters
+    /// context until `finish_turn` atomically applies it and queues a replan.
+    fn turn_control<'a>(&'a self, turn_id: &'a str) -> RepoFuture<'a, TurnControl>;
+    /// A queued turn is a same-process continuation only after boundary steering.
+    fn retain_provider_snapshot<'a>(&'a self, turn_id: &'a str) -> RepoFuture<'a, bool>;
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TurnControl {
+    pub cancellation_requested: bool,
+    pub immediate_requested: bool,
+    pub pause_requested: bool,
+    pub steering_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +112,11 @@ pub struct TurnWork {
     pub settings: GenerationSettings,
     pub requested_settings: GenerationSettings,
     pub execution: Option<WorkspacePolicy>,
+    pub next_request_ordinal: u32,
+    pub max_model_requests: u32,
+    pub tool_calls_used: u32,
+    pub initial_usage: Usage,
+    pub resume_count: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,20 +377,58 @@ async fn run_scheduler<R: ChatRepository>(
     scheduler_healthy: Arc<AtomicBool>,
     tools: Arc<ToolService>,
 ) {
-    let mut turns = tokio::task::JoinSet::new();
+    let mut turns: tokio::task::JoinSet<(String, bool)> = tokio::task::JoinSet::new();
+    // Bound to active steering continuations only. Paused and terminal turns
+    // release the snapshot so credential rotation is visible at fresh admission.
+    struct PinnedProvider {
+        client: Arc<dyn ProviderClient>,
+        resume_count: u32,
+    }
+    let mut pinned_providers: HashMap<String, PinnedProvider> = HashMap::new();
+    let mut active_turns = HashSet::new();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut claim_failures = 0_u8;
     loop {
         if *shutdown.borrow() {
             break;
         }
+        let pinned_ids: Vec<String> = pinned_providers.keys().cloned().collect();
+        for turn_id in pinned_ids {
+            if active_turns.contains(&turn_id) {
+                continue;
+            }
+            if matches!(
+                repository.retain_provider_snapshot(&turn_id).await,
+                Ok(false)
+            ) {
+                pinned_providers.remove(&turn_id);
+            }
+        }
         let permit = tokio::select! {
             _ = shutdown.changed() => break,
             joined = turns.join_next(), if !turns.is_empty() => {
-                if matches!(joined, Some(Ok(false) | Err(_))) {
-                    scheduler_healthy.store(false, Ordering::Release);
-                    let _ = shutdown_sender.send(true);
-                    break;
+                if let Some(joined) = joined {
+                    match joined {
+                        Ok((turn_id, true)) => {
+                            active_turns.remove(&turn_id);
+                            if matches!(repository.retain_provider_snapshot(&turn_id).await, Ok(false)) {
+                                pinned_providers.remove(&turn_id);
+                            }
+                        }
+                        Ok((turn_id, false)) => {
+                            active_turns.remove(&turn_id);
+                            pinned_providers.remove(&turn_id);
+                            scheduler_healthy.store(false, Ordering::Release);
+                            let _ = shutdown_sender.send(true);
+                            break;
+                        }
+                        Err(_) => {
+                            pinned_providers.clear();
+                            scheduler_healthy.store(false, Ordering::Release);
+                            let _ = shutdown_sender.send(true);
+                            break;
+                        }
+                    }
                 }
                 continue;
             },
@@ -391,10 +448,15 @@ async fn run_scheduler<R: ChatRepository>(
                 tokio::select! {
                     _ = shutdown.changed() => break,
                     joined = turns.join_next(), if !turns.is_empty() => {
-                        if matches!(joined, Some(Ok(false) | Err(_))) {
-                            scheduler_healthy.store(false, Ordering::Release);
-                            let _ = shutdown_sender.send(true);
-                            break;
+                        if let Some(joined) = joined {
+                            match joined {
+                                Ok((turn_id, true)) => {
+                                    active_turns.remove(&turn_id);
+                                    if matches!(repository.retain_provider_snapshot(&turn_id).await, Ok(false)) { pinned_providers.remove(&turn_id); }
+                                }
+                                Ok((turn_id, false)) => { active_turns.remove(&turn_id); pinned_providers.remove(&turn_id); scheduler_healthy.store(false, Ordering::Release); let _ = shutdown_sender.send(true); break; }
+                                Err(_) => { pinned_providers.clear(); scheduler_healthy.store(false, Ordering::Release); let _ = shutdown_sender.send(true); break; }
+                            }
                         }
                         continue;
                     },
@@ -419,8 +481,25 @@ async fn run_scheduler<R: ChatRepository>(
         };
         let mut failed_turn = false;
         while let Some(joined) = turns.try_join_next() {
-            if matches!(joined, Ok(false) | Err(_)) {
-                failed_turn = true;
+            match joined {
+                Ok((turn_id, true)) => {
+                    active_turns.remove(&turn_id);
+                    if matches!(
+                        repository.retain_provider_snapshot(&turn_id).await,
+                        Ok(false)
+                    ) {
+                        pinned_providers.remove(&turn_id);
+                    }
+                }
+                Ok((turn_id, false)) => {
+                    active_turns.remove(&turn_id);
+                    pinned_providers.remove(&turn_id);
+                    failed_turn = true;
+                }
+                Err(_) => {
+                    pinned_providers.clear();
+                    failed_turn = true;
+                }
             }
         }
         if failed_turn {
@@ -431,13 +510,39 @@ async fn run_scheduler<R: ChatRepository>(
             break;
         }
         let repository = Arc::clone(&repository);
-        let providers = providers.borrow().clone();
+        let turn_id = work.turn_id.clone();
+        let mut provider_map = providers.borrow().clone();
+        if let Ok(model) = work
+            .requested_model
+            .parse::<slop_core::provider::ProviderModelRef>()
+        {
+            let id = model.provider().as_str().to_owned();
+            if pinned_providers
+                .get(&turn_id)
+                .is_some_and(|pin| pin.resume_count != work.resume_count)
+            {
+                pinned_providers.remove(&turn_id);
+            }
+            if let Some(provider) = pinned_providers.get(&turn_id) {
+                provider_map.insert(id, Arc::clone(&provider.client));
+            } else if let Some(provider) = provider_map.get(&id).cloned() {
+                pinned_providers.insert(
+                    turn_id.clone(),
+                    PinnedProvider {
+                        client: provider,
+                        resume_count: work.resume_count,
+                    },
+                );
+            }
+        }
+        let providers = provider_map;
         let deltas = deltas.clone();
         let mut turn_shutdown = shutdown.clone();
         let tools = Arc::clone(&tools);
+        active_turns.insert(turn_id.clone());
         turns.spawn(async move {
             let _permit = permit;
-            crate::agent::execute(
+            let result = crate::agent::execute(
                 repository,
                 providers,
                 deltas,
@@ -445,11 +550,12 @@ async fn run_scheduler<R: ChatRepository>(
                 &mut turn_shutdown,
                 tools,
             )
-            .await
+            .await;
+            (turn_id, result)
         });
     }
     while let Some(joined) = turns.join_next().await {
-        if matches!(joined, Ok(false) | Err(_)) {
+        if matches!(joined, Ok((_, false)) | Err(_)) {
             scheduler_healthy.store(false, Ordering::Release);
             let _ = shutdown_sender.send(true);
         }

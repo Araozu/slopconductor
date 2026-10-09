@@ -16,6 +16,7 @@ use super::Context;
 pub(super) struct TurnSelection {
     pub model: Option<String>,
     pub settings: Option<slop_protocol::execution::GenerationSettings>,
+    pub delivery: Option<slop_protocol::chat::DeliveryMode>,
 }
 
 pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()> {
@@ -66,11 +67,18 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
             model,
             effort,
             max_output_tokens,
+            delivery,
         } => {
             let text = prompt_value(text, prompt_file).await?;
             let command_id = choose_command_id(command_id)?;
             let selection = TurnSelection {
                 model,
+                delivery: delivery.map(|value| match value.as_str() {
+                    "after-turn" => slop_protocol::chat::DeliveryMode::AfterTurn,
+                    "next-boundary" => slop_protocol::chat::DeliveryMode::NextBoundary,
+                    "immediate" => slop_protocol::chat::DeliveryMode::Immediate,
+                    _ => unreachable!("CLI validates delivery mode"),
+                }),
                 settings: if effort.is_some() || max_output_tokens.is_some() {
                     Some(slop_protocol::execution::GenerationSettings {
                         max_output_tokens,
@@ -111,6 +119,7 @@ pub(super) async fn send_and_follow(
         command_id: command_id.clone(),
         text,
         expected_revision: None,
+        delivery: selection.delivery,
         model: selection.model,
         settings: selection.settings,
     };

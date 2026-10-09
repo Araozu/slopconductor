@@ -99,6 +99,10 @@ pub struct CapabilitiesResponse {
     pub tools: Vec<ToolDescriptor>,
     pub max_model_requests_per_turn: u32,
     pub max_tool_calls_per_turn: u32,
+    #[serde(default)]
+    pub execution_steering: bool,
+    #[serde(default)]
+    pub turn_pause_resume: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

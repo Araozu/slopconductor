@@ -208,8 +208,9 @@ tool families remain separate work.
 Persist invocation intent and known outcome. Discard interrupted thinking after a
 crash. Mark unfinished tools failed due to daemon/process failure without
 restoring or replaying them, preserving possible unknown effects. The agent
-chooses its next action. Implement next-boundary steering, interruption,
-pause checkpoints, cancellation, and awaiting-input events.
+chooses its next action. Text-chat next-boundary/immediate steering, durable
+pause/resume, cancellation, accepted/applied events, and restart behavior are
+implemented. General run awaiting-input events remain future work.
 
 Acceptance: use failure injection around persistence/launch/completion to verify
 known results are reused and unknown edits/commands are not blindly replayed.

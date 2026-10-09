@@ -1,5 +1,5 @@
 use slop_client::DaemonClient;
-use slop_protocol::chat::CancelTurnRequest;
+use slop_protocol::chat::{CancelTurnRequest, TurnControlRequest};
 
 use crate::{
     Result,
@@ -50,8 +50,39 @@ pub(super) async fn run(command: TurnCommand, context: &Context) -> Result<()> {
         TurnCommand::Cancel { id, command_id } => {
             cancel_turn(&client, &id, command_id, context.output).await?;
         }
+        TurnCommand::Pause { id, command_id } => {
+            control_turn(&client, &id, command_id, context.output, true).await?;
+        }
+        TurnCommand::Resume { id, command_id } => {
+            control_turn(&client, &id, command_id, context.output, false).await?;
+        }
     }
     Ok(())
+}
+
+async fn control_turn(
+    client: &DaemonClient,
+    turn_id: &str,
+    command_id: Option<String>,
+    output: Output,
+    pause: bool,
+) -> Result<()> {
+    let command_id = choose_command_id(command_id)?;
+    let request = TurnControlRequest {
+        command_id: command_id.clone(),
+    };
+    let result = if pause {
+        client.pause_turn(turn_id, &request).await
+    } else {
+        client.resume_turn(turn_id, &request).await
+    };
+    let receipt = result.map_err(|error| mutation_error(error, &command_id))?;
+    output.value(&receipt, || {
+        println!(
+            "{} accepted for turn {turn_id}",
+            if pause { "pause" } else { "resume" }
+        )
+    })
 }
 
 pub(super) async fn cancel_turn(

@@ -12,7 +12,8 @@ migration, an exclusive data-directory lock, and one bounded database worker.
 Schema version 2 added sessions, text turns, ordered messages, command receipts,
 and semantic events. Schema 3 adds structured blocks, private continuation,
 frozen settings, model requests, tool intents/results, workspace roots, and
-artifact metadata. See [structured execution](structured-execution.md). The worker
+artifact metadata. Schema 4 adds durable steering instructions and
+pause/resume/usage-uncertainty state. See [structured execution](structured-execution.md). The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,
 and a bounded busy timeout. Node identity and display-name changes commit in a
 transaction before startup is announced.
@@ -150,9 +151,10 @@ At startup, classify work using recorded state:
 
 Current startup restores node identity and chat history, marks running text turns
 interrupted without reissuing inference, and leaves undispatched queued turns
-eligible for admission. Unfinished tools receive paired failure records with
+eligible for admission. Paused turns remain paused; accepted steering attached
+to a crashed running turn is rejected with a durable event. Unfinished tools receive paired failure records with
 uncertain effects when started; completed steps are preserved and no operation
-is replayed. Pause and handoff recovery remain planned.
+is replayed. Handoff recovery remains planned.
 A future durable outbox for peer replication contains committed
 application records.
 Its backpressure does not prevent ordinary local execution indefinitely.

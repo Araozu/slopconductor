@@ -29,8 +29,19 @@ orchestration remains proposed.
 
 The following is the target general task loop. The implemented user-turn loop
 covers model intent, structured completion, tool policy/dispatch/results, budgets,
-streaming, cancellation, and terminal/recovery records. Task inboxes, children,
-and pause/resume remain proposed.
+streaming, cancellation, boundary/immediate steering, explicit pause/resume, and
+terminal/recovery records. Task inboxes, children, and general run orchestration
+remain proposed.
+
+Steering instructions are durably accepted with command IDs and applied once at
+execution boundaries. Next-boundary delivery never interrupts the current
+inference or tool. Immediate delivery cancels in-flight inference and supervised
+Bash, waits for actual file-operation outcomes, pairs any unstarted tool intents
+with skipped results, and then replans. An interrupted inference's usage is
+unknown and its incomplete reasoning is excluded from context. Paused turns
+release concurrency slots, block later turns in their session, survive restart,
+and resume only after an explicit command. A resumed pause is a fresh admission;
+same-turn steering continuations retain the provider snapshot.
 
 One admitted run has a serialized supervisor and bounded command inbox:
 

@@ -31,6 +31,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         tools,
         effort,
         max_output_tokens,
+        delivery,
     } = args;
     let input = prompt_value_optional(prompt, prompt_file).await?;
     let interactive = input.is_none() && io::stdin().is_terminal();
@@ -52,6 +53,12 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         TurnSelection {
             model: model.clone(),
             settings: settings.clone(),
+            delivery: delivery.map(|value| match value.as_str() {
+                "after-turn" => slop_protocol::chat::DeliveryMode::AfterTurn,
+                "next-boundary" => slop_protocol::chat::DeliveryMode::NextBoundary,
+                "immediate" => slop_protocol::chat::DeliveryMode::Immediate,
+                _ => unreachable!("CLI validates delivery mode"),
+            }),
         }
     } else {
         TurnSelection::default()

@@ -116,10 +116,12 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET, POST /v1/sessions | Implemented: list/create conversations owned by this node |
 | GET /v1/sessions/{id} | Implemented: snapshot with revision and event watermark |
 | GET /v1/sessions/{id}/messages | Implemented: paginated durable conversation |
-| POST /v1/sessions/{id}/messages | Implemented: accept a user message with optional model/settings and queue one turn |
+| POST /v1/sessions/{id}/messages | Implemented: accept a message with optional model/settings and `after-turn`, `next-boundary`, or `immediate` delivery |
+| GET /v1/sessions/{id}/instructions | Implemented: query durable steering status/history |
 | GET /v1/sessions/{id}/events | Implemented: catch up and optionally follow NDJSON session events |
 | GET /v1/turns/{id} | Implemented: turn status, message/request/invocation IDs, frozen settings, model, and usage |
 | POST /v1/turns/{id}/cancel | Implemented: durable turn cancellation |
+| POST /v1/turns/{id}/pause, /resume | Implemented: pause at safe boundaries and explicitly readmit paused turns |
 | GET /v1/messages/{id} | Implemented: canonical structured message |
 | GET /v1/turns/{id}/requests | Implemented: paginated model requests/settings/usage |
 | GET /v1/turns/{id}/tools | Implemented: paginated tool invocations/results |
@@ -198,19 +200,33 @@ tool outputs are streamed artifacts or chunk references, with bounded previews.
 
 ## Steering semantics
 
-Text chat currently queues complete user messages in acceptance order, with one
-active turn per session. It does not modify a request already in flight. Explicit
-turn cancellation is supported. The richer steering modes below are proposals.
+Text chat supports three delivery modes on `POST /v1/sessions/{id}/messages`:
 
-`append_only` records context without starting work. `queue_for_next_boundary`
-targets the active task and applies the message before an appropriate model turn.
-`interrupt_and_apply` requests interruption, waits for tool reconciliation, and
-starts the next turn with the correction.
+- `after-turn` (omitted by default) queues a regular turn after current work.
+- `next-boundary` targets the active logical turn and applies the instruction
+  after the current inference or tool has reached a completed boundary and
+  before its next model request or tool launch. It does not act at token-level
+  streaming boundaries. A yielded continuation and paused turn remain valid
+  targets.
+- `immediate` interrupts in-flight inference or signals cancellation to
+  supervised Bash, then waits for the operation's actual outcome. File
+  operations already started finish and record their result. Interrupted
+  inference usage is unknown; incomplete reasoning and private continuation are
+  discarded.
 
-An idle session requires explicit task creation to start execution. Provider
-support determines whether an in-flight inference can be steered directly or
-must be canceled/reissued. The capability response and events disclose the
-actual behavior. Clients show accepted and applied states separately.
+Idle delivery falls back to ordinary turn admission. Instructions have durable
+IDs, accepted/applied/rejected status, and semantic events. `GET
+/v1/sessions/{id}/instructions` lists their bounded history. `POST
+/v1/turns/{id}/pause` and `/resume` persist pause state; a paused turn releases
+the execution slot, prevents later same-session turns from overtaking it, and
+never resumes automatically after restart. Resume reuses committed steps and
+cumulative budgets without replaying tools. Model/settings overrides are
+rejected for instructions attached to an active logical turn.
+
+After a model response proposes multiple tools, steering is applied only after
+all proposals have explicit paired results. Pending, unstarted side effects are
+recorded as skipped before a fresh model decision. Unknown tool outcomes are
+never replayed.
 
 Concurrent messages are sequenced by the owner. An expected revision can prevent
 an instruction based on stale state from being silently applied.
@@ -227,9 +243,11 @@ Retryable transport failure does not imply the command was unaccepted. Recheck
 using the same command identity. A non-idempotent operation gets no hidden
 automatic retry beyond the command acceptance mechanism.
 
-Human diagnostics go to stderr; JSON output goes to stdout. The CLI can exit
-after acceptance, follow events, or explicitly wait for completion. These modes
-do not change daemon ownership.
+Human diagnostics go to stderr; JSON output goes to stdout. `slop session send`
+and `slop chat --session` accept `--delivery after-turn|next-boundary|immediate`;
+`slop turn pause|resume` controls durable pauses. The CLI can exit after
+acceptance, follow events, or explicitly wait for completion. These modes do
+not change daemon ownership.
 
 ## Authentication and remote forwarding
 

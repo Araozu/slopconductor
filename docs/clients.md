@@ -73,13 +73,22 @@ The proposed broader command groups are:
 | daemon | Inspect local service health and eventually install/manage startup |
 | transfer | Future export/handoff commands after migration exists |
 
-All examples below are **proposed syntax**, not implemented commands:
+These execution controls are implemented by the current CLI:
+
+```sh
+slop session send SESSION_ID --text "Keep the public API unchanged" --delivery after-turn
+slop session send SESSION_ID --text "Use the new endpoint" --delivery next-boundary
+slop session send SESSION_ID --text "Stop the command and reconsider" --delivery immediate
+slop turn pause TURN_ID
+slop turn resume TURN_ID
+```
+
+The remaining examples below are **proposed syntax**:
 
 ```sh
 slop project add /path/to/repo --name app
 slop task create --project app --model provider/model --prompt-file task.md
 slop task follow TASK_ID --events
-slop session send SESSION_ID --text "Preserve the public API" --at-next-boundary
 slop batch preview --file examples/batch-request.json --json
 slop batch submit --file examples/batch-request.json --json
 slop task cancel TASK_ID

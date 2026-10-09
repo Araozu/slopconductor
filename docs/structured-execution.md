@@ -237,14 +237,17 @@ symlink escapes, output bounds, process cancellation, workspace leases,
 frozen settings, migration, recovery, and artifact integrity. The real-binary
 smoke check adds a complete read/write/edit/Bash workflow, the exact four-tool
 capability set and restricted allowlists, canonical client rendering,
-authentication on new routes, restart without tool replay, and per-turn selection.
+authentication on new routes, restart without tool replay, per-turn selection,
+all delivery modes, tool cancellation/replanning, provider snapshot rotation,
+and paused-turn restart/resume.
 All provider traffic in the new checks is offline. Linux is exercised; Windows
 supervision is implemented but needs a native Windows run. No new live tool call
 or paid model test is claimed.
 
-General task/run controls, pause/resume, child agents, worktree orchestration,
-account quotas, hosted tools, media attachments, reasoning summaries, remote
-pairing, and graphical clients remain outside this slice. Transport assumptions
+General task/run controls, child agents, worktree orchestration, account quotas,
+hosted tools, media attachments, reasoning summaries, remote pairing, and
+graphical clients remain outside this slice. Text-chat turn pause/resume and
+steering are implemented without general task/run orchestration. Transport assumptions
 follow the [provider references](provider-interface.md#decoder-references), plus
 [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
 and [Anthropic tool definitions](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).

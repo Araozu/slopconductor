@@ -14,8 +14,11 @@ cancellation, and a consumer CLI. Runtime provider credential commands persist
 secrets in private XDG storage, replace active provider connections without
 restart, and own ChatGPT authorization in the daemon. Structured Go/Zen execution adds explicit workspace tools, durable
 request/invocation records, artifacts, block-aware streaming, and per-turn model
-settings. The 2026-10-09 tool update limits coding tools to `read`, `write`,
-`edit`, and `bash`. General task orchestration remains planned. Commands,
+settings. Execution steering supports after-turn, next-boundary, and immediate
+delivery, plus durable pause/resume with explicit re-admission. Same-turn
+steering keeps its provider snapshot; a resumed pause takes a fresh snapshot.
+The 2026-10-09 tool update limits coding tools to `read`, `write`, `edit`, and
+`bash`. General task orchestration remains planned. Commands,
 schemas, and workflows marked proposed describe future work.
 
 ## Reading order

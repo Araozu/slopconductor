@@ -225,6 +225,8 @@ async fn health() -> Json<HealthResponse> {
             "structured-messages".to_owned(),
             "tools".to_owned(),
             "per-turn-settings".to_owned(),
+            "execution-steering".to_owned(),
+            "turn-pause-resume".to_owned(),
         ],
     })
 }

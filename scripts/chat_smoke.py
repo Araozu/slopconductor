@@ -25,7 +25,10 @@ class ProviderFixture:
     def __init__(self):
         self.lock = threading.Lock()
         self.requests = []
-        self.gates = [threading.Event() for _ in range(4)]
+        self.authorizations = []
+        self.gates = [threading.Event() for _ in range(32)]
+        self.held_indices = set()
+        self.valid_keys = {"offline-test-key"}
 
         fixture = self
 
@@ -36,12 +39,13 @@ class ProviderFixture:
                     return
                 size = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(size))
-                if self.headers.get("Authorization") != "Bearer offline-test-key":
+                if self.headers.get("Authorization") not in {f"Bearer {key}" for key in fixture.valid_keys}:
                     self.send_error(401)
                     return
                 with fixture.lock:
                     index = len(fixture.requests)
                     fixture.requests.append(payload)
+                    fixture.authorizations.append(self.headers.get("Authorization"))
                 if index == 2:
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
@@ -59,14 +63,32 @@ class ProviderFixture:
                     self.wfile.flush()
                     # Keep the provider stream open until the test kills the daemon.
                     fixture.gates[index].wait(timeout=25)
-                elif index < 2:
+                elif index < 2 or index in fixture.held_indices:
                     fixture.gates[index].wait(timeout=25)
                 if index != 2:
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
-                for text, finish in (("fixture reply survives ", None), ("client exit", None), ("", "stop")):
+                last_user = next((message.get("content", "") for message in reversed(payload.get("messages", [])) if message.get("role") == "user"), "")
+                if "tool-boundary-first" in last_user or "tool-immediate-first" in last_user:
+                    if "tool-boundary-first" in last_user:
+                        command = "sleep 0.6; printf completed > first-tool.txt"
+                        calls = [
+                            {"index": 0, "id": "boundary-bash", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": command})}},
+                            {"index": 1, "id": "boundary-write", "type": "function", "function": {"name": "write", "arguments": json.dumps({"path": "skipped-tool.txt", "content": "must not be written"})}},
+                        ]
+                    else:
+                        command = "sleep 20; printf completed > immediate-tool.txt"
+                        calls = [{"index": 0, "id": "immediate-bash", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"command": command})}}]
+                    event = {"id": f"chatcmpl-fixture-{index}", "object": "chat.completion.chunk", "created": 1, "model": MODEL,
+                             "choices": [{"index": 0, "delta": {"tool_calls": calls}, "finish_reason": "tool_calls"}]}
+                    self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    return
+                reply = REPLY if index < 4 else f"steering fixture reply {index}"
+                for text, finish in ((reply[:20], None), (reply[20:], None), ("", "stop")):
                     event = {
                         "id": f"chatcmpl-fixture-{index}", "object": "chat.completion.chunk",
                         "created": 1, "model": MODEL,
@@ -121,6 +143,7 @@ class ProviderFixture:
 
 
 def isolated_env(root, fixture):
+    root.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["HOME"] = str(root / "home")
     env["XDG_CONFIG_HOME"] = str(root / "xdg-config")
@@ -129,6 +152,9 @@ def isolated_env(root, fixture):
     env["OPENCODE_GO_API_KEY"] = "offline-test-key"
     env["SLOP_PROVIDER_BASE_URL"] = fixture.base_url
     env["SLOP_DEFAULT_MODEL"] = f"{PROVIDER}/{MODEL}"
+    config_path = root / "config.yaml"
+    config_path.write_text("execution_concurrency: 1\n", encoding="utf-8")
+    env["SLOP_CONFIG"] = str(config_path)
     env.pop("SLOP_TOKEN_FILE", None)
     env.pop("SLOP_CONFIG", None)
     env.pop("SLOP_DATA_DIR", None)
@@ -217,6 +243,26 @@ def wait_turn(endpoint, token, turn_id, statuses):
             return turn
         time.sleep(0.05)
     raise RuntimeError(f"turn {turn_id} did not reach one of {statuses}; last response: {last}")
+
+
+def wait_instructions(endpoint, token, session_id, expected_status):
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        status, page = request(endpoint, token, path=f"/v1/sessions/{session_id}/instructions?limit=50")
+        if status == 200 and any(item["status"] == expected_status for item in page["items"]):
+            return page["items"]
+        time.sleep(0.03)
+    raise RuntimeError(f"steering instruction did not reach {expected_status}: {status} {page}")
+
+
+def wait_tool_status(endpoint, token, turn_id, status_name):
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        status, page = request(endpoint, token, path=f"/v1/turns/{turn_id}/tools?limit=50")
+        if status == 200 and any(item["status"] == status_name for item in page["items"]):
+            return page["items"]
+        time.sleep(0.03)
+    raise RuntimeError(f"tool invocation did not reach {status_name}: {status} {page}")
 
 
 def wait_checkpoint(endpoint, token, session_id, turn_id):
@@ -418,6 +464,227 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
         post_crash = wait_turn(endpoint, token, followup["turn_id"], {"completed"})
         if post_crash["status"] != "completed" or fixture.count() != 4:
             raise RuntimeError(f"post-crash followup did not complete exactly once: {post_crash}")
+
+        fixture.held_indices.update({4, 5})
+        status, boundary_turn = request(endpoint, token, "POST", {
+            "command_id": "boundary-holder", "text": "boundary holder", "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start boundary holder: {status} {boundary_turn}")
+        fixture.wait_for_count(5)
+        status, boundary_instruction = request(endpoint, token, "POST", {
+            "command_id": "boundary-instruction", "text": "boundary instruction", "delivery": "next-boundary",
+            "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202 or boundary_instruction["turn_id"] != boundary_turn["turn_id"]:
+            raise RuntimeError(f"boundary delivery did not target active turn: {status} {boundary_instruction}")
+        status, repeated_instruction = request(endpoint, token, "POST", {
+            "command_id": "boundary-instruction", "text": "boundary instruction", "delivery": "next-boundary",
+            "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202 or repeated_instruction != boundary_instruction:
+            raise RuntimeError(f"steering command replay changed its accepted receipt: {status} {repeated_instruction}")
+        status, conflicted_instruction = request(endpoint, token, "POST", {
+            "command_id": "boundary-instruction", "text": "different instruction", "delivery": "next-boundary",
+            "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 409 or conflicted_instruction.get("code") != "command_conflict":
+            raise RuntimeError(f"reused steering ID with a different payload was accepted: {status} {conflicted_instruction}")
+        fixture.gates[4].set()
+        fixture.wait_for_count(6)
+        boundary_context = json.dumps(fixture.payload(5).get("messages", []))
+        if "boundary instruction" not in boundary_context:
+            raise RuntimeError(f"boundary instruction was not applied before the next request: {boundary_context}")
+        fixture.gates[5].set()
+        wait_turn(endpoint, token, boundary_turn["turn_id"], {"completed"})
+        wait_instructions(endpoint, token, session_id, "applied")
+
+        fixture.held_indices.update({6, 7})
+        status, after_holder = request(endpoint, token, "POST", {
+            "command_id": "after-holder", "text": "after holder", "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start after-turn holder: {status} {after_holder}")
+        fixture.wait_for_count(7)
+        status, after_turn = request(endpoint, token, "POST", {
+            "command_id": "after-turn-message", "text": "after turn only", "delivery": "after-turn",
+            "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202 or after_turn["turn_id"] == after_holder["turn_id"]:
+            raise RuntimeError(f"after-turn delivery did not queue a new turn: {status} {after_turn}")
+        fixture.gates[6].set()
+        fixture.wait_for_count(8)
+        if "after turn only" in json.dumps(fixture.payload(6).get("messages", [])):
+            raise RuntimeError("after-turn message leaked into the active turn context")
+        if "after turn only" not in json.dumps(fixture.payload(7).get("messages", [])):
+            raise RuntimeError("after-turn message was missing from its queued turn")
+        fixture.gates[7].set()
+        wait_turn(endpoint, token, after_holder["turn_id"], {"completed"})
+        wait_turn(endpoint, token, after_turn["turn_id"], {"completed"})
+
+        fixture.held_indices.update({8, 9})
+        status, immediate_turn = request(endpoint, token, "POST", {
+            "command_id": "immediate-holder", "text": "immediate holder", "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start immediate holder: {status} {immediate_turn}")
+        fixture.wait_for_count(9)
+        status, immediate_instruction = request(endpoint, token, "POST", {
+            "command_id": "immediate-instruction", "text": "immediate correction", "delivery": "immediate",
+            "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202 or immediate_instruction["turn_id"] != immediate_turn["turn_id"]:
+            raise RuntimeError(f"immediate delivery did not target active turn: {status} {immediate_instruction}")
+        time.sleep(0.3)
+        fixture.gates[8].set()
+        fixture.wait_for_count(10)
+        immediate_context = json.dumps(fixture.payload(9).get("messages", []))
+        if "immediate correction" not in immediate_context:
+            raise RuntimeError(f"immediate correction was not applied before replanning: {immediate_context}")
+        fixture.gates[9].set()
+        wait_turn(endpoint, token, immediate_turn["turn_id"], {"completed"})
+        requests_status, requests_page = request(endpoint, token, path=f"/v1/turns/{immediate_turn['turn_id']}/requests?limit=20")
+        if requests_status != 200 or len(requests_page["items"]) != 2 or requests_page["items"][0]["status"] != "interrupted":
+            raise RuntimeError(f"immediate inference was not interrupted exactly once: {requests_status} {requests_page}")
+
+        tool_root = root / "steering-workspace"
+        tool_root.mkdir(parents=True, exist_ok=True)
+        policy = {"root": str(tool_root), "allowed_tools": ["bash", "write"], "shell_timeout_ms": 10000,
+                  "max_output_bytes": 4096, "max_tool_calls": 4, "max_model_requests": 4}
+        status, tool_session = request(endpoint, token, "POST", {
+            "command_id": "tool-steering-session", "title": "tool steering", "provider": PROVIDER,
+            "model": MODEL, "max_tokens": None, "execution": policy,
+        }, "/v1/sessions")
+        if status != 202:
+            raise RuntimeError(f"could not create steering tool session: {status} {tool_session}")
+        status, tool_turn = request(endpoint, token, "POST", {
+            "command_id": "tool-boundary-turn", "text": "tool-boundary-first", "expected_revision": None,
+        }, f"/v1/sessions/{tool_session['session_id']}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start tool boundary turn: {status} {tool_turn}")
+        fixture.wait_for_count(11)
+        wait_tool_status(endpoint, token, tool_turn["turn_id"], "running")
+        status, tool_steer = request(endpoint, token, "POST", {
+            "command_id": "tool-boundary-steer", "text": "skip the pending write", "delivery": "next-boundary",
+            "expected_revision": None,
+        }, f"/v1/sessions/{tool_session['session_id']}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not steer a running tool: {status} {tool_steer}")
+        fixture.wait_for_count(12)
+        fixture.payload(11)
+        if "skip the pending write" not in json.dumps(fixture.payload(11).get("messages", [])):
+            raise RuntimeError("tool-boundary instruction was not applied before the next model request")
+        wait_turn(endpoint, token, tool_turn["turn_id"], {"completed"})
+        tool_root.joinpath("first-tool.txt").read_text(encoding="utf-8")
+        if (tool_root / "skipped-tool.txt").exists():
+            raise RuntimeError("unstarted pending tool side effect ran after boundary steering")
+        invocations = wait_tool_status(endpoint, token, tool_turn["turn_id"], "failed")
+        if len(invocations) != 2 or not any(item.get("error_code") == "steering_applied_before_dispatch" for item in invocations):
+            raise RuntimeError(f"pending tool intents were not paired with explicit skipped results: {invocations}")
+
+        immediate_root = root / "immediate-workspace"
+        immediate_root.mkdir(parents=True, exist_ok=True)
+        immediate_policy = {**policy, "root": str(immediate_root)}
+        status, immediate_session = request(endpoint, token, "POST", {
+            "command_id": "immediate-tool-session", "title": "immediate tool", "provider": PROVIDER,
+            "model": MODEL, "max_tokens": None, "execution": immediate_policy,
+        }, "/v1/sessions")
+        if status != 202:
+            raise RuntimeError(f"could not create immediate tool session: {status} {immediate_session}")
+        status, immediate_tool_turn = request(endpoint, token, "POST", {
+            "command_id": "immediate-tool-turn", "text": "tool-immediate-first", "expected_revision": None,
+        }, f"/v1/sessions/{immediate_session['session_id']}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start immediate tool turn: {status} {immediate_tool_turn}")
+        fixture.wait_for_count(13)
+        wait_tool_status(endpoint, token, immediate_tool_turn["turn_id"], "running")
+        status, immediate_tool = request(endpoint, token, "POST", {
+            "command_id": "immediate-tool-steer", "text": "stop that command", "delivery": "immediate",
+            "expected_revision": None,
+        }, f"/v1/sessions/{immediate_session['session_id']}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not immediately steer running Bash: {status} {immediate_tool}")
+        fixture.wait_for_count(14)
+        wait_turn(endpoint, token, immediate_tool_turn["turn_id"], {"completed"})
+        if (immediate_root / "immediate-tool.txt").exists():
+            raise RuntimeError("immediate delivery did not stop the running Bash side effect")
+
+        replacement_key = "steering-snapshot-replacement-key"
+        fixture.valid_keys.add(replacement_key)
+        fixture.held_indices.update({14, 15})
+        status, pinned_turn = request(endpoint, token, "POST", {
+            "command_id": "pinned-provider-turn", "text": "provider snapshot holder", "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start provider snapshot turn: {status} {pinned_turn}")
+        fixture.wait_for_count(15)
+        status, key_updated = request(endpoint, token, "PUT", {"api_key": replacement_key}, "/v1/providers/opencode-go/api-key")
+        if status != 200 or not key_updated.get("api_key_configured"):
+            raise RuntimeError(f"could not replace provider key during active turn: {status} {key_updated}")
+        status, pinned_instruction = request(endpoint, token, "POST", {
+            "command_id": "pinned-provider-steer", "text": "continue with existing provider", "delivery": "next-boundary",
+            "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not steer pinned provider turn: {status} {pinned_instruction}")
+        fixture.gates[14].set()
+        fixture.wait_for_count(16)
+        fixture.gates[15].set()
+        wait_turn(endpoint, token, pinned_turn["turn_id"], {"completed"})
+        status, fresh_turn = request(endpoint, token, "POST", {
+            "command_id": "fresh-provider-turn", "text": "use replacement provider", "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start fresh provider turn: {status} {fresh_turn}")
+        fixture.wait_for_count(17)
+        if fixture.authorizations[14:17] != ["Bearer offline-test-key", "Bearer offline-test-key", f"Bearer {replacement_key}"]:
+            raise RuntimeError(f"provider hot replacement crossed the logical turn boundary: {fixture.authorizations[14:17]}")
+        wait_turn(endpoint, token, fresh_turn["turn_id"], {"completed"})
+
+        fixture.held_indices.add(17)
+        status, paused_turn = request(endpoint, token, "POST", {
+            "command_id": "pause-holder", "text": "pause holder", "expected_revision": None,
+        }, f"/v1/sessions/{session_id}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not start pause holder: {status} {paused_turn}")
+        fixture.wait_for_count(18)
+        status, pause_receipt = request(endpoint, token, "POST", {
+            "command_id": "pause-active-command",
+        }, f"/v1/turns/{paused_turn['turn_id']}/pause")
+        if status != 200:
+            raise RuntimeError(f"could not pause active turn: {status} {pause_receipt}")
+        fixture.gates[17].set()
+        wait_turn(endpoint, token, paused_turn["turn_id"], {"paused"})
+        status, parallel_session = request(endpoint, token, "POST", {
+            "command_id": "paused-slot-session", "title": "slot release", "provider": PROVIDER,
+            "model": MODEL, "max_tokens": None,
+        }, "/v1/sessions")
+        if status != 202:
+            raise RuntimeError(f"could not create slot-release session: {status} {parallel_session}")
+        fixture.held_indices.add(18)
+        status, parallel_turn = request(endpoint, token, "POST", {
+            "command_id": "paused-slot-turn", "text": "use released slot", "expected_revision": None,
+        }, f"/v1/sessions/{parallel_session['session_id']}/messages")
+        if status != 202:
+            raise RuntimeError(f"could not use released execution slot: {status} {parallel_turn}")
+        fixture.wait_for_count(19)
+        fixture.gates[18].set()
+        wait_turn(endpoint, token, parallel_turn["turn_id"], {"completed"})
+        stop_daemon(daemon, log)
+        daemon, endpoint, log = start_daemon(daemon_binary, root / "run-4", data_dir, env)
+        token = token_path.read_text(encoding="ascii").strip()
+        if wait_turn(endpoint, token, paused_turn["turn_id"], {"paused"})["status"] != "paused":
+            raise RuntimeError("restart did not preserve paused state")
+        time.sleep(0.3)
+        if fixture.count() != 19:
+            raise RuntimeError("restart automatically resumed a paused turn")
+        status, resumed_receipt = request(endpoint, token, "POST", {
+            "command_id": "explicit-resume",
+        }, f"/v1/turns/{paused_turn['turn_id']}/resume")
+        if status != 200:
+            raise RuntimeError(f"could not explicitly resume paused turn: {status} {resumed_receipt}")
+        fixture.wait_for_count(20)
+        wait_turn(endpoint, token, paused_turn["turn_id"], {"completed"})
     finally:
         if daemon is not None and daemon.poll() is None:
             try:

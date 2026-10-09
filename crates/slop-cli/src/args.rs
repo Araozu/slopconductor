@@ -111,6 +111,8 @@ pub enum SessionCommand {
         effort: Option<String>,
         #[arg(long)]
         max_output_tokens: Option<u32>,
+        #[arg(long, value_parser=["after-turn", "next-boundary", "immediate"])]
+        delivery: Option<String>,
     },
     Follow {
         id: String,
@@ -139,6 +141,16 @@ pub enum TurnCommand {
         id: String,
     },
     Cancel {
+        id: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+    Pause {
+        id: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+    Resume {
         id: String,
         #[arg(long)]
         command_id: Option<String>,
@@ -173,6 +185,8 @@ pub struct ChatArgs {
     pub effort: Option<String>,
     #[arg(long)]
     pub max_output_tokens: Option<u32>,
+    #[arg(long, value_parser=["after-turn", "next-boundary", "immediate"], requires="session")]
+    pub delivery: Option<String>,
     #[arg(long, conflicts_with = "prompt_file")]
     pub prompt: Option<String>,
     #[arg(long)]
@@ -205,6 +219,55 @@ mod tests {
             panic!("expected chat")
         };
         assert_eq!(chat.model.as_deref(), Some("opencode-go/glm-5.3-flash"));
+    }
+
+    #[test]
+    fn execution_delivery_and_pause_commands_parse() {
+        let session = Args::try_parse_from([
+            "slop",
+            "session",
+            "send",
+            "session-1",
+            "--text",
+            "hello",
+            "--delivery",
+            "immediate",
+        ])
+        .unwrap();
+        assert!(
+            matches!(session.command, Command::Session { command: SessionCommand::Send { delivery: Some(mode), .. } } if mode == "immediate")
+        );
+
+        let chat = Args::try_parse_from([
+            "slop",
+            "chat",
+            "--session",
+            "session-1",
+            "--prompt",
+            "hello",
+            "--delivery",
+            "next-boundary",
+        ])
+        .unwrap();
+        assert!(
+            matches!(chat.command, Command::Chat(ChatArgs { delivery: Some(mode), .. }) if mode == "next-boundary")
+        );
+        assert!(
+            Args::try_parse_from([
+                "slop",
+                "chat",
+                "--prompt",
+                "hello",
+                "--delivery",
+                "immediate"
+            ])
+            .is_err()
+        );
+
+        let pause = Args::try_parse_from(["slop", "turn", "pause", "turn-1"]).unwrap();
+        assert!(
+            matches!(pause.command, Command::Turn { command: TurnCommand::Pause { id, .. } } if id == "turn-1")
+        );
     }
 
     #[test]

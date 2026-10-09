@@ -137,9 +137,35 @@ pub mod chat {
         pub text: String,
         pub expected_revision: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub delivery: Option<DeliveryMode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         pub model: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub settings: Option<crate::execution::GenerationSettings>,
+    }
+
+    #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum DeliveryMode {
+        #[default]
+        AfterTurn,
+        NextBoundary,
+        Immediate,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct SteeringInstructionResponse {
+        pub id: String,
+        pub turn_id: String,
+        pub text: String,
+        pub delivery: DeliveryMode,
+        pub status: String,
+        pub error_code: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct TurnControlRequest {
+        pub command_id: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
