@@ -1,0 +1,193 @@
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+use slop_protocol::DEFAULT_DAEMON_URL;
+
+#[derive(Debug, Parser)]
+#[command(name = "slop", version, about = "Slop Conductor command-line client")]
+pub struct Args {
+    /// Daemon origin to connect to.
+    #[arg(long, global = true, env = "SLOP_DAEMON_URL", default_value = DEFAULT_DAEMON_URL)]
+    pub daemon: String,
+
+    /// Emit machine-readable JSON on standard output.
+    #[arg(long, global = true)]
+    pub json: bool,
+
+    /// Read the local API bearer token from this file.
+    #[arg(long, global = true)]
+    pub token_file: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Check daemon connectivity, API compatibility, and capabilities.
+    Status,
+    /// Show this daemon's authenticated node identity.
+    Node,
+    /// Discover available models.
+    Models,
+    /// Manage conversations.
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+    /// Inspect or cancel an execution turn.
+    Turn {
+        #[command(subcommand)]
+        command: TurnCommand,
+    },
+    /// Start or resume a text conversation.
+    Chat(ChatArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SessionCommand {
+    List {
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    Show {
+        id: String,
+    },
+    History {
+        id: String,
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    Send {
+        id: String,
+        #[arg(long, conflicts_with = "text")]
+        prompt_file: Option<PathBuf>,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        command_id: Option<String>,
+        #[arg(long)]
+        detach: bool,
+    },
+    Follow {
+        id: String,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TurnCommand {
+    Show {
+        id: String,
+    },
+    Cancel {
+        id: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ChatArgs {
+    #[arg(long)]
+    pub session: Option<String>,
+    #[arg(long, conflicts_with = "session")]
+    pub model: Option<String>,
+    #[arg(long, conflicts_with = "prompt_file")]
+    pub prompt: Option<String>,
+    #[arg(long)]
+    pub prompt_file: Option<PathBuf>,
+    #[arg(long)]
+    pub command_id: Option<String>,
+    /// Return after durable acceptance without following the turn.
+    #[arg(long)]
+    pub detach: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_cannot_be_silently_ignored_when_resuming_a_session() {
+        let parsed = Args::try_parse_from([
+            "slop",
+            "chat",
+            "--session",
+            "session-1",
+            "--model",
+            "opencode-go/glm-5.3-flash",
+            "--prompt",
+            "hello",
+        ]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn prompt_sources_are_mutually_exclusive() {
+        for command in [
+            vec![
+                "slop",
+                "chat",
+                "--prompt",
+                "hello",
+                "--prompt-file",
+                "prompt.txt",
+            ],
+            vec![
+                "slop",
+                "session",
+                "send",
+                "session-1",
+                "--text",
+                "hello",
+                "--prompt-file",
+                "prompt.txt",
+            ],
+        ] {
+            assert!(Args::try_parse_from(command).is_err());
+        }
+    }
+
+    #[test]
+    fn global_options_work_before_and_after_nested_commands() {
+        for command in [
+            vec![
+                "slop",
+                "--daemon",
+                "http://127.0.0.1:7441",
+                "--json",
+                "--token-file",
+                "token",
+                "session",
+                "show",
+                "session-1",
+            ],
+            vec![
+                "slop",
+                "session",
+                "show",
+                "session-1",
+                "--daemon",
+                "http://127.0.0.1:7441",
+                "--json",
+                "--token-file",
+                "token",
+            ],
+        ] {
+            let args = Args::try_parse_from(command).unwrap();
+            assert_eq!(args.daemon, "http://127.0.0.1:7441");
+            assert!(args.json);
+            assert_eq!(args.token_file, Some(PathBuf::from("token")));
+            assert!(matches!(
+                args.command,
+                Command::Session { command: SessionCommand::Show { id } } if id == "session-1"
+            ));
+        }
+    }
+}

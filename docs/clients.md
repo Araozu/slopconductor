@@ -39,6 +39,13 @@ Closing a client or pressing Ctrl-C while following detaches without canceling.
 `turn cancel` is explicit. Interactive `/exit` exits; `/cancel TURN_ID` submits
 the same cancellation command.
 
+The CLI entry point only parses arguments, starts the async client, and reports
+exit status. Command handlers are separated from connection/token selection,
+bounded prompt input, history lookup, event following, and output rendering.
+The [implemented module layout and extension steps](implementation.md#suggested-module-growth)
+describe where new command groups belong. These remain CLI concerns;
+`slop-client` stays independent of argument parsing and terminal presentation.
+
 The proposed broader command groups are:
 
 | Group | Examples of responsibilities |

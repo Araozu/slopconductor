@@ -12,6 +12,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from cli_smoke import check_cli_commands
+
 
 MODEL = "glm-5.3-flash"
 PROVIDER = "opencode-go"
@@ -306,6 +308,9 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
         if history_status != 200 or canonical is None or canonical["text"] != REPLY:
             raise RuntimeError(f"canonical assistant history missing after reconnect: {page}")
 
+        check_cli_commands(cli_binary, endpoint, token_path, env, root,
+                           session_receipt, message_receipt, REPLY)
+
         create_payload = {
             "command_id": "cli-chat-command:session", "title": None,
             "provider": PROVIDER, "model": MODEL, "max_tokens": None,
@@ -345,9 +350,13 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
             raise RuntimeError(f"could not accept cancellation fixture turn: {status} {cancel_receipt}")
         fixture.wait_for_count(2)
         cancel_turn_id = cancel_receipt["turn_id"]
-        status, canceled = request(endpoint, token, "POST", {"command_id": "explicit-cancel-command"}, f"/v1/turns/{cancel_turn_id}/cancel")
-        if status != 202:
-            raise RuntimeError(f"explicit cancellation was not accepted: {status} {canceled}")
+        canceled = run([
+            str(cli_binary), "--daemon", endpoint, "--token-file", str(token_path), "--json",
+            "turn", "cancel", cancel_turn_id, "--command-id", "explicit-cancel-command",
+        ], env=env)
+        cancel_command = json.loads(canceled.stdout)
+        if cancel_command["turn_id"] != cancel_turn_id:
+            raise RuntimeError(f"explicit CLI cancellation returned the wrong receipt: {cancel_command}")
         fixture.gates[1].set()
         turn = wait_turn(endpoint, token, cancel_turn_id, {"cancelled"})
         if turn["status"] != "cancelled" or fixture.count() != 2:

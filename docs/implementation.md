@@ -68,14 +68,34 @@ crates/slop-client/src/
   events.rs
   projections.rs          # only genuinely shared client interpretation
 
-crates/slop-cli/src/
-  main.rs
-  commands/mod.rs
-  output.rs
+crates/slop-cli/src/      # implemented CLI organization
+  main.rs                 # process entry point and exit status
+  args.rs                 # command grammar and global options
+  commands/mod.rs         # dispatch and shared command context
+  commands/discovery.rs   # status, node identity, and model discovery
+  commands/chat.rs        # one-shot/interactive chat and session creation
+  commands/session.rs     # session queries, message submission, and following
+  commands/turn.rs        # turn inspection and explicit cancellation
+  connection.rs           # endpoint and local API token selection
+  input.rs                # bounded argument/file/stdin prompts
+  history.rs              # paginated history and canonical message lookup
+  follow.rs               # event cursors, reconnects, and detach behavior
+  mutation.rs             # command IDs and uncertain-delivery diagnostics
+  output.rs               # human/JSON selection and streaming rendering
 ```
 
-Names are proposals, not existing files. Introduce a separate store/provider
-crate when build isolation or reuse justifies the boundary.
+The CLI layout above is implemented; the other layouts are proposals, not lists
+of existing files. Introduce a separate store/provider crate when build isolation
+or reuse justifies the boundary.
+
+To add a CLI command group, define its grammar in `args.rs`, add a handler module
+under `commands/`, and register it in `commands/mod.rs`. Handlers use the shared
+connection/output context and typed `slop-client` operations. Add missing API
+operations to the protocol/client and their daemon implementation before exposing
+them as commands. Keep prompt reading, command identity, event following, and
+stream rendering in their existing modules rather than copying those concerns
+into new handlers. No speculative commands or execution dependencies are needed
+to extend this structure.
 
 ## Step 1: identity, configuration, and exclusive startup
 
