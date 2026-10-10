@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  native:
+    name: Native checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - name: Prepare Windows Git and private temporary storage
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gitBin = Join-Path $env:ProgramFiles 'Git\bin'
+          if (!(Test-Path (Join-Path $gitBin 'bash.exe'))) {
+            throw 'Git for Windows Bash is required for the tool smoke checks'
+          }
+          $gitBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          git config --global core.autocrlf false
+          # Credential fixtures must inherit the per-user app-data ACLs.
+          $testTemp = Join-Path $env:LOCALAPPDATA 'slop-ci-temp'
+          New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
+          "TMP=$testTemp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TEMP=$testTemp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install stable Rust with required components
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Build independent CLI
+        run: cargo build -p slop-cli --locked
+
+      - name: Check Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+      - name: Run real daemon and CLI smoke checks
+        run: python scripts/smoke.py

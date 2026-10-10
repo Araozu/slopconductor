@@ -36,30 +36,36 @@ impl Fixture {
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
         let observed = requests.clone();
-        let app = Router::new().fallback(move |request: Request<Body>| {
-            let observed = observed.clone();
-            let body = body.clone();
-            async move {
-                let (parts, input) = request.into_parts();
-                let input = to_bytes(input, 4096).await.unwrap();
-                observed.lock().unwrap().push(ObservedRequest {
-                    method: parts.method,
-                    path: parts.uri.path().to_owned(),
-                    headers: parts.headers,
-                    body: if input.is_empty() {
-                        Value::Null
-                    } else {
-                        serde_json::from_slice(&input).unwrap()
-                    },
-                });
-                Response::builder()
-                    .status(status)
-                    .header("content-type", content_type)
-                    .header("location", "/must-not-follow")
-                    .body(Body::from(body))
-                    .unwrap()
-            }
-        });
+        // Environment readiness probes must not count as provider operations.
+        let app = Router::new()
+            .route(
+                "/",
+                axum::routing::head(|| async { StatusCode::NO_CONTENT }),
+            )
+            .fallback(move |request: Request<Body>| {
+                let observed = observed.clone();
+                let body = body.clone();
+                async move {
+                    let (parts, input) = request.into_parts();
+                    let input = to_bytes(input, 4096).await.unwrap();
+                    observed.lock().unwrap().push(ObservedRequest {
+                        method: parts.method,
+                        path: parts.uri.path().to_owned(),
+                        headers: parts.headers,
+                        body: if input.is_empty() {
+                            Value::Null
+                        } else {
+                            serde_json::from_slice(&input).unwrap()
+                        },
+                    });
+                    Response::builder()
+                        .status(status)
+                        .header("content-type", content_type)
+                        .header("location", "/must-not-follow")
+                        .body(Body::from(body))
+                        .unwrap()
+                }
+            });
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Self {
             origin,

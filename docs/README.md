@@ -28,8 +28,10 @@ schemas, and workflows marked proposed describe future work.
 
 The [recommended next delivery order](roadmap.md#recommended-next-delivery-order)
 now moves from implemented scheduling/batch controls and native children to
-platform/capacity validation, then trusted remote CLI access. M1/M2 remain partial; Linux offline validation
-does not establish native Windows or live-provider behavior.
+platform/capacity validation, then trusted remote CLI access. Linux/native Windows
+CI is configured for the required checks and offline real-binary workflows.
+M1/M2 remain partial; Linux offline validation and a configured workflow do not
+establish native Windows or live-provider behavior.
 
 ## Reading order
 

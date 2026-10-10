@@ -160,7 +160,8 @@ def isolated_env(root, fixture):
     env.pop("SLOP_DATA_DIR", None)
     if os.name == "nt":
         env["USERPROFILE"] = str(root / "home")
-        env["LOCALAPPDATA"] = str(root / "local-app-data")
+        # Keep root/data inside the simulated per-user credential location.
+        env["LOCALAPPDATA"] = str(root)
     return env
 
 

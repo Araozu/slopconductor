@@ -45,9 +45,11 @@ remote control remain next; the complete milestone gates still apply.
    creation. Recovery preserves dependencies and unknown tool effects without
    automatically replaying inference or tools.
 
-3. **Platform and capacity validation.** Add Linux/native Windows CI for the
-   existing required checks and real-binary workflows, including Git/Bash and
-   process cancellation. Measure release builds with 1/10/100 sessions and a
+3. **Platform and capacity validation.** Linux/native Windows CI is configured
+   for the required checks and real-binary workflows, including Git/Bash and
+   cancellation of native children and their descendants. Record successful
+   native Windows runs; configuration alone is not validation. Measure release
+   builds with 1/10/100 sessions and a
    large mostly queued batch, reporting daemon and supervised-tool memory
    separately. Keep bounded live-provider tool checks explicitly opt-in.
 
@@ -77,8 +79,9 @@ Deliverables:
 - Git repository on `main`, Rust virtual workspace, lockfile, formatting/lint rules.
 - Domain, protocol, runtime, client, daemon, and CLI crate boundaries.
 - Loopback-only daemon health endpoint and compatible native CLI status command.
-- Human/JSON output and real-binary smoke checks. Linux/Windows CI automation
-  remains follow-up work; this checkout has no workflow definition.
+- Human/JSON output and real-binary smoke checks. [Linux/native Windows CI](../.github/workflows/ci.yml)
+  runs formatting, Clippy, workspace tests, an independent CLI build, and the
+  complete offline smoke suite. Native Windows results remain outstanding.
 - Detailed product, requirements, architecture, protocol, subsystem, and roadmap docs.
 
 Acceptance: build the CLI independently; run a daemon; query it from a separate

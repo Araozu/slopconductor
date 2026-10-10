@@ -5,6 +5,8 @@ import http.server
 import json
 import os
 from pathlib import Path
+import shlex
+import sys
 import threading
 import time
 
@@ -49,7 +51,17 @@ class ToolFixture:
                         ]
                     elif prompt in {"cancel shell", "crash shell"}:
                         seconds = 25 if prompt == "cancel shell" else 2
-                        command = f"echo $$ > '{prompt.split()[0]}.pid'; sleep {seconds}"
+                        # Native Python PIDs work on Windows too, where Bash's $$
+                        # is an MSYS PID. Check a child and its descendant.
+                        script = (
+                            "import os, subprocess, sys; from pathlib import Path; "
+                            f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep({seconds})']); "
+                            f"marker = Path('{prompt.split()[0]}.pid'); temporary = marker.with_suffix('.tmp'); "
+                            "temporary.write_text(str(os.getpid()) + ' ' + str(child.pid), encoding='ascii'); "
+                            "temporary.replace(marker); "
+                            "child.wait()"
+                        )
+                        command = f"{shlex.quote(Path(sys.executable).as_posix())} -c {shlex.quote(script)} & wait"
                         calls = [("bash", {"command": command})]
                     else:
                         calls = [("write", {"path": "must-not-exist.txt", "content": "unsafe"})]
@@ -227,21 +239,20 @@ def check_tools(daemon_binary, cli_binary, root):
             while not marker.exists() and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert marker.exists(), "shell never launched"
-            return session, receipt["turn_id"], int(marker.read_text(encoding="utf-8-sig").strip())
+            pids = [int(value) for value in marker.read_text(encoding="ascii").split()]
+            assert len(pids) == 2 and all(process_is_running(pid) for pid in pids), "shell descendants never launched"
+            return session, receipt["turn_id"], pids
 
-        _, canceled, pid = running_shell("cancel shell")
+        _, canceled, pids = running_shell("cancel shell")
         status, _ = request(endpoint, token, "POST", {"command_id": "cancel-tool"}, f"/v1/turns/{canceled}/cancel")
         assert status == 202
         wait_turn(endpoint, token, canceled, {"cancelled"})
         tool = get(f"/v1/turns/{canceled}/tools")["items"][0]
         assert tool["effects_unknown"] and tool["error_code"] == "cancelled", tool
-        if os.name != "nt":
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                pass
-            else:
-                raise RuntimeError("canceled shell process survived")
+        deadline = time.monotonic() + 5
+        while any(process_is_running(pid) for pid in pids) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not any(process_is_running(pid) for pid in pids), "canceled shell descendants survived"
         crashed_session, crashed, _ = running_shell("crash shell")
         count = len(fixture.snapshot())
         daemon.kill()
@@ -264,3 +275,37 @@ def check_tools(daemon_binary, cli_binary, root):
         if daemon is not None:
             stop_daemon(daemon, log)
         fixture.close()
+
+
+def process_is_running(pid):
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            if ctypes.get_last_error() == 87:  # ERROR_INVALID_PARAMETER: PID no longer exists
+                return False
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            status = kernel.WaitForSingleObject(handle, 0)
+            if status == 0xFFFFFFFF:  # WAIT_FAILED
+                raise ctypes.WinError(ctypes.get_last_error())
+            return status == 258  # WAIT_TIMEOUT: process has not exited
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        if sys.platform == "linux":
+            # A killed grandchild can remain a zombie until its adopter reaps it.
+            return not Path(f"/proc/{pid}/stat").read_text().rpartition(") ")[2].startswith("Z")
+        return True
+    except (ProcessLookupError, FileNotFoundError):
+        return False

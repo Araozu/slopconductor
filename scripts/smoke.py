@@ -68,7 +68,8 @@ def isolated_env(root, **overrides):
     env.pop("SLOP_TOKEN_FILE", None)
     if os.name == "nt":
         env["USERPROFILE"] = str(root / "home")
-        env["LOCALAPPDATA"] = str(root / "local-app-data")
+        # Explicit data-directory fixtures also live below this per-user root.
+        env["LOCALAPPDATA"] = str(root)
     env.update({key: str(value) for key, value in overrides.items()})
     return env
 

@@ -33,8 +33,8 @@ them. Registered projects, frozen-base managed session worktrees, lazy allocatio
 separate diffs, explicit cleanup, and Git recovery are now implemented; see
 [projects/workspaces](projects-workspaces.md). Durable tasks/run attempts and
 matrices with preview, selective retry, and result export are implemented; see
-[tasks and batches](tasks-batches.md). Children and peer control remain next-stage
-work.
+[tasks and batches](tasks-batches.md). Bounded [native children](child-tasks.md)
+are implemented; peer control remains planned.
 
 ## Suggested module growth
 
@@ -326,7 +326,7 @@ to exist.
 
 ## Verification strategy
 
-Current bootstrap checks:
+Required local and CI checks:
 
 ```sh
 cargo fmt --all -- --check
@@ -334,6 +334,16 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python3 scripts/smoke.py
 ```
+
+[GitHub Actions](../.github/workflows/ci.yml) runs these checks and an independent
+CLI build on Ubuntu 24.04 and native Windows Server 2025, using stable Rust and
+Python 3.12. Pushes, pull requests, and manual dispatches run the same offline
+suite without provider credentials. Windows uses Git for Windows' Bash and
+per-user app-data temporary storage, preserving the daemon's credential-location
+requirements. Both platforms verify cancellation of a native process and its
+descendant. Native Windows results and release-build capacity measurements
+remain outstanding until recorded; CI configuration alone does not complete
+those gates.
 
 The smoke check runs real binaries, verifies native client dependency boundaries,
 checks human/JSON output, daemon lifetime after client exit, API mismatch

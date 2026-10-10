@@ -26,7 +26,8 @@ Implemented:
 - A consumer CLI with interactive and one-shot chat, session inspection,
   stdin/file prompts, event following, and JSON output through the public API.
 - Human-readable and JSON status output.
-- Real-binary daemon/CLI smoke checks; native Windows validation remains outstanding.
+- Real-binary daemon/CLI smoke checks and Linux/native Windows GitHub Actions;
+  native Windows validation results remain outstanding.
 - OpenCode Go and Zen integrations through the shared
   `ProviderClient` interface, with model discovery and streaming/non-streaming text turns across
   Chat Completions, Responses, and Messages. Both are selectable through the
@@ -199,6 +200,16 @@ python3 scripts/smoke.py
 
 On Windows, use `python` or `py -3` for the smoke script. Python is only a
 development verification dependency.
+
+[GitHub Actions](.github/workflows/ci.yml) runs the formatting, Clippy, workspace
+tests, independent CLI build, and complete offline smoke suite on Ubuntu 24.04
+and native Windows Server 2025 for pushes, pull requests, and manual dispatches.
+It uses stable Rust and Python 3.12. Windows selects Git for Windows' Bash and
+places temporary credential fixtures beneath the runner's per-user app-data
+directory. The smoke suite verifies cancellation of native child processes and
+their descendants on both platforms. CI needs no provider secrets; live-provider
+checks remain explicitly opt-in. A configured Windows job does not establish a
+passing native Windows result until it has run successfully.
 
 The [OpenCode Go live checks](crates/slop-runtime/tests/opencode_go_live.rs)
 require `OPENCODE_GO_API_KEY` and an explicit opt-in; normal workspace tests skip
