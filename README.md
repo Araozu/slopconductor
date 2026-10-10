@@ -26,8 +26,8 @@ Implemented:
 - A consumer CLI with interactive and one-shot chat, session inspection,
   stdin/file prompts, event following, and JSON output through the public API.
 - Human-readable and JSON status output.
-- Real-binary daemon/CLI smoke checks and Linux/native Windows GitHub Actions;
-  native Windows validation results remain outstanding.
+- Real-binary daemon/CLI smoke checks and
+  [passing Linux/native Windows CI](docs/native-validation.md).
 - OpenCode Go and Zen integrations through the shared
   `ProviderClient` interface, with model discovery and streaming/non-streaming text turns across
   Chat Completions, Responses, and Messages. Both are selectable through the
@@ -208,8 +208,9 @@ It uses stable Rust and Python 3.12. Windows selects Git for Windows' Bash and
 places temporary credential fixtures beneath the runner's per-user app-data
 directory. The smoke suite verifies cancellation of native child processes and
 their descendants on both platforms. CI needs no provider secrets; live-provider
-checks remain explicitly opt-in. A configured Windows job does not establish a
-passing native Windows result until it has run successfully.
+checks remain explicitly opt-in. The
+[recorded native validation](docs/native-validation.md) passed both jobs and the
+complete offline suite.
 Rust compiler and Clippy errors appear as annotations with source locations.
 Failed Clippy, test, and smoke checks also annotate a bounded tail of their output
 while retaining their original exit status.

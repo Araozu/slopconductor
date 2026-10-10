@@ -147,4 +147,5 @@ API/CLI child creation and wait receipts, a pool of four waiting parents,
 transactional creation failures, pause/wait races, schema-six upgrades,
 hierarchy limits, descendant budgets and batch cancellation, and restart during
 a real child shell side effect without replay.
-Native Windows and live-provider validation remain outstanding.
+[Recorded offline validation](native-validation.md) passes on Linux and native
+Windows; live-provider validation remains outstanding.

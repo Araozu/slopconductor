@@ -46,4 +46,6 @@ Do not add placeholder arithmetic tests or claim proposed endpoints work.
 Persistent sessions, project workspaces, tasks/run attempts, matrices, fair
 admission, aggregate operation budgets, batch cancellation, and bounded child
 tasks are implemented. Remote authentication, TUI, browser client, and Electron
-client remain planned. Native Windows and live-provider validation are outstanding.
+client remain planned. Linux and native Windows offline CI pass; live-provider
+and release-build capacity validation remain outstanding. See
+`docs/native-validation.md` for the recorded run and scope.

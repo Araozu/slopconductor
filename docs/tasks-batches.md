@@ -244,6 +244,7 @@ schema-five upgrade, and interruption of a real shell side effect without replay
 Additional checks cover persistent admission rotation, returning groups,
 aggregate reservation across retries/restart, budget denial before filesystem
 dispatch, atomic batch cancellation, and [native delegation](child-tasks.md).
-Native Windows and live-provider validation remain outstanding. Awaiting-input
+[Recorded offline validation](native-validation.md) passes on Linux and native
+Windows; live-provider validation remains outstanding. Awaiting-input
 states, branch publishing, automatic retention, and conversation reuse remain
 future work.

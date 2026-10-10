@@ -245,9 +245,10 @@ capability set and restricted allowlists, canonical client rendering,
 authentication on new routes, restart without tool replay, per-turn selection,
 all delivery modes, tool cancellation/replanning, provider snapshot rotation,
 and paused-turn restart/resume.
-All provider traffic in the new checks is offline. Linux is exercised; Windows
-supervision is implemented but needs a native Windows run. No new live tool call
-or paid model test is claimed.
+All provider traffic in these checks is offline.
+[Recorded native validation](native-validation.md) passes on Linux and Windows,
+including process-tree cancellation. No new live tool call or paid model test
+is claimed.
 
 [Tasks and matrices](tasks-batches.md) now reuse these tools, steering, controls,
 and recovery records through durable run attempts. Child agents, account quotas,

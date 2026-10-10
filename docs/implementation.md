@@ -276,8 +276,9 @@ Acceptance: batch results are attributable to exact inputs/workspaces, bounded
 concurrency remains responsive, and waiting parents cannot block all children.
 Exercise restart after child acceptance, parent cancellation policy, budget
 exhaustion across retries, and a full admission pool of waiting parents. Follow
-with native Windows workflows and release-build capacity measurements before
-declaring the M1/M2 gates complete.
+with live-provider workflows and release-build capacity measurements before
+declaring the M1/M2 gates complete. [Native offline validation](native-validation.md)
+now passes on Linux and Windows.
 
 ## Step 7: providers, accounts, and supported subscriptions
 
@@ -341,9 +342,9 @@ Python 3.12. Pushes, pull requests, and manual dispatches run the same offline
 suite without provider credentials. Windows uses Git for Windows' Bash and
 per-user app-data temporary storage, preserving the daemon's credential-location
 requirements. Both platforms verify cancellation of a native process and its
-descendant. Native Windows results and release-build capacity measurements
-remain outstanding until recorded; CI configuration alone does not complete
-those gates.
+descendant. [Recorded native validation](native-validation.md) passes both jobs
+and the full offline suite. Live-provider validation and release-build capacity
+measurements remain outstanding.
 
 The smoke check runs real binaries, verifies native client dependency boundaries,
 checks human/JSON output, daemon lifetime after client exit, API mismatch

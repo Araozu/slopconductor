@@ -30,8 +30,9 @@ The [recommended next delivery order](roadmap.md#recommended-next-delivery-order
 now moves from implemented scheduling/batch controls and native children to
 platform/capacity validation, then trusted remote CLI access. Linux/native Windows
 CI is configured for the required checks and offline real-binary workflows.
-M1/M2 remain partial; Linux offline validation and a configured workflow do not
-establish native Windows or live-provider behavior.
+[Recorded offline validation](native-validation.md) passes on both platforms.
+M1/M2 remain partial; live-provider and release-build capacity validation remain
+outstanding.
 
 ## Reading order
 
@@ -57,6 +58,7 @@ establish native Windows or live-provider behavior.
 | [Migration](migration.md) | Future portable-session and workspace handoff design |
 | [Roadmap](roadmap.md) | Delivery milestones, dependencies, and acceptance criteria |
 | [Implementation](implementation.md) | Concrete engineering tasks and suggested module layouts |
+| [Native validation](native-validation.md) | Recorded Linux/Windows CI result, coverage, and remaining gates |
 | [Open questions](open-questions.md) | Decisions still requiring experience or product input |
 | [Sources](sources.md) | Primary technical references and changing provider assumptions |
 | [Decisions](decisions/README.md) | Short records of the key architectural choices |

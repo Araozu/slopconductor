@@ -174,8 +174,8 @@ and persisted state after restart. Storage fault injection checks both unfinishe
 Git operation states, preserved paths, no replay, and schema-4 migration preserving
 session receipts. A runtime test creates, edits, inspects, and safely removes a
 real worktree containing a tracked file beyond the legacy Windows path limit.
-Linux is exercised; native Windows and live-provider checks remain separate
-validation gates.
+[Recorded offline validation](native-validation.md) passes on Linux and native
+Windows. Live-provider checks remain a separate validation gate.
 
 Git behavior follows upstream [worktree](https://git-scm.com/docs/git-worktree),
 [revision resolution](https://git-scm.com/docs/git-rev-parse), and

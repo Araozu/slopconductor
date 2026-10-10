@@ -194,8 +194,9 @@ resource limits; creating a chat cannot implicitly launch a browser.
 Each invocation has an identity, recorded input, workspace, start time, limits,
 and outcome. Keep previews bounded and put large outputs in artifact storage.
 The implemented shell uses Windows Job Objects and Unix process groups with
-bounded cancellation cleanup. Native Windows validation remains outstanding;
-hard daemon death on Unix does not guarantee descendant cleanup.
+bounded cancellation cleanup. [Native offline validation](native-validation.md)
+passes on Linux and Windows; hard daemon death on Unix does not guarantee
+descendant cleanup.
 
 A run's capabilities are chosen before execution. Child tasks inherit a bounded
 subset or explicitly allowed additions. Repository content and model-generated

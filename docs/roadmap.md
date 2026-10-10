@@ -47,10 +47,10 @@ remote control remain next; the complete milestone gates still apply.
 
 3. **Platform and capacity validation.** Linux/native Windows CI is configured
    for the required checks and real-binary workflows, including Git/Bash and
-   cancellation of native children and their descendants. Record successful
-   native Windows runs; configuration alone is not validation. Measure release
-   builds with 1/10/100 sessions and a
-   large mostly queued batch, reporting daemon and supervised-tool memory
+   cancellation of native children and their descendants.
+   [Recorded offline validation](native-validation.md) passes on both platforms.
+   Measure release builds with 1/10/100 sessions and a large mostly queued batch,
+   reporting daemon and supervised-tool memory
    separately. Keep bounded live-provider tool checks explicitly opt-in.
 
    Acceptance: record native Windows results, reproducible capacity measurements,
@@ -81,7 +81,8 @@ Deliverables:
 - Loopback-only daemon health endpoint and compatible native CLI status command.
 - Human/JSON output and real-binary smoke checks. [Linux/native Windows CI](../.github/workflows/ci.yml)
   runs formatting, Clippy, workspace tests, an independent CLI build, and the
-  complete offline smoke suite. Native Windows results remain outstanding.
+  complete offline smoke suite. [Recorded validation](native-validation.md)
+  passes on both platforms.
 - Detailed product, requirements, architecture, protocol, subsystem, and roadmap docs.
 
 Acceptance: build the CLI independently; run a daemon; query it from a separate
@@ -100,7 +101,8 @@ cancellation, and a consumer chat CLI. [Structured execution](structured-executi
 now implements file/shell tools, explicit workspace policy/leases, artifacts,
 structured streaming, frozen per-turn model/settings, and no-replay recovery.
 Durable task/run lifecycle and matrix submission are now implemented; see
-[tasks and batches](tasks-batches.md). Native Windows validation remains unfinished.
+[tasks and batches](tasks-batches.md). [Native offline validation](native-validation.md)
+passes on Linux and Windows.
 The first M2 project/workspace slice is now implemented: registered repositories,
 frozen bases, lazy detached worktree admission, separate diffs, explicit cleanup,
 and no-replay Git recovery. See [projects/workspaces](projects-workspaces.md).
@@ -113,8 +115,8 @@ persisted session on one machine.
 **Partial implementation:** local text chat covers durable acceptance, CLI detach,
 event reconnect, completed history after restart, command deduplication, and
 model-turn cancellation. File/shell execution and recovery now have offline
-real-binary checks on Linux. Live tool validation and
-native Windows scenarios remain before the full M1 exit gate.
+real-binary checks on Linux and native Windows. Live tool validation and
+release-build capacity measurements remain before the full M1 exit gate.
 
 Implement durable node/session/task/run identities, local SQLite storage and
 schema migrations, a command inbox, event journal, and interrupted-step records.
