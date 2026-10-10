@@ -3,8 +3,9 @@
 ## Status vocabulary
 
 **Accepted** requirements reflect the product discussion. **Proposed** details
-are engineering choices recorded here for review. **M0** is the current scaffold;
-M1 and later are planned milestones defined in the [roadmap](roadmap.md).
+are engineering choices recorded here for review. **M0** is implemented; local
+M1/M2 slices are implemented with validation and orchestration gaps still open.
+Later milestones remain planned in the [roadmap](roadmap.md).
 Priority orders work; it does not imply a future capability is already available.
 
 ## Non-negotiables
@@ -40,11 +41,11 @@ promise that an entire machine contains only one operating-system process.
 | ID | Feature | Priority / milestone | Acceptance outline |
 | --- | --- | --- | --- |
 | F01 | Local daemon health and CLI status | M0, implemented | CLI checks identity/version and emits human or JSON output. |
-| F02 | Durable session creation/listing/history | M1 | Session survives client exit and daemon restart. |
-| F03 | Direct provider inference | M1 | Own native loop streams one provider's real response. |
-| F04 | File and shell tools | M1 | Invocation, completion, limits, and output are recorded. |
-| F05 | Reconnectable events | M1 | A client catches up after disconnect without rerunning work. |
-| F06 | Steering and cancellation | M1 | Queued, accepted, applied, and interrupted states are distinct. |
+| F02 | Durable session creation/listing/history | M1, local slice implemented | Session survives client exit and daemon restart. |
+| F03 | Direct provider inference | M1, local slice implemented | Own native loop streams one provider's real response. |
+| F04 | File and shell tools | M1, local slice implemented | Invocation, completion, limits, and output are recorded. |
+| F05 | Reconnectable events | M1, local slice implemented | A client catches up after disconnect without rerunning work. |
+| F06 | Steering and cancellation | M1, local slice implemented | Queued, accepted, applied, and interrupted states are distinct. |
 | F07 | Run/task lifecycle and recovery | M1, local slice implemented | Restarted attempts and uncertain operations are visible. |
 | F08 | Project registration and worktrees | M2, session slice implemented | Registered projects reserve frozen-base worktrees; independent sessions allocate lazily and expose diffs/cleanup. |
 | F09 | Prompt/model/parameter matrices | M2, three-axis slice implemented | Expansion is deterministic, previewable, and bounded. |

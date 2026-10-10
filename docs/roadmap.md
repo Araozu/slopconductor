@@ -10,6 +10,66 @@ Milestones are capability gates, not calendar promises. The order can change
 with evidence, while accepted non-negotiables remain intact. Browser tools and
 migration are deliberately later tracks.
 
+## Recommended next delivery order
+
+**Proposed sequence, 2026-10-10.** Local sessions, project worktrees, durable
+tasks/run attempts, and three-axis matrices are implemented. The next work closes
+orchestration gaps before adding trusted remote control. This sequence describes
+future work; the operations below are not available yet.
+
+1. **Scheduling and batch controls.** Add fair admission across batches and
+   independent tasks, durable batch-wide cancellation, and aggregate task/batch
+   model-request and tool-call budgets. Current admission selects the oldest
+   eligible turn subject to global and per-batch caps; those caps alone do not
+   prevent a large batch from repeatedly taking every free slot. Reserve budget
+   consumption before dispatch and preserve it across retries and restart.
+   Monetary estimates remain distinct from enforceable operation limits.
+
+   Acceptance: an unrelated runnable task receives capacity within a documented
+   bound on new admissions, including when a batch's cap equals global capacity.
+   Canceling a batch prevents queued members from starting and uses existing
+   cancellation boundaries for running members. Repeated commands return the
+   original receipt; restart cannot reset budgets or lose cancellation intent.
+
+2. **Native child tasks.** Add separately authorized create/inspect/wait/result
+   operations through the same application services used by the public API.
+   Persist parent task/run links and child acceptance before execution. Select
+   context, artifacts, model, tools, project/base, and budgets explicitly; bound
+   depth and fan-out, and record cancel propagation at creation. Coding-tool
+   access alone must not grant permission to create children. Child attempts use
+   their own sessions and, when a project is selected, isolated workspaces.
+   Waiting parents release execution slots, and children share the applicable
+   scheduling and budget limits.
+
+   Acceptance: a parent delegates two isolated jobs, waits, and consumes their
+   results. A pool filled with waiting parents still admits children. Parent
+   reconnect/recovery reattaches to accepted child IDs without duplicate
+   creation. Recovery preserves dependencies and unknown tool effects without
+   automatically replaying inference or tools.
+
+3. **Platform and capacity validation.** Add Linux/native Windows CI for the
+   existing required checks and real-binary workflows, including Git/Bash and
+   process cancellation. Measure release builds with 1/10/100 sessions and a
+   large mostly queued batch, reporting daemon and supervised-tool memory
+   separately. Keep bounded live-provider tool checks explicitly opt-in.
+
+   Acceptance: record native Windows results, reproducible capacity measurements,
+   and the supported provider/tool combinations. M1/M2 remain partial until their
+   remaining acceptance scenarios pass; do not infer completion from Linux
+   offline checks alone.
+
+4. **Trusted remote CLI access.** Start M3 with owner-targeted access over
+   Tailscale, explicit pairing/revocation, read/write permissions, and protected
+   transport. Preserve command identities and distinguish pending delivery from
+   owner acceptance before adding aggregation or graphical clients.
+
+   Acceptance: a work CLI inspects and steers a home-owned task; read-only or
+   unpaired callers cannot mutate it, and local execution continues through
+   client or network loss.
+
+Branch publishing, richer result artifacts, and retention policy remain separate
+M2 follow-ups. Complete the full milestone gates below before declaring M2 done.
+
 ## M0 — Repository and architectural foundation
 
 **Status:** bootstrap implemented.

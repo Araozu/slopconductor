@@ -236,7 +236,9 @@ no-replay Git recovery. Each workspace belongs to a session; a task attempt owns
 offline acceptance workflow are described in
 [projects/workspaces](projects-workspaces.md). Task/run controls and matrices are implemented
 as described in
-[tasks and batches](tasks-batches.md). Children remain the next slice.
+[tasks and batches](tasks-batches.md). The [recommended delivery order](roadmap.md#recommended-next-delivery-order)
+adds scheduling and batch controls before native children, then closes platform
+and capacity validation gaps before remote control.
 
 Record logical repository identity, current exact base commit, local mappings,
 and workspace policy. Use managed worktrees for parallel writers; default shared
@@ -251,11 +253,30 @@ The [example request](../examples/batch-request.json) now matches the implemente
 `BatchSpec` accepted by `batch preview` and `batch submit`. Broader arbitrary
 parameter axes, aggregate budgets, and child creation remain future extensions.
 
+**Next proposed foundation:** replace oldest-eligible-turn admission with bounded
+fairness across batches and independent tasks. Add durable batch cancellation
+that prevents queued admission and cancels active members at existing execution
+boundaries. Add aggregate task/batch request and tool-call ledgers: reserve before
+dispatch and keep consumption across attempts and restart. Document the admission
+bound and test a batch whose concurrency cap equals the global cap. Current caps
+and spare-capacity tests do not establish cross-batch fairness.
+
 Implement native child-task tools through the same application operations. Make
 fan-out, depth, inheritance, cancellation, and waiting-slot behavior explicit.
+Expose orchestration as a separate authorized capability from the four coding
+tools. Persist parent task/run links, child command receipts, and wait
+dependencies atomically; select context/artifact references explicitly. Child
+attempts receive fresh sessions and, when project-backed, their own workspace
+reservations. Waiting parents release execution slots; recovery reattaches to
+known child IDs without replaying unknown effects. Apply aggregate budgets to
+descendants as well as ordinary batch members.
 
 Acceptance: batch results are attributable to exact inputs/workspaces, bounded
 concurrency remains responsive, and waiting parents cannot block all children.
+Exercise restart after child acceptance, parent cancellation policy, budget
+exhaustion across retries, and a full admission pool of waiting parents. Follow
+with native Windows workflows and release-build capacity measurements before
+declaring the M1/M2 gates complete.
 
 ## Step 7: providers, accounts, and supported subscriptions
 

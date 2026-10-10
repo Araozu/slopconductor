@@ -43,7 +43,6 @@ Implemented:
 - Registered projects and managed session worktrees with frozen base commits,
   lazy allocation, independent diffs, explicit cleanup, and Git recovery without
   replay. See [projects and workspaces](docs/projects-workspaces.md).
-
 - Durable tasks and explicit run attempts, with pause/resume/cancel, steering,
   fresh retries, and preserved prior workspaces/results.
 - Deterministic prompt/model/settings matrices with preview, atomic acceptance,
@@ -53,6 +52,11 @@ Implemented:
 Planned: more daemon provider options, child tasks, remote
 control, additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
+
+The [recommended next steps](docs/roadmap.md#recommended-next-delivery-order) are
+fair scheduling, batch cancellation and aggregate budgets; native child tasks;
+Windows and capacity validation; then trusted remote CLI access. These remain
+planned, and the current daemon accepts loopback connections only.
 
 ## Run local text chat
 

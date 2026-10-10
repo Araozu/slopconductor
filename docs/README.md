@@ -25,6 +25,11 @@ atomic acceptance, bounded admission, explicit selective retries, and result
 export. Children remain planned. Commands,
 schemas, and workflows marked proposed describe future work.
 
+The [recommended next delivery order](roadmap.md#recommended-next-delivery-order)
+is scheduling/batch controls, native child tasks, platform/capacity validation,
+then trusted remote CLI access. M1/M2 remain partial; Linux offline validation
+does not establish native Windows or live-provider behavior.
+
 ## Reading order
 
 | Document | Purpose |
@@ -77,9 +82,9 @@ clients share the wire contract and can generate their own SDK.
 ## Current repository entry points
 
 - [Root manifest](../Cargo.toml): virtual Rust workspace and shared dependency versions.
-- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node, chat, and structured execution DTOs.
+- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node, chat, structured execution, projects/workspaces, and task/batch DTOs.
 - [Client library](../crates/slop-client/src/lib.rs): bounded requests, event streams, token files, and compatibility checks.
 - [Daemon](../crates/slop-daemon/src/main.rs): loopback HTTP service.
-- [CLI](../crates/slop-cli/src/main.rs): independent status, session, turn, chat, capability, and artifact client.
+- [CLI](../crates/slop-cli/src/main.rs): independent status, chat, session/turn, capability/artifact, project/workspace, and task/run/batch client.
 - [Client placeholder directory](../clients/README.md): future frontend locations.
 - [Smoke script](../scripts/smoke.py): checks the real daemon and CLI together.

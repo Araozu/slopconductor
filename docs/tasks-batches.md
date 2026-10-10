@@ -180,8 +180,17 @@ resolve Git refs or preflight mutable provider settings again.
 Matrices have 1–256 members, checked with overflow-safe cardinality before
 expansion. Batch concurrency is 1–16 and also obeys daemon-wide admission limits.
 The database claim transaction counts active members, so concurrent admissions
-cannot exceed the batch cap. A full batch leaves spare global slots available
-for other work. Paused members release their batch slots.
+cannot exceed the batch cap. When that cap is below the global cap, a batch at
+its limit leaves spare global slots available for other work. Paused members
+release their batch slots.
+
+Eligible turns are admitted in creation order. A per-batch cap leaves capacity
+for unrelated work only when it is below the global cap; it does not guarantee
+fair admission across batches. Batch-wide cancellation and aggregate request/tool
+budgets are not implemented. Individual run cancellation and existing per-turn
+execution limits remain the available controls. See the
+[recommended delivery order](roadmap.md#recommended-next-delivery-order) for the
+proposed controls and child-task work that follows them.
 
 There are at most 1,024 active job attempts, with the existing 1,024 queued-turn
 limit also enforced. Managed workspaces retain their 256-global/32-per-project
