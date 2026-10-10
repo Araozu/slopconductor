@@ -100,6 +100,10 @@ slots and one serialized worktree mutation. Each command has a 30-second deadlin
 and a 1 MiB combined stdout/stderr bound. Commands inherit only the existing tool
 environment allowlist; interactive credentials, pagers, hooks, fsmonitor, and
 external diff/text converters are disabled. Provider credentials are excluded.
+Windows keeps canonical verbatim paths for workspace identity and containment
+checks, but passes conventional drive/UNC paths to Git and enables
+`core.longpaths` for each command. This supports deep managed paths without
+changing the user's Git configuration.
 Checkout filters remain repository configuration and can execute subprocesses
 under the user's permissions. Unix process groups and Windows Job Objects
 supervise descendants; hard daemon death on Unix can leave subprocesses alive.
@@ -165,8 +169,9 @@ independent edits, untouched source files, diffs, authentication, pagination,
 cleanup refusal, detached commit preservation, preexisting destination failure,
 and persisted state after restart. Storage fault injection checks both unfinished
 Git operation states, preserved paths, no replay, and schema-4 migration preserving
-session receipts. Linux is exercised; native Windows and live-provider checks
-remain separate validation gates.
+session receipts. A runtime test creates, edits, inspects, and safely removes a
+real worktree beyond the legacy Windows path limit. Linux is exercised; native
+Windows and live-provider checks remain separate validation gates.
 
 Git behavior follows upstream [worktree](https://git-scm.com/docs/git-worktree),
 [revision resolution](https://git-scm.com/docs/git-rev-parse), and

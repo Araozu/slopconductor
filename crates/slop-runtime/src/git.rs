@@ -87,17 +87,19 @@ impl GitService {
         if tokio::fs::canonicalize(&hooks).await.ok().as_ref() != Some(&hooks) {
             return Err(GitError::known("workspace_path_denied"));
         }
-        let hooks_config = format!("core.hooksPath={}", hooks.display());
+        let hooks_config = format!("core.hooksPath={}", git_path(&hooks)?);
         let mut command = CommandWrap::with_new("git", |command| {
+            command.args([
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                &hooks_config,
+                "-c",
+                "core.fsmonitor=false",
+            ]);
+            #[cfg(windows)]
+            command.args(["-c", "core.longpaths=true"]);
             command
-                .args([
-                    "--no-pager",
-                    "--no-optional-locks",
-                    "-c",
-                    &hooks_config,
-                    "-c",
-                    "core.fsmonitor=false",
-                ])
                 .args(args)
                 .current_dir(cwd)
                 .stdin(Stdio::null())
@@ -298,17 +300,10 @@ impl GitService {
         {
             return Err(GitError::known("workspace_path_denied"));
         }
+        let destination = git_path(path)?;
         self.run(
             Path::new(&repo.path),
-            &[
-                "worktree",
-                "add",
-                "--detach",
-                "--",
-                path.to_str()
-                    .ok_or(GitError::known("workspace_path_denied"))?,
-                commit,
-            ],
+            &["worktree", "add", "--detach", "--", &destination, commit],
             true,
             cancel,
         )
@@ -440,14 +435,45 @@ impl GitService {
         if diff.head_commit != base {
             return Err(GitError::known("workspace_has_commits"));
         }
+        let destination = git_path(Path::new(path))?;
         self.run(
             Path::new(&repo.path),
-            &["worktree", "remove", "--", path],
+            &["worktree", "remove", "--", &destination],
             true,
             cancel,
         )
         .await?;
         Ok(())
+    }
+}
+
+// Keep canonical paths for identity and containment checks. Git for Windows
+// rejects the question mark in Rust's verbatim paths when creating a worktree;
+// translate only arguments passed to Git, which manages long paths itself.
+#[cfg(not(windows))]
+fn git_path(path: &Path) -> Result<String, GitError> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or(GitError::known("workspace_path_denied"))
+}
+
+#[cfg(windows)]
+fn git_path(path: &Path) -> Result<String, GitError> {
+    use std::path::{Component, Prefix};
+
+    let value = path
+        .to_str()
+        .ok_or(GitError::known("workspace_path_denied"))?;
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::VerbatimDisk(_) => Ok(value[4..].replace('\\', "/")),
+            Prefix::VerbatimUNC(_, _) => Ok(format!("//{}", value[8..].replace('\\', "/"))),
+            Prefix::Verbatim(_) | Prefix::DeviceNS(_) => {
+                Err(GitError::known("workspace_path_denied"))
+            }
+            _ => Ok(value.replace('\\', "/")),
+        },
+        _ => Ok(value.replace('\\', "/")),
     }
 }
 
@@ -469,4 +495,86 @@ fn line(bytes: Vec<u8>) -> Result<String, GitError> {
 }
 fn valid_commit(commit: &str) -> bool {
     matches!(commit.len(), 40 | 64) && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn managed_worktree_supports_canonical_paths_beyond_windows_path_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("repository with spaces");
+        std::fs::create_dir(&source).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                ])
+                .args(args)
+                .current_dir(&source)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init"]);
+        // Runtime Git configuration must override a repository's short-path
+        // default, without changing the user's persisted configuration.
+        git(&["config", "core.longpaths", "false"]);
+        std::fs::write(source.join("file.txt"), "before\n").unwrap();
+        git(&["add", "file.txt"]);
+        git(&["commit", "-m", "base"]);
+
+        let mut data = directory.path().join("data");
+        for index in 0..6 {
+            data = data.join(format!("{index}-{}end", "deep path ".repeat(4)));
+        }
+        std::fs::create_dir_all(&data).unwrap();
+        let data = std::fs::canonicalize(data).unwrap();
+        let service = GitService::new(data.clone());
+        let repo = service.inspect(source.to_str().unwrap()).await.unwrap();
+        let base = service.resolve(&repo, None).await.unwrap();
+        let workspace = data.join("workspaces").join("project").join("workspace");
+        let path = workspace.to_str().unwrap();
+        assert!(path.len() > 260);
+        let (_sender, mut cancel) = watch::channel(false);
+        service
+            .allocate(&repo, path, &base, &mut cancel)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::canonicalize(&workspace).unwrap(), workspace);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
+            "before\n"
+        );
+        std::fs::write(workspace.join("file.txt"), "after\n").unwrap();
+        let diff = service.diff(&repo, path, &base).await.unwrap();
+        assert_eq!(diff.head_commit, base);
+        assert!(diff.patch.contains("+after"));
+        assert!(diff.patch.contains("-before"));
+        let error = service
+            .remove(&repo, path, &base, &mut cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "workspace_dirty");
+        assert!(!error.effects_unknown);
+        assert!(workspace.is_dir());
+        assert_eq!(
+            std::fs::read_to_string(source.join("file.txt")).unwrap(),
+            "before\n"
+        );
+        std::fs::write(workspace.join("file.txt"), "before\n").unwrap();
+        service
+            .remove(&repo, path, &base, &mut cancel)
+            .await
+            .unwrap();
+        assert!(!workspace.exists());
+    }
 }
