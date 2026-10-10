@@ -299,9 +299,9 @@ fn require_absolute(path: PathBuf, source: &str) -> Result<PathBuf, ConfigError>
 fn default_config_path(env: &ConfigEnvironment) -> Result<Option<PathBuf>, ConfigError> {
     #[cfg(windows)]
     {
-        return env.local_app_data.as_ref().filter(|p| p.is_absolute() && !p.as_os_str().is_empty())
+        env.local_app_data.as_ref().filter(|p| p.is_absolute() && !p.as_os_str().is_empty())
             .map(|base| Some(base.join("slopconductor/config.toml")))
-            .ok_or_else(|| ConfigError::Invalid("LOCALAPPDATA must contain an absolute path when no config override is supplied".into()));
+            .ok_or_else(|| ConfigError::Invalid("LOCALAPPDATA must contain an absolute path when no config override is supplied".into()))
     }
     #[cfg(not(windows))]
     {

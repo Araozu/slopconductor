@@ -37,13 +37,13 @@ fn default_token_file() -> Result<Option<PathBuf>> {
     }
     #[cfg(windows)]
     {
-        return Ok(std::env::var_os("LOCALAPPDATA")
+        Ok(std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .map(|root| {
                 root.join("slopconductor")
                     .join("credentials")
                     .join("local-api-token")
-            }));
+            }))
     }
     #[cfg(not(windows))]
     {
