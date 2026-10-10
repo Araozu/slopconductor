@@ -116,6 +116,8 @@ pub mod chat {
         pub settings: crate::execution::GenerationSettings,
         #[serde(default)]
         pub execution: Option<crate::execution::WorkspacePolicy>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub managed_workspace_id: Option<String>,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,6 +131,8 @@ pub mod chat {
         pub settings: Option<crate::execution::GenerationSettings>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub execution: Option<crate::execution::WorkspacePolicy>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub project: Option<crate::projects::ProjectWorkspaceRequest>,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -293,3 +297,4 @@ pub mod chat {
 }
 
 pub mod execution;
+pub mod projects;

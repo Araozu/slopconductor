@@ -46,7 +46,7 @@ promise that an entire machine contains only one operating-system process.
 | F05 | Reconnectable events | M1 | A client catches up after disconnect without rerunning work. |
 | F06 | Steering and cancellation | M1 | Queued, accepted, applied, and interrupted states are distinct. |
 | F07 | Run/task lifecycle and recovery | M1 | Restarted attempts and uncertain operations are visible. |
-| F08 | Project registration and worktrees | M2 | Concurrent writers receive isolated workspaces or an exclusive lease. |
+| F08 | Project registration and worktrees | M2, session slice implemented | Registered projects reserve frozen-base worktrees; independent sessions allocate lazily and expose diffs/cleanup. |
 | F09 | Prompt/model/parameter matrices | M2 | Expansion is deterministic, previewable, and bounded. |
 | F10 | Batch results and selective retries | M2 | Outputs preserve parameters; successful tasks are retained. |
 | F11 | Agent-created child tasks | M2 | Parent links, context selection, budgets, and limits are explicit. |

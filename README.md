@@ -26,7 +26,7 @@ Implemented:
 - A consumer CLI with interactive and one-shot chat, session inspection,
   stdin/file prompts, event following, and JSON output through the public API.
 - Human-readable and JSON status output.
-- A daemon/CLI smoke check and a Linux/Windows CI workflow.
+- Real-binary daemon/CLI smoke checks; native Windows validation remains outstanding.
 - OpenCode Go and Zen integrations through the shared
   `ProviderClient` interface, with model discovery and streaming/non-streaming text turns across
   Chat Completions, Responses, and Messages. Both are selectable through the
@@ -40,8 +40,11 @@ Implemented:
 - Daemon-owned coding tools limited to `read`, `write`, `edit`, and `bash`, with
   workspace policies, durable invocation/results, bounded output, artifacts,
   cancellation, and recovery without replay. See [structured execution](docs/structured-execution.md).
+- Registered projects and managed session worktrees with frozen base commits,
+  lazy allocation, independent diffs, explicit cleanup, and Git recovery without
+  replay. See [projects and workspaces](docs/projects-workspaces.md).
 
-Planned: more daemon provider options, worktrees, batch execution, child tasks, remote
+Planned: more daemon provider options, task/run orchestration, batch execution, child tasks, remote
 control, additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
 
@@ -125,6 +128,23 @@ delivery, retry the same operation with the same ID and input. Completed history
 survives daemon restart. Interrupted thinking is discarded and in-flight turns
 are marked interrupted without automatically repeating the provider request.
 See [text chat](docs/text-chat.md) for API and recovery details.
+
+For isolated jobs in one repository, register it and use its returned project ID:
+
+```sh
+cargo run -- project register /absolute/project
+cargo run -- chat --project PROJECT_ID --base main --prompt "Fix the failing test." --detach
+cargo run -- chat --project PROJECT_ID --base main --prompt "Improve error handling." --detach
+cargo run -- project workspaces PROJECT_ID
+cargo run -- workspace diff WORKSPACE_ID
+cargo run -- workspace remove WORKSPACE_ID
+```
+
+Each session freezes its base at acceptance and allocates a detached worktree
+when its first turn is admitted. Git must be on the daemon's PATH. Cleanup is
+explicit and refuses active workspaces, dirty files, and new detached commits;
+inspect its asynchronous outcome with `workspace show`. See the
+[workspace guide](docs/projects-workspaces.md) for API, limits, and recovery.
 
 `SLOP_LISTEN` and `SLOP_DAEMON_URL` provide the equivalent endpoint settings.
 Use `--config`/`SLOP_CONFIG`, `--data-dir`/`SLOP_DATA_DIR`, and

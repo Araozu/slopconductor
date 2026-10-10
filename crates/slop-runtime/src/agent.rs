@@ -145,6 +145,19 @@ pub(crate) async fn execute<R: ChatRepository>(
         )
         .await;
     };
+    match repository.prepare_workspace(&work.turn_id, shutdown).await {
+        Ok(Some((code, message))) => {
+            return stop(
+                repository.as_ref(),
+                &work.turn_id,
+                failed(code, message),
+                total,
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(_) => return false,
+    }
     let mut messages = if work.history.is_empty() {
         work.messages
             .iter()

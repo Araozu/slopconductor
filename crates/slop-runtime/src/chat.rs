@@ -33,6 +33,15 @@ pub type RepoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepoError>> +
 /// Storage boundary for accepted chat turns. Implementations own transaction
 /// semantics and wire-independent persistence; the runtime never sees SQL/DTOs.
 pub trait ChatRepository: Send + Sync + 'static {
+    /// Prepare a managed workspace only after admission. A committed Git
+    /// failure is a turn outcome; persistence failures stop the supervisor.
+    fn prepare_workspace<'a>(
+        &'a self,
+        _turn_id: &'a str,
+        _shutdown: &'a mut tokio::sync::watch::Receiver<bool>,
+    ) -> RepoFuture<'a, Option<(&'static str, &'static str)>> {
+        Box::pin(async { Ok(None) })
+    }
     fn begin_request<'a>(&'a self, turn_id: &'a str, intent: RequestIntent)
     -> RepoFuture<'a, bool>;
     fn checkpoint_request<'a>(

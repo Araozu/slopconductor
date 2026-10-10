@@ -13,7 +13,10 @@ Schema version 2 added sessions, text turns, ordered messages, command receipts,
 and semantic events. Schema 3 adds structured blocks, private continuation,
 frozen settings, model requests, tool intents/results, workspace roots, and
 artifact metadata. Schema 4 adds durable steering instructions and
-pause/resume/usage-uncertainty state. See [structured execution](structured-execution.md). The worker
+pause/resume/usage-uncertainty state. Schema 5 adds projects, managed session
+workspaces, project events, and a session's managed-workspace reference.
+See [structured execution](structured-execution.md) and
+[projects/workspaces](projects-workspaces.md). The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,
 and a bounded busy timeout. Node identity and display-name changes commit in a
 transaction before startup is announced.
@@ -41,15 +44,15 @@ linked version and relevant fixes when updating the binding.
   artifacts/
     <content-hash>/...       # bounded files and metadata references
   workspaces/
-    <project-id>/<run-id>/   # daemon-managed worktrees when configured
+    <project-id>/<workspace-id>/ # managed worktrees allocated on admission
   transfer-staging/
     <transfer-id>/...        # validated future handoff packages
 ```
 
 The lock, database, SQLite sidecars when needed, local API credential, and
 [runtime provider credentials](provider-credentials.md) are implemented.
-Provider files are created only when configured. Artifact/workspace/transfer directories are future layout;
-startup does not create unused directories.
+Provider files are created only when configured. Artifacts and lazily allocated
+managed workspaces are implemented; transfer staging remains a future layout.
 
 Linux config is `$XDG_CONFIG_HOME/slopconductor/config.toml` (default
 `~/.config/slopconductor/config.toml`), and authoritative data is

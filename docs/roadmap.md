@@ -19,7 +19,8 @@ Deliverables:
 - Git repository on `main`, Rust virtual workspace, lockfile, formatting/lint rules.
 - Domain, protocol, runtime, client, daemon, and CLI crate boundaries.
 - Loopback-only daemon health endpoint and compatible native CLI status command.
-- Human/JSON output, a real-binary smoke check, and Linux/Windows CI definition.
+- Human/JSON output and real-binary smoke checks. Linux/Windows CI automation
+  remains follow-up work; this checkout has no workflow definition.
 - Detailed product, requirements, architecture, protocol, subsystem, and roadmap docs.
 
 Acceptance: build the CLI independently; run a daemon; query it from a separate
@@ -38,6 +39,9 @@ cancellation, and a consumer chat CLI. [Structured execution](structured-executi
 now implements file/shell tools, explicit workspace policy/leases, artifacts,
 structured streaming, frozen per-turn model/settings, and no-replay recovery.
 General task/run lifecycle and native Windows validation remain unfinished.
+The first M2 project/workspace slice is now implemented: registered repositories,
+frozen bases, lazy detached worktree admission, separate diffs, explicit cleanup,
+and no-replay Git recovery. See [projects/workspaces](projects-workspaces.md).
 
 ## M1 — Useful local native coding agent through the CLI
 
@@ -86,6 +90,12 @@ Register projects and implement managed worktree allocation, frozen base commits
 workspace reservations, diffs, artifacts, and deliberate cleanup. Add matrix
 preflight/validation, deterministic expansion, admission limits, batch metadata,
 selective retries, and result export.
+
+**Partial implementation:** sessions can select registered projects and reserve
+detached workspaces. Real-binary offline checks exercise concurrent independent
+edits, frozen commits, diffs, cleanup refusals, and restart durability. General
+tasks/runs, matrix submission, richer result artifacts, branch publishing, and
+automated retention remain before the full M2 exit gate.
 
 Implement native child-task creation with explicit context/tool/budget selection,
 bounded fan-out/depth, fair scheduling, and parent/child links. Waiting parents

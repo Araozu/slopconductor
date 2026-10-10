@@ -4,7 +4,7 @@ These documents capture the application idea, accepted constraints, proposed
 design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
-**Status as of 2026-10-09:** milestone M0 is a repository/bootstrap foundation,
+**Status as of 2026-10-10:** milestone M0 is a repository/bootstrap foundation,
 with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
@@ -17,6 +17,8 @@ request/invocation records, artifacts, block-aware streaming, and per-turn model
 settings. Execution steering supports after-turn, next-boundary, and immediate
 delivery, plus durable pause/resume with explicit re-admission. Same-turn
 steering keeps its provider snapshot; a resumed pause takes a fresh snapshot.
+Managed projects/workspaces now add repository registration, frozen base commits,
+lazy detached worktrees, separate diffs, explicit cleanup, and Git recovery.
 The 2026-10-09 tool update limits coding tools to `read`, `write`, `edit`, and
 `bash`. General task orchestration remains planned. Commands,
 schemas, and workflows marked proposed describe future work.
@@ -32,6 +34,7 @@ schemas, and workflows marked proposed describe future work.
 | [Protocol](protocol.md) | Proposed commands, responses, events, and compatibility |
 | [Text chat](text-chat.md) | Implemented local chat ownership, API, durability, and recovery |
 | [Structured execution](structured-execution.md) | Implemented tool loop, structured streaming, artifacts, frozen model/settings, and recovery |
+| [Projects and workspaces](projects-workspaces.md) | Implemented registration, lazy worktrees, frozen bases, diffs, cleanup, and Git recovery |
 | [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
 | [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |

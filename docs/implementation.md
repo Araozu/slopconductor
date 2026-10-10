@@ -29,7 +29,10 @@ specifies the implemented surface. Structured Go/Zen turns now persist blocks/pr
 model/settings, model requests, file/shell invocations, artifacts, and recovery
 results. Its only coding tools are `read`, `write`, `edit`, and `bash`, implemented
 in Rust; workspace chats enable all four unless an explicit allowlist restricts
-them. Worktrees, batch execution, and peer control remain next-stage work.
+them. Registered projects, frozen-base managed session worktrees, lazy allocation,
+separate diffs, explicit cleanup, and Git recovery are now implemented; see
+[projects/workspaces](projects-workspaces.md). General tasks/runs, batches, and
+peer control remain next-stage work.
 
 ## Suggested module growth
 
@@ -108,8 +111,9 @@ to extend this structure.
 
 **Implemented startup foundation:** see [daemon startup](daemon-startup-plan.md)
 for actual paths, configuration, authentication, and the accepted recovery policy.
-Project registries, provider-account configuration, and remote pairing remain
-later extensions rather than placeholders in the startup config.
+Project registration and runtime provider credentials now have their own public
+operations. Remote pairing remains a later extension rather than a startup
+configuration placeholder.
 
 Platform config/data paths, explicit overrides, opaque node IDs, display names,
 and OS-backed exclusivity are implemented. Physical-machine grouping remains
@@ -129,9 +133,10 @@ data directory, and configuration errors are actionable without revealing secret
 
 ## Step 2: domain state and durable repository
 
-**Implemented text subset:** schema 2 stores sessions, turns, ordered messages,
-canonical command payloads/receipts, and per-session events through the existing
-bounded database worker. General tasks/runs and artifacts remain proposed.
+**Implemented session subset:** schema 5 stores sessions, turns, ordered messages,
+canonical command payloads/receipts, session/project events, structured requests
+and tools, artifacts, steering, and managed workspaces through the bounded
+database worker. General tasks/runs remain proposed.
 
 Implement session/task/run IDs and transition functions in `slop-core`. Keep
 errors and invariants domain-specific. Decide run creation/admission semantics
@@ -217,6 +222,14 @@ known results are reused and unknown edits/commands are not blindly replayed.
 Check Linux and Windows process behavior with real children.
 
 ## Step 6: projects, worktrees, and matrix orchestration
+
+**Implemented project/workspace subset:** repository registration, frozen base
+commits, metadata-only reservations, detached allocation on turn admission,
+bounded Git supervision, independent diffs, explicit conservative cleanup, and
+no-replay Git recovery. Workspaces currently belong to sessions. The CLI/API and
+offline acceptance workflow are described in
+[projects/workspaces](projects-workspaces.md). Matrices, children, and general
+task/run controls remain the next slices.
 
 Record logical repository identity, current exact base commit, local mappings,
 and workspace policy. Use managed worktrees for parallel writers; default shared

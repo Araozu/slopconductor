@@ -32,6 +32,16 @@ pub enum Command {
     Models,
     /// Show structured execution and registered tool capabilities.
     Capabilities,
+    /// Register and inspect repositories on the daemon's machine.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    /// Inspect or deliberately remove a managed session worktree.
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
+    },
     /// Inspect or download durable tool output.
     Artifact {
         #[command(subcommand)]
@@ -169,7 +179,56 @@ pub enum ArtifactCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ProjectCommand {
+    Register {
+        /// Absolute repository checkout path on the daemon's machine.
+        path: PathBuf,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+    List {
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    Show {
+        id: String,
+    },
+    Workspaces {
+        id: String,
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    Events {
+        id: String,
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceCommand {
+    Show {
+        id: String,
+    },
+    Diff {
+        id: String,
+    },
+    Remove {
+        id: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+}
+
 #[derive(Debug, clap::Args)]
+#[command(group(clap::ArgGroup::new("workspace_selection").args(["workspace", "project"]).multiple(false)))]
 pub struct ChatArgs {
     #[arg(long)]
     pub session: Option<String>,
@@ -178,8 +237,14 @@ pub struct ChatArgs {
     /// Explicit workspace on the daemon's machine for a new tool-enabled session.
     #[arg(long, conflicts_with = "session")]
     pub workspace: Option<PathBuf>,
-    /// Tool to allow; repeat to restrict the default read/write/edit/bash set. Requires --workspace.
-    #[arg(long="tool", requires="workspace", value_parser=["read","write","edit","bash"])]
+    /// Registered project on the daemon; reserve an isolated managed worktree.
+    #[arg(long, conflicts_with = "session")]
+    pub project: Option<String>,
+    /// Git revision to freeze when reserving a project worktree (default HEAD).
+    #[arg(long, requires = "project")]
+    pub base: Option<String>,
+    /// Tool to allow; repeat to restrict the default read/write/edit/bash set.
+    #[arg(long="tool", requires="workspace_selection", value_parser=["read","write","edit","bash"])]
     pub tools: Vec<String>,
     #[arg(long)]
     pub effort: Option<String>,
@@ -201,6 +266,34 @@ pub struct ChatArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_workspaces_require_an_unambiguous_target() {
+        let args = Args::try_parse_from([
+            "slop",
+            "chat",
+            "--project",
+            "project-1",
+            "--base",
+            "main",
+            "--tool",
+            "edit",
+            "--prompt",
+            "fix",
+        ])
+        .unwrap();
+        assert!(
+            matches!(args.command, Command::Chat(ChatArgs { project: Some(project), base: Some(base), .. }) if project == "project-1" && base == "main")
+        );
+        for args in [
+            vec!["slop", "chat", "--project", "p", "--workspace", "/tmp"],
+            vec!["slop", "chat", "--project", "p", "--session", "s"],
+            vec!["slop", "chat", "--base", "main"],
+            vec!["slop", "chat", "--tool", "edit"],
+        ] {
+            assert!(Args::try_parse_from(args).is_err());
+        }
+    }
 
     #[test]
     fn model_selection_is_preserved_when_resuming_a_session() {

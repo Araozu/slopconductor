@@ -65,8 +65,8 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
 
 #[derive(Debug, Deserialize)]
 pub struct PageQuery {
-    after: Option<u64>,
-    limit: Option<usize>,
+    pub(super) after: Option<u64>,
+    pub(super) limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,10 +318,11 @@ async fn create_session(
             );
         }
         if provider_id == slop_core::provider::ProviderId::Codex
-            && request
-                .execution
-                .as_ref()
-                .is_some_and(|policy| !policy.allowed_tools.is_empty())
+            && (request.project.is_some()
+                || request
+                    .execution
+                    .as_ref()
+                    .is_some_and(|policy| !policy.allowed_tools.is_empty()))
         {
             return error(
                 StatusCode::BAD_REQUEST,
@@ -746,7 +747,7 @@ pub(super) async fn normalize_rejections(request: Request<Body>, next: Next) -> 
     }
 }
 
-fn checked_limit(limit: Option<usize>) -> Result<usize, ApiError> {
+pub(super) fn checked_limit(limit: Option<usize>) -> Result<usize, ApiError> {
     let limit = limit.unwrap_or(50);
     if (1..=200).contains(&limit) {
         Ok(limit)
@@ -759,22 +760,32 @@ fn checked_limit(limit: Option<usize>) -> Result<usize, ApiError> {
     }
 }
 
-fn accepted<T: serde::Serialize>(result: Result<T, StoreError>) -> Response {
+pub(super) fn accepted<T: serde::Serialize>(result: Result<T, StoreError>) -> Response {
     match result {
         Ok(value) => (StatusCode::ACCEPTED, Json(value)).into_response(),
         Err(error) => store_error(error),
     }
 }
 
-fn storage_response<T: serde::Serialize>(result: Result<T, StoreError>) -> Response {
+pub(super) fn storage_response<T: serde::Serialize>(result: Result<T, StoreError>) -> Response {
     match result {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(error) => store_error(error),
     }
 }
 
-fn store_error(store_error: StoreError) -> Response {
+pub(super) fn store_error(store_error: StoreError) -> Response {
     match store_error {
+        StoreError::Git(git) => error(
+            match git.code {
+                "git_unavailable" | "git_timeout" => StatusCode::SERVICE_UNAVAILABLE,
+                "git_output_limit" => StatusCode::PAYLOAD_TOO_LARGE,
+                "project_changed" | "workspace_path_denied" => StatusCode::CONFLICT,
+                _ => StatusCode::BAD_REQUEST,
+            },
+            git.code,
+            "The Git operation failed; inspect the project or workspace before retrying.",
+        ),
         StoreError::Busy => error(
             StatusCode::SERVICE_UNAVAILABLE,
             "storage_busy",
@@ -783,7 +794,7 @@ fn store_error(store_error: StoreError) -> Response {
         StoreError::Invalid => error(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "The chat request is invalid.",
+            "The request is invalid.",
         ),
         StoreError::Unsupported(field) => {
             error(StatusCode::BAD_REQUEST, "unsupported_capability", field)
@@ -802,7 +813,7 @@ fn store_error(store_error: StoreError) -> Response {
         StoreError::NotFound => error(
             StatusCode::NOT_FOUND,
             "not_found",
-            "The requested chat record does not exist.",
+            "The requested record does not exist.",
         ),
         StoreError::Conflict => error(
             StatusCode::CONFLICT,
@@ -817,7 +828,7 @@ fn store_error(store_error: StoreError) -> Response {
     }
 }
 
-fn error(status: StatusCode, code: &str, message: &str) -> Response {
+pub(super) fn error(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
         Json(ErrorResponse {
@@ -828,7 +839,7 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
-struct ApiError {
+pub(super) struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: &'static str,

@@ -48,6 +48,10 @@ provider interface. [Structured execution](structured-execution.md) adds a
 durable Go/Zen tool loop, explicit workspace leases, artifacts, and frozen
 per-turn model/settings. Codex currently supports text-only turns. General
 task/run orchestration remains planned.
+Registered [projects and managed workspaces](projects-workspaces.md) now add
+frozen repository commits, lazy detached worktree allocation after admission,
+separate diffs, explicit cleanup, and no-replay Git recovery. Workspaces belong
+to sessions until a general task/run layer exists.
 
 The daemon also owns [runtime provider credential configuration](provider-credentials.md):
 private XDG records, API-key replacement, and a bounded ChatGPT login listener.
@@ -137,12 +141,14 @@ Windows uses local application data. Startup also reconciles in-flight text
 turns and model requests as interrupted, and pairs unfinished tools with failure
 results without replaying effects; queued, undispatched turns remain eligible
 for admission.
-Registered-project scans are later work. It must not implicitly resume every
-recorded command.
+Unfinished Git allocation/removal becomes a failed workspace with unknown
+effects; it is never replayed. Ready workspaces are validated on admission.
+Startup does not scan registered projects or implicitly resume recorded commands.
 
 Shutdown handles Ctrl-C and Unix SIGTERM, stops HTTP admissions, and drains the
 database worker under a configured deadline. Chat inference is stopped before
-storage closes. Tool cleanup remains planned. Interrupted thinking is discarded. Unfinished tool
+storage closes. Tool and Git supervisors perform bounded descendant cleanup.
+Interrupted thinking is discarded. Unfinished tool
 calls will be failed due to daemon/process failure without restoring or replaying
 them; the agent decides its next action, with uncertain effects disclosed.
 

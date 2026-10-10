@@ -1,6 +1,7 @@
 mod artifact;
 mod chat;
 mod discovery;
+mod projects;
 mod provider;
 mod session;
 mod turn;
@@ -51,6 +52,8 @@ pub async fn run(args: Args) -> Result<()> {
         }
         Command::Artifact { command } => artifact::run(command, &context).await,
         Command::Provider { command } => provider::run(command, &context).await,
+        Command::Project { command } => projects::project(command, &context).await,
+        Command::Workspace { command } => projects::workspace(command, &context).await,
         Command::Session { command } => session::run(command, &context).await,
         Command::Turn { command } => turn::run(command, &context).await,
         Command::Chat(args) => chat::run(args, &context).await,

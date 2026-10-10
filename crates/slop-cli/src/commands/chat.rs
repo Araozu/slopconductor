@@ -32,6 +32,8 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         effort,
         max_output_tokens,
         delivery,
+        project,
+        base,
     } = args;
     let input = prompt_value_optional(prompt, prompt_file).await?;
     let interactive = input.is_none() && io::stdin().is_terminal();
@@ -70,7 +72,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
                 allowed_tools: if tools.is_empty() {
                     vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
                 } else {
-                    tools
+                    tools.clone()
                 },
                 shell_timeout_ms: 30_000,
                 max_output_bytes: 1024 * 1024,
@@ -79,6 +81,17 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
             })
         })
         .transpose()?;
+    let project = project.map(
+        |project_id| slop_protocol::projects::ProjectWorkspaceRequest {
+            project_id,
+            base_ref: base,
+            allowed_tools: if tools.is_empty() {
+                vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
+            } else {
+                tools
+            },
+        },
+    );
     let mut session_id = match session {
         Some(id) => id,
         None => {
@@ -89,6 +102,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
                 context.output,
                 settings,
                 execution,
+                project,
             )
             .await?
         }
@@ -168,6 +182,7 @@ async fn create_session(
     output: Output,
     settings: Option<slop_protocol::execution::GenerationSettings>,
     execution: Option<slop_protocol::execution::WorkspacePolicy>,
+    project: Option<slop_protocol::projects::ProjectWorkspaceRequest>,
 ) -> Result<String> {
     let (provider, model) = match model {
         Some(value) => parse_model(&value)?,
@@ -189,6 +204,7 @@ async fn create_session(
         max_tokens: None,
         settings,
         execution,
+        project,
     };
     let receipt = client
         .create_session(&request)

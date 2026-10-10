@@ -25,10 +25,11 @@ use slop_protocol::{
 use tokio::sync::oneshot;
 
 mod execution;
+mod projects;
 
 const DATABASE_FILE: &str = "state.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const MINIMUM_SQLITE_VERSION: i32 = 3_051_003;
 const MAX_QUEUE_CAPACITY: usize = 4096;
 const MAX_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -77,6 +78,8 @@ pub enum StoreError {
     ActiveTurnOverride,
     #[error("message preflight failed: {0}")]
     Preflight(&'static str, &'static str),
+    #[error("Git operation failed: {0}")]
+    Git(#[from] slop_runtime::git::GitError),
 }
 
 type StoreResult<T> = Result<T, StoreError>;
@@ -89,6 +92,10 @@ struct Shared {
     sender: SyncSender<Request>,
     gate: Arc<Mutex<Gate>>,
     alive: Arc<AtomicBool>,
+    data_dir: PathBuf,
+    git: slop_runtime::git::GitService,
+    workspace_jobs: Arc<tokio::sync::Mutex<tokio::task::JoinSet<()>>>,
+    workspace_healthy: AtomicBool,
 }
 
 enum Request {
@@ -174,6 +181,10 @@ impl Store {
             sender,
             gate: Arc::clone(&gate),
             alive: Arc::clone(&alive),
+            data_dir: canonical_dir.clone(),
+            git: slop_runtime::git::GitService::new(canonical_dir.clone()),
+            workspace_jobs: Arc::new(tokio::sync::Mutex::new(tokio::task::JoinSet::new())),
+            workspace_healthy: AtomicBool::new(true),
         });
         let (ready_tx, ready_rx) = oneshot::channel();
         let (finished_tx, finished_rx) = oneshot::channel();
@@ -330,8 +341,14 @@ impl StoreClient {
         request: CreateSessionRequest,
         default_max_tokens: Option<u32>,
     ) -> StoreResult<CommandReceipt> {
-        self.submit(move |connection| create_session(connection, request, default_max_tokens))
-            .await
+        if !self.shared.workspace_healthy.load(Ordering::Acquire) {
+            return Err(StoreError::Unavailable);
+        }
+        let resolved = self.resolve_project_workspace(&request).await?;
+        self.submit(move |connection| {
+            create_session(connection, request, default_max_tokens, resolved)
+        })
+        .await
     }
 
     pub async fn sessions(
@@ -379,6 +396,9 @@ impl StoreClient {
         effective_settings: slop_protocol::execution::GenerationSettings,
         idle_failure: Option<(&'static str, &'static str)>,
     ) -> StoreResult<CommandReceipt> {
+        if !self.shared.workspace_healthy.load(Ordering::Acquire) {
+            return Err(StoreError::Unavailable);
+        }
         let session_id = session_id.to_owned();
         self.submit(move |connection| {
             send_message(
@@ -796,6 +816,9 @@ where
     if existing_version < 4 {
         steering_migrate(&tx)?;
     }
+    if existing_version < 5 {
+        projects::migrate(&tx)?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|_| StoreError::Database)?;
     hook(&tx)?;
@@ -1060,6 +1083,7 @@ fn create_session(
     connection: &Connection,
     request: CreateSessionRequest,
     default_max_tokens: Option<u32>,
+    resolved: Option<projects::ResolvedWorkspace>,
 ) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.provider.trim().is_empty()
@@ -1106,7 +1130,26 @@ fn create_session(
         .max_output_tokens
         .or(default_max_tokens)
         .unwrap_or(4096);
-    let policy = execution::workspace(&request)?;
+    if request.project.is_some() && request.execution.is_some() {
+        return Err(StoreError::Invalid);
+    }
+    let managed = request
+        .project
+        .as_ref()
+        .map(|project| {
+            projects::reserve(
+                &tx,
+                &session_id,
+                project,
+                resolved.as_ref().ok_or(StoreError::Invalid)?,
+            )
+        })
+        .transpose()?;
+    let policy = if let Some((_, policy)) = &managed {
+        Some(policy.clone())
+    } else {
+        execution::workspace(&request)?
+    };
     let order: i64 = tx
         .query_row(
             "SELECT next_order FROM session_order WHERE singleton=1",
@@ -1131,7 +1174,11 @@ fn create_session(
         ],
     )
     .map_err(|_| StoreError::Database)?;
-    let (revision, sequence) = append_event(&tx, &session_id, "session_created", None, None)?;
+    let (mut revision, mut sequence) =
+        append_event(&tx, &session_id, "session_created", None, None)?;
+    if let Some((workspace, _)) = managed {
+        (revision, sequence) = projects::insert_workspace(&tx, &workspace)?;
+    }
     let receipt = make_receipt(
         &request.command_id,
         &session_id,
@@ -1158,11 +1205,12 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionResponse
         last_event_sequence: row.get::<_, i64>(7)? as u64,
         settings,
         execution: execution::optional_json_column(row, 9)?,
+        managed_workspace_id: row.get(10)?,
     })
 }
 
 fn get_session(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
-    connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution FROM sessions WHERE id=?1",[id],session_from_row)
+    connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id FROM sessions WHERE id=?1",[id],session_from_row)
         .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)
 }
 
@@ -1172,7 +1220,7 @@ fn list_sessions(
     limit: usize,
 ) -> StoreResult<Page<SessionResponse>> {
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
+    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
         .map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![after, (limit + 1) as i64])
@@ -1184,7 +1232,7 @@ fn list_sessions(
             break;
         }
         let item = session_from_row(row).map_err(|_| StoreError::Database)?;
-        next_after = Some(row.get::<_, i64>(10).map_err(|_| StoreError::Database)? as u64);
+        next_after = Some(row.get::<_, i64>(11).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     let has_more = items.len() == limit
@@ -1227,6 +1275,7 @@ fn send_message(
         return Ok(receipt);
     }
     let session = get_session(&tx, session_id)?;
+    projects::require_available(&tx, &session)?;
     if request
         .expected_revision
         .is_some_and(|revision| revision != session.revision)
@@ -1577,6 +1626,7 @@ fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
         reject_steering_tx(&tx, &turn_id, "daemon_restarted")?;
         append_event(&tx, &session_id, "turn_interrupted", Some(&turn_id), None)?;
     }
+    projects::recover(&tx)?;
     tx.commit().map_err(|_| StoreError::Database)
 }
 
@@ -2075,6 +2125,17 @@ fn cancellation_requested(connection: &Connection, turn_id: &str) -> StoreResult
 }
 
 impl slop_runtime::chat::ChatRepository for StoreClient {
+    fn prepare_workspace<'a>(
+        &'a self,
+        turn_id: &'a str,
+        shutdown: &'a mut tokio::sync::watch::Receiver<bool>,
+    ) -> slop_runtime::chat::RepoFuture<'a, Option<(&'static str, &'static str)>> {
+        Box::pin(async move {
+            self.prepare_workspace(turn_id, shutdown)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
     fn begin_request<'a>(
         &'a self,
         turn_id: &'a str,
@@ -2159,6 +2220,9 @@ impl slop_runtime::chat::ChatRepository for StoreClient {
         &self,
     ) -> slop_runtime::chat::RepoFuture<'_, Option<slop_runtime::chat::TurnWork>> {
         Box::pin(async move {
+            if !self.shared.workspace_healthy.load(Ordering::Acquire) {
+                return Err(Box::new(StoreError::Unavailable) as slop_runtime::chat::RepoError);
+            }
             self.claim_next_turn()
                 .await
                 .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)

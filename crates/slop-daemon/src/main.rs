@@ -123,6 +123,7 @@ async fn run(args: Args) -> Result<()> {
         .route(NODE_PATH, get(node))
         .merge(api::chat::router(Arc::clone(&state.token)))
         .merge(api::providers::router(Arc::clone(&state.token)))
+        .merge(api::projects::router(Arc::clone(&state.token)))
         .with_state(state.clone());
     eprintln!("Listening on http://{address}");
 
@@ -181,6 +182,7 @@ async fn run(args: Args) -> Result<()> {
     let shutdown = tokio::spawn(async move {
         shutdown_state.credentials.shutdown().await;
         shutdown_state.runtime.shutdown().await;
+        shutdown_state.store.drain_workspace_jobs().await;
         store.shutdown().await
     });
     match timeout(remaining(deadline), shutdown).await {
@@ -227,6 +229,7 @@ async fn health() -> Json<HealthResponse> {
             "per-turn-settings".to_owned(),
             "execution-steering".to_owned(),
             "turn-pause-resume".to_owned(),
+            "managed-workspaces".to_owned(),
         ],
     })
 }

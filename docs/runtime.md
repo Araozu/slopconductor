@@ -168,9 +168,11 @@ PATH. The four tools are native Rust implementations with the existing workspace
 policy, durable invocation records, and artifact storage; no pi/JS runtime is
 used. See [structured execution](structured-execution.md) for schemas and limits.
 
-Dedicated Git tools remain proposed: register a repository, inspect status/diff, create managed worktrees,
-track base commits, and produce artifacts. Commits, merges, pushes, and cleanup
-have explicit policies. Starting a task does not silently merge its edits.
+The native [Git workspace service](projects-workspaces.md) implements repository
+inspection, frozen-base resolution, supervised detached worktree allocation,
+diff/status, and conservative cleanup. These are daemon application operations;
+the model tool set stays at four. Dedicated model Git tools, merging, publishing,
+and richer result artifacts remain proposed.
 
 Native orchestration tools also remain proposed: create a child task/session, inspect/wait for a child,
 send a message, and consume an artifact. Use the same service-level command

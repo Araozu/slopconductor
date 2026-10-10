@@ -83,7 +83,8 @@ absolute workspace root on the daemon's machine and a nonempty tool allowlist.
 The root is canonicalized before acceptance. Only one admitted turn can use
 that same canonical root across sessions. This lease does not cover nested
 roots, external editors/processes, or a second daemon with another data directory.
-Managed Git worktrees and project reservations are future work.
+[Managed projects/workspaces](projects-workspaces.md) now reserve separate
+detached worktrees with frozen bases and lazy allocation after turn admission.
 
 | Tool | Behavior |
 | --- | --- |
@@ -244,7 +245,7 @@ All provider traffic in the new checks is offline. Linux is exercised; Windows
 supervision is implemented but needs a native Windows run. No new live tool call
 or paid model test is claimed.
 
-General task/run controls, child agents, worktree orchestration, account quotas,
+General task/run controls, child agents, matrix orchestration, account quotas,
 hosted tools, media attachments, reasoning summaries, remote pairing, and
 graphical clients remain outside this slice. Text-chat turn pause/resume and
 steering are implemented without general task/run orchestration. Transport assumptions
