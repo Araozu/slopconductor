@@ -210,6 +210,7 @@ directory. The smoke suite verifies cancellation of native child processes and
 their descendants on both platforms. CI needs no provider secrets; live-provider
 checks remain explicitly opt-in. A configured Windows job does not establish a
 passing native Windows result until it has run successfully.
+Rust compiler and Clippy errors appear as annotations with source locations.
 
 The [OpenCode Go live checks](crates/slop-runtime/tests/opencode_go_live.rs)
 require `OPENCODE_GO_API_KEY` and an explicit opt-in; normal workspace tests skip

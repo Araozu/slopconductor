@@ -56,10 +56,15 @@ jobs:
       - name: Install stable Rust with required components
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
 
+      - name: Annotate Rust compiler and Clippy errors
+        shell: bash
+        run: echo '::add-matcher::.github/rust.json'
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       - name: Check formatting
         run: cargo fmt --all -- --check
