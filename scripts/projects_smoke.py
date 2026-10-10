@@ -193,6 +193,8 @@ def check_projects(daemon_binary, cli_binary, root):
             assert workspace_state(alpha["id"], {"ready"})["error_code"] == "workspace_dirty"
             assert path.exists()
             path.unlink()
+        clean = json.loads(cli("workspace", "diff", alpha["id"]).stdout)
+        assert not clean["status"], {"diff": clean, "fixture_status": git("status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", cwd=alpha["path"])}
         cli("workspace", "remove", alpha["id"], "--command-id", "remove-clean")
         assert workspace_state(alpha["id"], {"removed"})["error_code"] is None
         assert not Path(alpha["path"]).exists()
