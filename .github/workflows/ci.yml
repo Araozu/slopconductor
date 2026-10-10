@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
   RUST_BACKTRACE: "1"
   PYTHONUTF8: "1"
 
@@ -73,10 +73,10 @@ jobs:
         run: cargo build -p slop-cli --locked
 
       - name: Check Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: python scripts/ci_check.py cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Run workspace tests
-        run: cargo test --workspace --locked
+        run: python scripts/ci_check.py cargo test --workspace --locked
 
       - name: Run real daemon and CLI smoke checks
-        run: python scripts/smoke.py
+        run: python scripts/ci_check.py python scripts/smoke.py
