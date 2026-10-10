@@ -26,6 +26,9 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
             prompt_file,
             effort,
             max_output_tokens,
+            max_model_requests,
+            max_tool_calls,
+            orchestration_policy,
             project,
             base,
             tools,
@@ -33,10 +36,20 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
         } => {
             let prompt = prompt_value(text, prompt_file).await?;
             let command_id = choose_command_id(command_id)?;
+            let orchestration: Option<OrchestrationPolicy> =
+                orchestration_policy.as_deref().map(read_json).transpose()?;
             let response = client
                 .create_task(&CreateTaskRequest {
                     command_id: command_id.clone(),
                     spec: TaskSpec {
+                        budget: (max_model_requests.is_some()
+                            || max_tool_calls.is_some()
+                            || orchestration.is_some())
+                        .then_some(OperationBudget {
+                            max_model_requests: max_model_requests.unwrap_or(64),
+                            max_tool_calls: max_tool_calls.unwrap_or(128),
+                        }),
+                        orchestration,
                         title,
                         prompt,
                         model,
@@ -141,6 +154,69 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
 pub(super) async fn run(command: RunCommand, context: &Context) -> Result<()> {
     let client = context.client()?;
     let (id, command_id, action) = match command {
+        RunCommand::CreateChild {
+            id,
+            file,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let mut value: serde_json::Value = read_json(&file)?;
+            let object = value
+                .as_object_mut()
+                .ok_or("child input must be a JSON object")?;
+            if object.contains_key("command_id") {
+                return Err("use --command-id rather than a command ID in the child file".into());
+            }
+            object.insert(
+                "command_id".into(),
+                serde_json::Value::String(command_id.clone()),
+            );
+            let request = serde_json::from_value(value)?;
+            let receipt = client
+                .create_child(&id, &request)
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            return context.output.value(&receipt, || {
+                println!("Child task: {}\nRun: {}", receipt.task_id, receipt.run_id)
+            });
+        }
+        RunCommand::Children { id, after, limit } => {
+            let page = client.children(&id, after, Some(limit)).await?;
+            return context.output.value(&page, || {
+                for task in &page.items {
+                    show_task(task);
+                }
+            });
+        }
+        RunCommand::Wait {
+            id,
+            child_run_ids,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .wait_children(
+                    &id,
+                    &WaitChildrenRequest {
+                        command_id: command_id.clone(),
+                        child_run_ids,
+                    },
+                )
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            return context
+                .output
+                .value(&receipt, || println!("Child wait accepted for run {id}"));
+        }
+        RunCommand::Result { id } => {
+            let result = client.run_result(&id).await?;
+            return context.output.value(&result, || {
+                show_run(&result.run);
+                if let Some(output) = &result.output {
+                    println!("{}", output.text);
+                }
+            });
+        }
         RunCommand::Show { id } => {
             let response = client.run(&id).await?;
             return context.output.value(&response, || show_run(&response));
@@ -191,6 +267,25 @@ pub(super) async fn run(command: RunCommand, context: &Context) -> Result<()> {
 pub(super) async fn batch(command: BatchCommand, context: &Context) -> Result<()> {
     let client = context.client()?;
     match command {
+        BatchCommand::Cancel { id, command_id } => {
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .cancel_batch(
+                    &id,
+                    &TurnControlRequest {
+                        command_id: command_id.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            context.output.value(&receipt, || {
+                println!(
+                    "Batch: {}\nCancellation accepted for {} runs",
+                    receipt.batch_id,
+                    receipt.run_ids.len()
+                )
+            })
+        }
         BatchCommand::Preview { file, output } => {
             let response = client.preview_batch(&read_spec(&file)?).await?;
             if let Some(path) = output {
@@ -333,15 +428,18 @@ pub(super) async fn batch(command: BatchCommand, context: &Context) -> Result<()
     }
 }
 
-fn read_spec(path: &Path) -> Result<BatchSpec> {
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)?
         .take(2 * 1024 * 1024 + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() > 2 * 1024 * 1024 {
-        return Err("batch input exceeds 2 MiB".into());
+        return Err("JSON input exceeds 2 MiB".into());
     }
     Ok(serde_json::from_slice(&bytes)?)
+}
+fn read_spec(path: &Path) -> Result<BatchSpec> {
+    read_json(path)
 }
 fn show_task(t: &TaskResponse) {
     println!(

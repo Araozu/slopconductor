@@ -33,6 +33,17 @@ pub type RepoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepoError>> +
 /// Storage boundary for accepted chat turns. Implementations own transaction
 /// semantics and wire-independent persistence; the runtime never sees SQL/DTOs.
 pub trait ChatRepository: Send + Sync + 'static {
+    fn orchestration_tool<'a>(
+        &'a self,
+        _turn_id: &'a str,
+        _intent: &'a ToolIntent,
+    ) -> RepoFuture<'a, crate::orchestration::OrchestrationResult> {
+        Box::pin(async {
+            Ok(crate::orchestration::OrchestrationResult::Completed(
+                ToolOutcome::failed("orchestration_unavailable", false),
+            ))
+        })
+    }
     /// Prepare a managed workspace only after admission. A committed Git
     /// failure is a turn outcome; persistence failures stop the supervisor.
     fn prepare_workspace<'a>(
@@ -92,6 +103,8 @@ pub struct TurnControl {
     pub immediate_requested: bool,
     pub pause_requested: bool,
     pub steering_pending: bool,
+    pub budget_exhausted: bool,
+    pub waiting_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +134,7 @@ pub struct TurnWork {
     pub settings: GenerationSettings,
     pub requested_settings: GenerationSettings,
     pub execution: Option<WorkspacePolicy>,
+    pub orchestration: Option<crate::orchestration::OrchestrationPolicy>,
     pub next_request_ordinal: u32,
     pub max_model_requests: u32,
     pub tool_calls_used: u32,

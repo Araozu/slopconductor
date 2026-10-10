@@ -43,6 +43,7 @@ Keep `Cargo.lock` in version control. Do not commit credentials, provider
 responses containing secrets, local databases, worktrees, or build outputs.
 Do not add placeholder arithmetic tests or claim proposed endpoints work.
 
-Persistent sessions, project workspaces, tasks/run attempts, and matrices are
-implemented. Child tasks, remote authentication, TUI, browser client, and Electron
+Persistent sessions, project workspaces, tasks/run attempts, matrices, fair
+admission, aggregate operation budgets, batch cancellation, and bounded child
+tasks are implemented. Remote authentication, TUI, browser client, and Electron
 client remain planned. Native Windows and live-provider validation are outstanding.

@@ -1018,6 +1018,8 @@ mod tests {
         let endpoint = server(API_VERSION, seen.clone(), false).await;
         let client = DaemonClient::with_token(&endpoint, Some(TOKEN.into())).unwrap();
         let spec = TaskSpec {
+            budget: None,
+            orchestration: None,
             title: None,
             prompt: "work".into(),
             model: "opencode-go/glm-5.3-flash".into(),
@@ -1034,6 +1036,8 @@ mod tests {
             Err(ClientError::UnsupportedCapability("tasks-runs"))
         ));
         let batch = BatchSpec {
+            budget: None,
+            orchestration: None,
             name: "sweep".into(),
             prompts: vec!["work".into()],
             models: vec!["opencode-go/glm-5.3-flash".into()],

@@ -70,7 +70,7 @@ pub(super) fn session_event(
     Ok(())
 }
 
-fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse> {
+pub(super) fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse> {
     let (task_id, attempt, retry_of, session_id, turn_id): (
         String,
         u32,
@@ -100,7 +100,7 @@ fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse> {
     })
 }
 
-fn task(connection: &Connection, id: &str) -> StoreResult<TaskResponse> {
+pub(super) fn task(connection: &Connection, id: &str) -> StoreResult<TaskResponse> {
     let (owner,spec,batch,index,sequence):(String,String,Option<String>,Option<u32>,i64)=connection.query_row(
         "SELECT owner_node_id,spec,batch_id,combination_index,last_event_sequence FROM tasks WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
     let latest: String = connection
@@ -124,10 +124,14 @@ fn task(connection: &Connection, id: &str) -> StoreResult<TaskResponse> {
         combination_index: index,
         last_event_sequence: sequence as u64,
         latest_run: run(connection, &latest)?,
+        budget_usage: governance::usage(connection, &format!("task:{id}"))?,
+        child: children::link(connection, id)?,
     })
 }
 
 pub(crate) fn validate_spec(spec: &TaskSpec) -> StoreResult<()> {
+    governance::validate(spec.budget.as_ref())?;
+    children::validate_policy(spec)?;
     if spec.prompt.trim().is_empty()
         || spec.prompt.len() > MAX_MESSAGE_BYTES
         || spec.prompt.contains('\0')
@@ -139,6 +143,9 @@ pub(crate) fn validate_spec(spec: &TaskSpec) -> StoreResult<()> {
         return Err(StoreError::Invalid);
     }
     if let Some(project) = &spec.project {
+        if spec.model.starts_with("codex/") && !project.allowed_tools.is_empty() {
+            return Err(StoreError::Unsupported("model.tools"));
+        }
         let mut names = std::collections::BTreeSet::new();
         if project.project_id.len() > 128
             || project.allowed_tools.is_empty()
@@ -154,6 +161,7 @@ pub(crate) fn validate_spec(spec: &TaskSpec) -> StoreResult<()> {
 }
 
 pub(crate) fn combinations(spec: &BatchSpec) -> StoreResult<Vec<CombinationResponse>> {
+    governance::validate(spec.budget.as_ref())?;
     if spec.name.trim().is_empty()
         || spec.name.len() > 256
         || spec.name.chars().any(char::is_control)
@@ -180,6 +188,8 @@ pub(crate) fn combinations(spec: &BatchSpec) -> StoreResult<Vec<CombinationRespo
                 model: spec.models[m].clone(),
                 settings: spec.settings[s].clone(),
                 project: spec.project.clone(),
+                budget: spec.orchestration.as_ref().and(spec.budget.clone()),
+                orchestration: spec.orchestration.clone(),
             };
             validate_spec(&task)?;
             Ok(CombinationResponse {
@@ -202,7 +212,7 @@ fn insert_run(
     command: &str,
 ) -> StoreResult<TaskReceipt> {
     validate_spec(spec)?;
-    let active: i64 = tx.query_row("SELECT count(*) FROM runs r JOIN turns t ON t.id=r.turn_id WHERE t.status IN('queued','running','paused')", [], |r|r.get(0)).map_err(|_|StoreError::Database)?;
+    let active: i64 = tx.query_row("SELECT count(*) FROM runs r JOIN turns t ON t.id=r.turn_id WHERE t.status IN('queued','running','paused','awaiting_children')", [], |r|r.get(0)).map_err(|_|StoreError::Database)?;
     if active >= MAX_QUEUE_GLOBAL {
         return Err(StoreError::Limit);
     }
@@ -272,7 +282,7 @@ fn insert_run(
     })
 }
 
-fn insert_task(
+pub(super) fn insert_task(
     tx: &Transaction<'_>,
     spec: &TaskSpec,
     requested: &TaskSpec,
@@ -283,6 +293,12 @@ fn insert_task(
     let id = opaque_id()?;
     tx.execute("INSERT INTO tasks(id,owner_node_id,spec,requested_spec,batch_id,combination_index,created_order) VALUES(?1,?2,?3,?4,?5,?6,(SELECT COALESCE(MAX(created_order),0)+1 FROM tasks))",
         rusqlite::params![id,query_node(tx)?.node_id,canonical(spec)?,canonical(requested)?,batch.map(|b|b.0),batch.map(|b|b.1)]).map_err(|_|StoreError::Database)?;
+    tx.execute(
+        "UPDATE tasks SET root_task_id=id,admission_batch_id=batch_id WHERE id=?1",
+        [&id],
+    )
+    .map_err(|_| StoreError::Database)?;
+    governance::register(tx, &format!("task:{id}"), spec.budget.as_ref())?;
     insert_run(tx, &id, spec, resolved, None, command)
 }
 
@@ -292,6 +308,12 @@ fn retry_allowed(
     acknowledge: bool,
 ) -> StoreResult<TaskResponse> {
     let current = task(connection, &previous.task_id)?;
+    children::retry_allowed(connection, &current)?;
+    if let Some(batch) = &current.batch_id
+        && get_batch(connection, batch)?.cancellation_requested
+    {
+        return Err(StoreError::Conflict);
+    }
     if current.latest_run.id != previous.id
         || !slop_core::orchestration::retryable(&previous.turn.status)
         || previous.attempt >= slop_core::orchestration::MAX_ATTEMPTS
@@ -307,6 +329,39 @@ fn retry_allowed(
 }
 
 impl StoreClient {
+    pub async fn cancel_batch(
+        &self,
+        id: &str,
+        request: TurnControlRequest,
+    ) -> StoreResult<BatchCancelReceipt> {
+        if !valid_command_id(&request.command_id) {
+            return Err(StoreError::Invalid);
+        }
+        let id = id.to_owned();
+        let scope = format!("batch:{id}:cancel");
+        let payload = canonical(&request)?;
+        self.submit(move |c| {
+            let tx = c.unchecked_transaction().map_err(|_|StoreError::Database)?;
+            if let Some(receipt) = projects::prior(&tx,&request.command_id,&scope,&payload)? { return Ok(receipt); }
+            get_batch(&tx,&id)?;
+            tx.execute("UPDATE batches SET cancellation_requested=1 WHERE id=?1",[&id]).map_err(|_|StoreError::Database)?;
+            let mut stmt = tx.prepare("SELECT r.id,r.turn_id FROM runs r JOIN tasks k ON k.id=r.task_id JOIN turns t ON t.id=r.turn_id WHERE k.admission_batch_id=?1 AND t.status IN('queued','running','paused','awaiting_children') ORDER BY k.created_order,r.attempt").map_err(|_|StoreError::Database)?;
+            let rows = stmt.query_map([&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|_|StoreError::Database)?
+                .collect::<Result<Vec<_>,_>>().map_err(|_|StoreError::Database)?;
+            drop(stmt);
+            let mut run_ids = Vec::new();
+            for (run,turn) in rows {
+                if !matches!(get_turn(&tx,&turn)?.status.as_str(),"queued"|"running"|"paused"|"awaiting_children") {run_ids.push(run);continue;}
+                cancel_turn_tx(&tx,&turn,CancelTurnRequest{command_id:opaque_id()?})?;
+                run_ids.push(run);
+            }
+            let receipt = BatchCancelReceipt{command_id:request.command_id.clone(),batch_id:id,run_ids};
+            projects::save(&tx,&request.command_id,&scope,&payload,&receipt)?;
+            tx.commit().map_err(|_|StoreError::Database)?;
+            Ok(receipt)
+        }).await
+    }
+
     pub async fn task_instruction(
         &self,
         id: &str,
@@ -344,7 +399,7 @@ impl StoreClient {
         })
         .await
     }
-    async fn prior_job<T: serde::de::DeserializeOwned + Send + 'static>(
+    pub(super) async fn prior_job<T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
         command: &str,
         scope: &str,
@@ -355,7 +410,7 @@ impl StoreClient {
             .await
     }
 
-    async fn resolve_job_project(
+    pub(super) async fn resolve_job_project(
         &self,
         selection: &mut Option<slop_protocol::projects::ProjectWorkspaceRequest>,
     ) -> StoreResult<Option<projects::ResolvedWorkspace>> {
@@ -578,6 +633,7 @@ impl StoreClient {
                 ],
             )
             .map_err(|_| StoreError::Database)?;
+            governance::register(&tx, &format!("batch:{id}"), prepared.spec.budget.as_ref())?;
             let requested = combinations(&request.spec)?;
             let mut members = Vec::with_capacity(prepared.combinations.len());
             for mut cell in prepared.combinations {
@@ -729,7 +785,7 @@ impl StoreClient {
     }
 }
 
-fn get_batch(c: &Connection, id: &str) -> StoreResult<BatchResponse> {
+pub(super) fn get_batch(c: &Connection, id: &str) -> StoreResult<BatchResponse> {
     let (owner, spec): (String, String) = c
         .query_row(
             "SELECT owner_node_id,spec FROM batches WHERE id=?1",
@@ -751,10 +807,18 @@ fn get_batch(c: &Connection, id: &str) -> StoreResult<BatchResponse> {
         spec: serde_json::from_str(&spec).map_err(|_| StoreError::Database)?,
         total: statuses.values().sum(),
         statuses,
+        cancellation_requested: c
+            .query_row(
+                "SELECT cancellation_requested FROM batches WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(|_| StoreError::Database)?,
+        budget_usage: governance::usage(c, &format!("batch:{id}"))?,
     })
 }
 
-fn page<T: serde::Serialize>(
+pub(super) fn page<T: serde::Serialize>(
     c: &Connection,
     sql: &str,
     scope: Option<&str>,
@@ -796,7 +860,7 @@ fn page<T: serde::Serialize>(
     })
 }
 
-fn message(c: &Connection, id: &str) -> StoreResult<MessageResponse> {
+pub(super) fn message(c: &Connection, id: &str) -> StoreResult<MessageResponse> {
     let mut statement=c.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id FROM messages WHERE id=?1").map_err(|_|StoreError::Database)?;
     let mut rows = statement.query([id]).map_err(|_| StoreError::Database)?;
     let row = rows
@@ -827,6 +891,8 @@ mod tests {
     }
     fn spec(prompt: &str) -> TaskSpec {
         TaskSpec {
+            budget: None,
+            orchestration: None,
             title: Some("test job".into()),
             prompt: prompt.into(),
             model: "opencode-go/glm-5.3-flash".into(),
@@ -859,6 +925,8 @@ mod tests {
     }
     fn batch_spec() -> BatchSpec {
         BatchSpec {
+            budget: None,
+            orchestration: None,
             name: "eight cells".into(),
             prompts: vec!["p0".into(), "p1".into()],
             models: vec![
@@ -879,6 +947,312 @@ mod tests {
             max_concurrent_runs: 1,
             default_max_output_tokens: Some(4096),
         }
+    }
+
+    #[tokio::test]
+    async fn returning_groups_cannot_reuse_old_priority_to_jump_the_queue() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = open(directory.path().join("data")).await;
+        let c = store.client();
+        let old = create(&c, "old-group", "old group").await;
+        c.claim_next_turn().await.unwrap().unwrap();
+        c.finish_chat_turn(&old.turn_id, outcome(ChatStatus::Failed))
+            .await
+            .unwrap();
+        let mut spec = batch_spec();
+        spec.max_concurrent_runs = 4;
+        let prepared = BatchPreviewResponse {
+            combinations: combinations(&spec).unwrap(),
+            spec: spec.clone(),
+        };
+        let batch = c
+            .create_batch(
+                CreateBatchRequest {
+                    command_id: "backlog".into(),
+                    spec,
+                },
+                Some(prepared),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            c.claim_next_turn().await.unwrap().unwrap().turn_id,
+            batch.members[0].turn_id
+        );
+        let waiting = create(&c, "already-waiting", "interactive").await;
+        let spec = c.task(&old.task_id).await.unwrap().spec;
+        let returned = c
+            .retry_run(
+                &old.run_id,
+                RetryRunRequest {
+                    command_id: "return-old".into(),
+                    acknowledge_unknown_effects: false,
+                },
+                Some(spec),
+            )
+            .await
+            .unwrap();
+        let mut observed = false;
+        for _ in 0..2 {
+            let next = c.claim_next_turn().await.unwrap().unwrap();
+            assert_ne!(
+                next.turn_id, returned.turn_id,
+                "a returning group jumped ahead of a waiting group"
+            );
+            if next.turn_id == waiting.turn_id {
+                observed = true;
+                break;
+            }
+        }
+        assert!(observed);
+        store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn admission_rotates_groups_even_when_batch_caps_fill_global_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = directory.path().join("data");
+        let store = open(data.clone()).await;
+        let client = store.client();
+        let mut batches = Vec::new();
+        for name in ["large-a", "large-b"] {
+            let mut spec = batch_spec();
+            spec.max_concurrent_runs = 4;
+            let preview = BatchPreviewResponse {
+                combinations: combinations(&spec).unwrap(),
+                spec: spec.clone(),
+            };
+            batches.push(
+                client
+                    .create_batch(
+                        CreateBatchRequest {
+                            command_id: name.into(),
+                            spec,
+                        },
+                        Some(preview),
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+        let independent = create(&client, "interactive", "interactive").await;
+        for expected in [
+            &batches[0].members[0],
+            &batches[1].members[0],
+            &independent,
+            &batches[0].members[1],
+        ] {
+            let work = client.claim_next_turn().await.unwrap().unwrap();
+            assert_eq!(work.turn_id, expected.turn_id);
+            client
+                .finish_chat_turn(&work.turn_id, outcome(ChatStatus::Completed))
+                .await
+                .unwrap();
+        }
+        store.shutdown().await.unwrap();
+        let store = open(data).await;
+        assert_eq!(
+            store
+                .client()
+                .claim_next_turn()
+                .await
+                .unwrap()
+                .unwrap()
+                .turn_id,
+            batches[1].members[1].turn_id
+        );
+        store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn aggregate_reservations_survive_recovery_and_retry_without_refunds() {
+        use slop_runtime::{agent::RequestIntent, chat::ChatRepository};
+        let directory = tempfile::tempdir().unwrap();
+        let data = directory.path().join("data");
+        let store = open(data.clone()).await;
+        let client = store.client();
+        let mut spec = spec("limited");
+        spec.budget = Some(OperationBudget {
+            max_model_requests: 1,
+            max_tool_calls: 0,
+        });
+        let receipt = client
+            .create_task(
+                CreateTaskRequest {
+                    command_id: "limited".into(),
+                    spec: spec.clone(),
+                },
+                Some(spec.clone()),
+            )
+            .await
+            .unwrap();
+        let work = client.claim_next_turn().await.unwrap().unwrap();
+        let intent = |id: &str| RequestIntent {
+            id: id.into(),
+            message_id: format!("message-{id}"),
+            ordinal: 1,
+            requested_model: spec.model.clone(),
+            requested_settings: serde_json::from_value(
+                serde_json::to_value(&spec.settings).unwrap(),
+            )
+            .unwrap(),
+            settings: serde_json::from_value(serde_json::to_value(&spec.settings).unwrap())
+                .unwrap(),
+        };
+        assert!(
+            client
+                .begin_request(&work.turn_id, intent("first"))
+                .await
+                .unwrap()
+        );
+        store.shutdown().await.unwrap();
+        let store = open(data).await;
+        let client = store.client();
+        assert_eq!(
+            client
+                .task(&receipt.task_id)
+                .await
+                .unwrap()
+                .budget_usage
+                .model_requests,
+            1
+        );
+        let retried = client
+            .retry_run(
+                &receipt.run_id,
+                RetryRunRequest {
+                    command_id: "retry-limited".into(),
+                    acknowledge_unknown_effects: false,
+                },
+                Some(spec.clone()),
+            )
+            .await
+            .unwrap();
+        client.claim_next_turn().await.unwrap().unwrap();
+        assert!(
+            !client
+                .begin_request(&retried.turn_id, intent("second"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            client
+                .turn_control(&retried.turn_id)
+                .await
+                .unwrap()
+                .budget_exhausted
+        );
+        assert_eq!(
+            client
+                .task(&receipt.task_id)
+                .await
+                .unwrap()
+                .budget_usage
+                .model_requests,
+            1
+        );
+        let count = client
+            .submit(|c| {
+                c.query_row("SELECT count(*) FROM model_requests", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .map_err(|_| StoreError::Database)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn batch_cancellation_is_atomic_durable_and_closes_retry_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = directory.path().join("data");
+        let store = open(data.clone()).await;
+        let client = store.client();
+        let spec = batch_spec();
+        let preview = BatchPreviewResponse {
+            combinations: combinations(&spec).unwrap(),
+            spec: spec.clone(),
+        };
+        let batch = client
+            .create_batch(
+                CreateBatchRequest {
+                    command_id: "cancel-matrix".into(),
+                    spec,
+                },
+                Some(preview),
+            )
+            .await
+            .unwrap();
+        let active = client.claim_next_turn().await.unwrap().unwrap();
+        client
+            .pause_turn(
+                &batch.members[1].turn_id,
+                TurnControlRequest {
+                    command_id: "pause-member".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let request = TurnControlRequest {
+            command_id: "cancel-batch".into(),
+        };
+        let receipt = client
+            .cancel_batch(&batch.batch_id, request.clone())
+            .await
+            .unwrap();
+        assert_eq!(receipt.run_ids.len(), 8);
+        assert!(
+            client
+                .batch(&batch.batch_id)
+                .await
+                .unwrap()
+                .cancellation_requested
+        );
+        assert!(client.claim_next_turn().await.unwrap().is_none());
+        assert!(
+            client
+                .turn_control(&active.turn_id)
+                .await
+                .unwrap()
+                .cancellation_requested
+        );
+        client
+            .finish_chat_turn(&active.turn_id, outcome(ChatStatus::Completed))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .batch(&batch.batch_id)
+                .await
+                .unwrap()
+                .statuses
+                .get("cancelled"),
+            Some(&8)
+        );
+        store.shutdown().await.unwrap();
+        let store = open(data).await;
+        let client = store.client();
+        assert_eq!(
+            client.cancel_batch(&batch.batch_id, request).await.unwrap(),
+            receipt
+        );
+        let task = client.task(&batch.members[0].task_id).await.unwrap();
+        assert!(matches!(
+            client
+                .retry_run(
+                    &task.latest_run.id,
+                    RetryRunRequest {
+                        command_id: "closed-retry".into(),
+                        acknowledge_unknown_effects: false
+                    },
+                    Some(task.spec)
+                )
+                .await,
+            Err(StoreError::Conflict)
+        ));
+        store.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -1341,7 +1715,7 @@ mod tests {
         };
         let receipt = client.create_session(request.clone()).await.unwrap();
         let snapshot = client.session(&receipt.session_id).await.unwrap();
-        client.submit(|c|c.execute_batch("DROP TABLE task_events; DROP TABLE runs; DROP TABLE tasks; DROP TABLE batches; PRAGMA user_version=5;").map_err(|_|StoreError::Database)).await.unwrap();
+        client.submit(|c|c.execute_batch("DROP TABLE child_waits; DROP TABLE child_links; DROP TABLE admission_groups; DROP TABLE admission_clock; DROP TABLE operation_budgets; DROP TRIGGER readmission_epoch; ALTER TABLE turns DROP COLUMN admission_epoch; ALTER TABLE turns DROP COLUMN budget_exhausted; DROP TABLE task_events; DROP TABLE runs; DROP TABLE tasks; DROP TABLE batches; PRAGMA user_version=5;").map_err(|_|StoreError::Database)).await.unwrap();
         store.shutdown().await.unwrap();
         let store = open(data).await;
         let client = store.client();

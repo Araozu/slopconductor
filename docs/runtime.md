@@ -23,8 +23,9 @@ serialization, visible checkpoints, and cancellation. Go and Zen support the
 bounded file/shell tool loop; Codex is text-only. Provider clients are selected
 per turn and snapshotted at admission. See [text chat](text-chat.md) and
 [structured execution](structured-execution.md). [Durable tasks and matrices](tasks-batches.md) share this turn scheduler, with
-per-batch admission caps and explicit fresh retries. Child orchestration remains
-proposed.
+per-batch admission caps, persistent fair admission, aggregate operation budgets,
+and explicit fresh retries. [Native child orchestration](child-tasks.md) is
+implemented with separate authority and durable waits that release slots.
 
 ## Agent loop
 
@@ -32,7 +33,8 @@ The following is the target general task loop. The implemented user-turn loop
 covers model intent, structured completion, tool policy/dispatch/results, budgets,
 streaming, cancellation, boundary/immediate steering, explicit pause/resume, and
 terminal/recovery records. Tasks map each attempt to one primary turn and use
-its steering/control inbox. Children and awaiting-input states remain proposed.
+its steering/control inbox. Child creation and awaiting-children states are
+implemented; awaiting-input states remain proposed.
 
 Steering instructions are durably accepted with command IDs and applied once at
 execution boundaries. Next-boundary delivery never interrupts the current
@@ -91,8 +93,9 @@ surface for every client. The registry `Provider` trait implements metadata;
 private continuation, and normalized incremental events for Go/Zen; Codex uses
 a text-only bridge with explicit unsupported errors. The public API projects
 canonical messages, provider capabilities, usage, and cancellation; Go/Zen also
-expose tools and artifacts. Private provider events stay internal. Account-scoped
-discovery and child orchestration remain proposed.
+expose tools and artifacts, including separately authorized
+[native child tools](child-tasks.md). Private provider events stay internal.
+Account-scoped discovery remains proposed.
 
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.
@@ -172,12 +175,15 @@ used. See [structured execution](structured-execution.md) for schemas and limits
 The native [Git workspace service](projects-workspaces.md) implements repository
 inspection, frozen-base resolution, supervised detached worktree allocation,
 diff/status, and conservative cleanup. These are daemon application operations;
-the model tool set stays at four. Dedicated model Git tools, merging, publishing,
+the coding-tool set stays at four. Dedicated model Git tools, merging, publishing,
 and richer result artifacts remain proposed.
 
-Native orchestration tools also remain proposed: create a child task/session, inspect/wait for a child,
-send a message, and consume an artifact. Use the same service-level command
-validation as the public API.
+Native orchestration tools now create, inspect, wait for, read results from, and
+cancel direct children through the public API's application operations. Explicit
+delegation policies select context/artifact previews, model/tool subsets,
+depth/fan-out limits, and inherited aggregate budgets. Sending a model-authored
+instruction to a child remains future work; clients can use existing task
+instruction operations. See [child tasks](child-tasks.md).
 
 A browser tool service is later work. Its active context and displayed client
 view must have matching identity. Browser processes and contexts have separate
@@ -210,6 +216,12 @@ contexts. Add per-project writer limits and per-account provider limits. A batch
 cannot consume every slot indefinitely; fairness operates across batches and
 interactive tasks.
 
+The implemented scheduler rotates persistent admission tickets across batches,
+independent task trees, and ordinary sessions; newly queued/returning groups
+enter at the current clock. Running work is not preempted. Descendants share
+their root's batch cap and consume all applicable ancestor/batch budgets before
+dispatch. Account-specific admission and browser contexts remain future work.
+
 Parents waiting for children must release scarce inference/tool execution slots.
 Otherwise a full pool of waiting parents can prevent their children from ever
 running. Bound child depth, count, budget, and outstanding waiting relationships.
@@ -217,6 +229,11 @@ running. Bound child depth, count, budget, and outstanding waiting relationships
 Cancel propagation is recorded at child creation. A child may be canceled with
 its parent or allowed to finish independently. Reconnection or parent restart
 must reattach to the same child IDs rather than spawning duplicates.
+
+On restart, known child waits become paused and require explicit resume. Child
+completion can persist its known wait result while the parent is paused. Native
+creation and its tool result commit together, so recovery never launches another
+child for the accepted invocation.
 
 ## Recovery and measurement
 

@@ -44,13 +44,13 @@ structured tools, model requests, and artifacts remain available through that
 attempt's existing session/turn/artifact operations. Project tasks enable all
 four coding tools unless `--tool` restricts them. Steering accepts next-boundary
 or immediate delivery, keeps the active turn's frozen model/settings, and
-requires an active or paused attempt. Instruction retries return the original
+requires an active, paused, or awaiting-children attempt. Instruction retries return the original
 receipt even if the task has since acquired another attempt.
 
 ## Status and recovery
 
 Run status is the durable primary turn's status: `queued`, `running`, `paused`,
-`completed`, `failed`, `cancelled`, `interrupted`, or `incomplete`. Pause and cancel
+`awaiting_children`, `completed`, `failed`, `cancelled`, `interrupted`, or `incomplete`. Pause and cancel
 acknowledgements indicate acceptance; a running operation reaches a safe boundary
 before the resulting state is visible. Paused runs release execution capacity.
 Resume explicitly readmits the same run and preserves its workspace/context.
@@ -80,6 +80,46 @@ and tool outcomes remain inspectable. Successful external changes in an old
 workspace are not copied to the new attempt. Unknown external effects require
 the explicit acknowledgement above; it does not undo or reconcile those effects.
 No tool, provider, or whole-job retry occurs automatically.
+
+## Fair admission, budgets, and batch cancellation
+
+Admission rotates across eligible batches, independent task trees, and ordinary
+sessions. Persistent tickets and an admission clock survive restart. Newly
+queued or returning idle groups join at the current clock; a continuous stream
+of arrivals cannot reuse old priority to jump ahead of waiting work. Each
+admission advances its group's ticket, with creation order resolving ties.
+An eligible group gets its turn after at most one admission per other group
+already queued at that point. This bounds admissions, not elapsed time: active
+runs are not preempted. Descendants share the root's group and batch cap.
+
+`TaskSpec.budget` and `BatchSpec.budget` optionally set `max_model_requests` and
+`max_tool_calls`, each 0–1,000,000. A missing budget retains the existing per-turn
+limits without an additional aggregate cap. Zero forbids that operation.
+Task budgets cover all attempts and descendants; batch budgets cover every
+member attempt and descendant. Task/batch queries expose `budget_usage`.
+
+Before dispatch, one transaction checks every applicable scope and reserves
+the count along with its request/tool start record. Denial increments no scope
+and fails the turn as `operation_budget_exhausted` without dispatching the
+operation. Reservations are never refunded after failure, cancellation,
+uncertain outcomes, or restart, and retries cannot replenish them. Counts limit
+operations rather than tokens or billing totals. A delegation policy requires
+an explicit finite budget; see [child tasks](child-tasks.md).
+
+```sh
+slop task create --model opencode-go/glm-5.3-flash --project PROJECT_ID \
+  --text "Fix the failing test." --max-model-requests 16 --max-tool-calls 32 \
+  --command-id bounded-job
+slop batch cancel BATCH_ID --command-id cancel-sweep
+```
+
+Supplying only one task limit flag defaults the other to 64 requests or 128 tool
+calls. Batch limits are part of its JSON spec and are preserved by preview.
+Batch cancellation atomically closes the batch and records cancellation for all
+unfinished members and descendants. Queued, paused, and awaiting attempts stop
+immediately; running attempts finish cancellation at existing execution
+boundaries. Completed results remain intact. The batch stays closed to retries,
+and repeating the same command returns its original `BatchCancelReceipt`.
 
 ## Matrix preview and submission
 
@@ -167,6 +207,7 @@ All routes below require the existing local bearer token. Health advertises
 | GET /v1/batches/{id}/members | Paginated member tasks in combination order |
 | GET /v1/batches/{id}/results | Paginated member tasks and canonical outputs |
 | POST /v1/batches/{id}/retry | `{command_id, indices, acknowledge_unknown_effects?: false}` → selected new-run receipts, HTTP 202 |
+| POST /v1/batches/{id}/cancel | `{command_id}` → `BatchCancelReceipt` with affected run IDs, HTTP 202 |
 
 Queries use `after` and `limit` (1–200; default 50). Follow each returned
 `next_after`; member/result cursors are opaque creation-order values rather than
@@ -184,13 +225,10 @@ cannot exceed the batch cap. When that cap is below the global cap, a batch at
 its limit leaves spare global slots available for other work. Paused members
 release their batch slots.
 
-Eligible turns are admitted in creation order. A per-batch cap leaves capacity
-for unrelated work only when it is below the global cap; it does not guarantee
-fair admission across batches. Batch-wide cancellation and aggregate request/tool
-budgets are not implemented. Individual run cancellation and existing per-turn
-execution limits remain the available controls. See the
-[recommended delivery order](roadmap.md#recommended-next-delivery-order) for the
-proposed controls and child-task work that follows them.
+Fair admission also applies when a batch cap equals the global cap. Paused and
+awaiting-children runs release both global and batch execution slots. Health
+advertises `orchestration-controls`; the SDK checks it before budgeted submissions
+and batch cancellation.
 
 There are at most 1,024 active job attempts, with the existing 1,024 queued-turn
 limit also enforced. Managed workspaces retain their 256-global/32-per-project
@@ -203,6 +241,9 @@ Offline validation covers an eight-cell matrix with two models and two settings,
 isolated diffs, lazy allocation, spare-capacity admission, selective retry/export,
 command deduplication, pause/resume/steering, transactional fault injection,
 schema-five upgrade, and interruption of a real shell side effect without replay.
-Native Windows and live-provider validation remain outstanding. Child creation,
-awaiting-input/child states, batch-wide cancellation, branch publishing,
-automatic retention, aggregate budgets, and conversation reuse remain future work.
+Additional checks cover persistent admission rotation, returning groups,
+aggregate reservation across retries/restart, budget denial before filesystem
+dispatch, atomic batch cancellation, and [native delegation](child-tasks.md).
+Native Windows and live-provider validation remain outstanding. Awaiting-input
+states, branch publishing, automatic retention, and conversation reuse remain
+future work.

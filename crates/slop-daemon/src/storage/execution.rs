@@ -272,12 +272,16 @@ pub(super) fn begin_request(
     };
     let yielding: bool = tx
         .query_row(
-            "SELECT pause_requested!=0 OR EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') FROM turns WHERE id=?1",
+            "SELECT pause_requested!=0 OR EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') OR EXISTS(SELECT 1 FROM child_waits w WHERE w.parent_turn_id=?1 AND w.completed=0) FROM turns WHERE id=?1",
             [turn],
             |row| row.get(0),
         )
         .map_err(|_| StoreError::Database)?;
     if yielding {
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(false);
+    }
+    if !super::governance::reserve(&tx, turn, true)? {
         tx.commit().map_err(|_| StoreError::Database)?;
         return Ok(false);
     }
@@ -475,12 +479,16 @@ pub(super) fn start_tool(
     };
     let yielding: bool = tx
         .query_row(
-            "SELECT pause_requested!=0 OR EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') FROM turns WHERE id=?1",
+            "SELECT pause_requested!=0 OR EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') OR EXISTS(SELECT 1 FROM child_waits w WHERE w.parent_turn_id=?1 AND w.completed=0) FROM turns WHERE id=?1",
             [turn],
             |row| row.get(0),
         )
         .map_err(|_| StoreError::Database)?;
     if yielding {
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(false);
+    }
+    if !super::governance::reserve(&tx, turn, false)? {
         tx.commit().map_err(|_| StoreError::Database)?;
         return Ok(false);
     }
@@ -500,7 +508,7 @@ pub(super) fn start_tool(
     tx.commit().map_err(|_| StoreError::Database)?;
     Ok(true)
 }
-fn finish_tool_tx(
+pub(super) fn finish_tool_tx(
     tx: &Transaction<'_>,
     session: &str,
     turn: &str,
@@ -656,6 +664,21 @@ pub(super) fn reconcile_tools(tx: &Transaction<'_>, turn: &str, cause: &str) -> 
         .map_err(|_| StoreError::Database)?;
     drop(statement);
     for (intent, status) in intents {
+        if status == "waiting"
+            && matches!(
+                cause,
+                "awaiting_children" | "steering_applied_before_dispatch"
+            )
+        {
+            continue;
+        }
+        if status == "waiting" {
+            tx.execute(
+                "UPDATE child_waits SET completed=1 WHERE invocation_id=?1",
+                [&intent.id],
+            )
+            .map_err(|_| StoreError::Database)?;
+        }
         let mut outcome = ToolOutcome::failed(cause, status == "running");
         outcome.output = if status == "running" {
             format!(
@@ -676,6 +699,7 @@ pub(super) fn claim_next_turn(
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
+    super::governance::prepare_groups(&tx)?;
     type Queued = (
         String,
         String,
@@ -693,10 +717,10 @@ pub(super) fn claim_next_turn(
     );
     let next:Option<Queued>=tx.query_row("SELECT t.id,t.session_id,t.requested_model,t.settings,t.requested_settings,s.execution,t.resume_count,t.usage_unknown,t.input_tokens,t.output_tokens,t.total_tokens,t.total_source,(SELECT COALESCE(MAX(ordinal),0) FROM model_requests WHERE turn_id=t.id) FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.status='queued'
         AND NOT EXISTS(SELECT 1 FROM turns active WHERE active.session_id=t.session_id AND active.status='running')
-        AND NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN('queued','running','paused'))
+        AND NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN('queued','running','paused','awaiting_children'))
         AND (s.workspace_root IS NULL OR NOT EXISTS(SELECT 1 FROM turns busy JOIN sessions bs ON bs.id=busy.session_id WHERE busy.status='running' AND bs.workspace_root=s.workspace_root))
-        AND NOT EXISTS(SELECT 1 FROM runs r JOIN tasks k ON k.id=r.task_id JOIN batches b ON b.id=k.batch_id WHERE r.turn_id=t.id AND (SELECT count(*) FROM runs br JOIN tasks bk ON bk.id=br.task_id JOIN turns bt ON bt.id=br.turn_id WHERE bk.batch_id=b.id AND bt.status='running')>=b.max_concurrent_runs)
-        ORDER BY t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?,r.get(12)?))).optional().map_err(|_|StoreError::Database)?;
+        AND NOT EXISTS(SELECT 1 FROM runs r JOIN tasks k ON k.id=r.task_id JOIN batches b ON b.id=k.admission_batch_id WHERE r.turn_id=t.id AND (SELECT count(*) FROM runs br JOIN tasks bk ON bk.id=br.task_id JOIN turns bt ON bt.id=br.turn_id WHERE bk.admission_batch_id=b.id AND bt.status='running')>=b.max_concurrent_runs)
+        ORDER BY (SELECT last_admission FROM admission_groups WHERE id=COALESCE((SELECT 'batch:'||k.admission_batch_id FROM runs r JOIN tasks k ON k.id=r.task_id WHERE r.turn_id=t.id),(SELECT 'task:'||k.root_task_id FROM runs r JOIN tasks k ON k.id=r.task_id WHERE r.turn_id=t.id),'session:'||t.session_id)),t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?,r.get(12)?))).optional().map_err(|_|StoreError::Database)?;
     let Some((
         turn_id,
         session_id,
@@ -733,12 +757,16 @@ pub(super) fn claim_next_turn(
             |row| row.get(0),
         )
         .map_err(|_| StoreError::Database)?;
+    let orchestration:Option<slop_runtime::orchestration::OrchestrationPolicy>=tx.query_row("SELECT json_extract(k.spec,'$.orchestration') FROM runs r JOIN tasks k ON k.id=r.task_id WHERE r.turn_id=?1",[&turn_id],|r|r.get::<_,Option<String>>(0)).optional().map_err(|_|StoreError::Database)?.flatten().map(|s|decode(&s)).transpose()?;
     let base_request_limit = execution
         .as_ref()
         .map_or(1_i64, |policy| i64::from(policy.max_model_requests));
-    // Workspace policy is an explicit cumulative hard cap. Plain text retains
-    // its one-request default, with a small bounded continuation allowance.
-    let max_model_requests = if execution.is_some() {
+    // Delegation has a bounded continuation allowance under aggregate budgets.
+    // Other workspace turns retain their policy cap; plain text retains its
+    // one-request default with a bounded steering/resume allowance.
+    let max_model_requests = if orchestration.is_some() {
+        64
+    } else if execution.is_some() {
         base_request_limit.clamp(1, 64) as u32
     } else {
         base_request_limit
@@ -832,6 +860,7 @@ pub(super) fn claim_next_turn(
         [&turn_id],
     )
     .map_err(|_| StoreError::Database)?;
+    super::governance::admitted(&tx, &turn_id)?;
     append_event(&tx, &session_id, "turn_started", Some(&turn_id), None)?;
     tx.commit().map_err(|_| StoreError::Database)?;
     Ok(Some(TurnWork {
@@ -844,6 +873,7 @@ pub(super) fn claim_next_turn(
         settings,
         requested_settings,
         execution,
+        orchestration,
         next_request_ordinal: previous_ordinal.saturating_add(1).max(1) as u32,
         max_model_requests,
         tool_calls_used: tool_calls_used as u32,

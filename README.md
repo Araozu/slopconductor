@@ -48,15 +48,20 @@ Implemented:
 - Deterministic prompt/model/settings matrices with preview, atomic acceptance,
   bounded batch admission, selective retries, and JSON Lines export. See
   [tasks and batches](docs/tasks-batches.md).
+- Persistent fair admission, aggregate task/tree/batch request and tool budgets,
+  and durable batch cancellation.
+- Separately authorized native child creation, inspection, waits, results, and
+  cancellation with isolated workspaces and restart-safe links. See
+  [child tasks](docs/child-tasks.md).
 
-Planned: more daemon provider options, child tasks, remote
+Planned: more daemon provider options, remote
 control, additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
 
 The [recommended next steps](docs/roadmap.md#recommended-next-delivery-order) are
-fair scheduling, batch cancellation and aggregate budgets; native child tasks;
-Windows and capacity validation; then trusted remote CLI access. These remain
-planned, and the current daemon accepts loopback connections only.
+Windows and capacity validation, then trusted remote CLI access. Scheduling/batch
+controls and child tasks now have an implemented local slice; the daemon accepts
+loopback connections only.
 
 ## Run local text chat
 

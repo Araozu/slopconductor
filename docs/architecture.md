@@ -48,7 +48,12 @@ provider interface. [Structured execution](structured-execution.md) adds a
 durable Go/Zen tool loop, explicit workspace leases, artifacts, and frozen
 per-turn model/settings. Codex currently supports text-only turns. General
 tasks, run attempts, and matrix orchestration are implemented through the same
-turn scheduler; see [tasks and batches](tasks-batches.md). Children remain planned.
+turn scheduler; see [tasks and batches](tasks-batches.md). Fair admission,
+aggregate task/tree/batch operation budgets, and durable batch cancellation share
+its storage boundary. [Native children](child-tasks.md) use explicitly selected
+authority and the same transactional application operations as public clients.
+Persisted waits release execution slots and reattach to known children after
+restart without replaying unknown operations.
 Registered [projects and managed workspaces](projects-workspaces.md) now add
 frozen repository commits, lazy detached worktree allocation after admission,
 separate diffs, explicit cleanup, and no-replay Git recovery. Each task attempt owns a fresh session and its managed

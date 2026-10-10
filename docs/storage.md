@@ -17,6 +17,11 @@ pause/resume/usage-uncertainty state. Schema 5 adds projects, managed session
 workspaces, project events, and a session's managed-workspace reference.
 Schema 6 adds tasks with requested/effective inputs, run/session/turn links,
 task events, and batches with frozen matrix inputs and admission caps.
+Schema 7 adds persistent admission tickets/clock, task/batch operation ledgers,
+and durable batch cancellation. Schema 8 adds child parent/run/root links,
+inherited admission scopes, selected context references, and exact-attempt wait
+dependencies. Child creation and its native tool result commit together; a
+completed wait result commits before readmission. See [child tasks](child-tasks.md).
 See [structured execution](structured-execution.md) and
 [projects/workspaces](projects-workspaces.md). The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,

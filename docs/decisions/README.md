@@ -11,3 +11,4 @@ superseded; a proposal is not an implemented capability.
 | [0003: API-driven independent clients](0003-independent-clients.md) | Accepted product constraint |
 | [0004: Tailscale first](0004-tailscale-first.md) | Accepted initial deployment requirement |
 | [0005: Resource admission and durable recovery](0005-bounded-execution.md) | Proposed engineering design |
+| [0006: Fair admission, budgets, and child waits](0006-local-orchestration.md) | Implemented local engineering choice |

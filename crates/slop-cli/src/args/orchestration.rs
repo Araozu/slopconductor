@@ -18,6 +18,13 @@ pub enum TaskCommand {
         #[arg(long)]
         max_output_tokens: Option<u32>,
         #[arg(long)]
+        max_model_requests: Option<u32>,
+        #[arg(long)]
+        max_tool_calls: Option<u32>,
+        /// JSON policy explicitly authorizing bounded child creation.
+        #[arg(long)]
+        orchestration_policy: Option<PathBuf>,
+        #[arg(long)]
         project: Option<String>,
         #[arg(long, requires = "project")]
         base: Option<String>,
@@ -71,6 +78,29 @@ pub enum TaskCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
+    CreateChild {
+        id: String,
+        file: PathBuf,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+    Children {
+        id: String,
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    Wait {
+        id: String,
+        #[arg(long = "child-run", required = true)]
+        child_run_ids: Vec<String>,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
+    Result {
+        id: String,
+    },
     Show {
         id: String,
     },
@@ -101,6 +131,12 @@ pub enum RunCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum BatchCommand {
+    /// Cancel all unfinished members and close the batch to retries.
+    Cancel {
+        id: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
     /// Validate and expand without creating jobs; optionally save frozen inputs.
     Preview {
         file: PathBuf,

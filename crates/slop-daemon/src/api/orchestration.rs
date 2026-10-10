@@ -33,12 +33,16 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/runs/{id}/resume", post(resume))
         .route("/v1/runs/{id}/cancel", post(cancel))
         .route("/v1/runs/{id}/retry", post(retry))
+        .route("/v1/runs/{id}/children", get(children).post(create_child))
+        .route("/v1/runs/{id}/wait", post(wait_children))
+        .route("/v1/runs/{id}/result", get(run_result))
         .route("/v1/batches/preview", post(preview))
         .route("/v1/batches", get(batches).post(submit))
         .route("/v1/batches/{id}", get(batch))
         .route("/v1/batches/{id}/members", get(members))
         .route("/v1/batches/{id}/results", get(results))
         .route("/v1/batches/{id}/retry", post(retry_batch))
+        .route("/v1/batches/{id}/cancel", post(cancel_batch))
         .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
         .route_layer(middleware::from_fn(chat::normalize_rejections))
         .route_layer(middleware::from_fn_with_state(
@@ -355,4 +359,77 @@ async fn instruction(
         return store_error(e);
     }
     accepted(state.store.task_instruction(&id, request).await)
+}
+
+async fn cancel_batch(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<TurnControlRequest>,
+) -> Response {
+    if let Err(e) = admission(&state) {
+        return store_error(e);
+    }
+    accepted(state.store.cancel_batch(&id, request).await)
+}
+
+async fn create_child(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<CreateChildRequest>,
+) -> Response {
+    if let Err(e) = admission(&state) {
+        return store_error(e);
+    }
+    let seen = match state.store.command_seen(&request.command_id).await {
+        Ok(s) => s,
+        Err(e) => return store_error(e),
+    };
+    let effective = if seen {
+        None
+    } else {
+        let parent = match state.store.run(&id).await {
+            Ok(run) => match state.store.task(&run.task_id).await {
+                Ok(task) => task,
+                Err(e) => return store_error(e),
+            },
+            Err(e) => return store_error(e),
+        };
+        let mut spec = request.spec.clone();
+        if spec.budget.is_none() {
+            spec.budget = parent.spec.budget.clone();
+        }
+        let default_tokens = if spec.model.starts_with("codex/") {
+            None
+        } else {
+            parent.spec.settings.max_output_tokens
+        };
+        match preflight(&state, spec, default_tokens) {
+            Ok(s) => Some(s),
+            Err(e) => return store_error(e),
+        }
+    };
+    accepted(state.store.create_child(&id, request, effective).await)
+}
+async fn children(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<PageQuery>,
+) -> Response {
+    match checked_limit(q.limit) {
+        Ok(l) => storage_response(state.store.children(&id, q.after, l).await),
+        Err(e) => e.into_response(),
+    }
+}
+async fn wait_children(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<WaitChildrenRequest>,
+) -> Response {
+    if let Err(e) = admission(&state) {
+        return store_error(e);
+    }
+    accepted(state.store.wait_children(&id, request).await)
+}
+async fn run_result(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    storage_response(state.store.run_result(&id).await)
 }

@@ -12,18 +12,17 @@ migration are deliberately later tracks.
 
 ## Recommended next delivery order
 
-**Proposed sequence, 2026-10-10.** Local sessions, project worktrees, durable
-tasks/run attempts, and three-axis matrices are implemented. The next work closes
-orchestration gaps before adding trusted remote control. This sequence describes
-future work; the operations below are not available yet.
+**Status, 2026-10-10.** Local sessions, project worktrees, durable tasks/run
+attempts, and three-axis matrices are implemented. Steps 1 and 2 now have local
+implementations and offline validation. Platform/capacity validation and trusted
+remote control remain next; the complete milestone gates still apply.
 
-1. **Scheduling and batch controls.** Add fair admission across batches and
-   independent tasks, durable batch-wide cancellation, and aggregate task/batch
-   model-request and tool-call budgets. Current admission selects the oldest
-   eligible turn subject to global and per-batch caps; those caps alone do not
-   prevent a large batch from repeatedly taking every free slot. Reserve budget
-   consumption before dispatch and preserve it across retries and restart.
-   Monetary estimates remain distinct from enforceable operation limits.
+1. **Scheduling and batch controls: implemented local slice.** Persistent
+   admission tickets rotate across batches, independent task trees, and ordinary
+   sessions. New/returning groups join at the current clock. Durable batch-wide
+   cancellation closes the batch, and aggregate model-request/tool-call budgets
+   reserve counts before dispatch and retain them across retries and restart.
+   Descendants share these limits. See [tasks and batches](tasks-batches.md).
 
    Acceptance: an unrelated runnable task receives capacity within a documented
    bound on new admissions, including when a batch's cap equals global capacity.
@@ -31,15 +30,14 @@ future work; the operations below are not available yet.
    cancellation boundaries for running members. Repeated commands return the
    original receipt; restart cannot reset budgets or lose cancellation intent.
 
-2. **Native child tasks.** Add separately authorized create/inspect/wait/result
-   operations through the same application services used by the public API.
-   Persist parent task/run links and child acceptance before execution. Select
-   context, artifacts, model, tools, project/base, and budgets explicitly; bound
-   depth and fan-out, and record cancel propagation at creation. Coding-tool
-   access alone must not grant permission to create children. Child attempts use
-   their own sessions and, when a project is selected, isolated workspaces.
-   Waiting parents release execution slots, and children share the applicable
-   scheduling and budget limits.
+2. **Native child tasks: implemented local slice.** Separately authorized
+   create/inspect/wait/result/cancel operations use the same application services
+   as public clients. Creation commits parent/run links and its native tool
+   result atomically. Context/artifact previews, model/tool subsets, frozen
+   project bases, finite budgets, depth/fan-out, and cancel propagation are
+   explicit. Fresh child sessions/workspaces share the applicable limits.
+   Waiting parents release execution slots; restart preserves dependencies and
+   pauses the parent until explicit resume. See [child tasks](child-tasks.md).
 
    Acceptance: a parent delegates two isolated jobs, waits, and consumes their
    results. A pool filled with waiting parents still admits children. Parent
@@ -157,8 +155,11 @@ detached workspaces. Real-binary offline checks exercise concurrent independent
 edits, frozen commits, diffs, cleanup refusals, and restart durability. Durable tasks/runs and deterministic
 prompt/model/settings matrices now cover
 preview, atomic submission, lazy admission, selective retries, and JSON Lines
-results. Children, richer result artifacts, branch publishing, and automated
-retention remain before the full M2 exit gate.
+results. Native children now add selected context/artifact previews, bounded
+delegation, parent/run links, durable waits, cancellation propagation, and shared
+budgets/fair admission. Richer result artifacts, branch publishing, automated
+retention, and the remaining platform/capacity checks still precede the full M2
+exit gate.
 
 Implement native child-task creation with explicit context/tool/budget selection,
 bounded fan-out/depth, fair scheduling, and parent/child links. Waiting parents

@@ -24,13 +24,15 @@ use slop_protocol::{
 };
 use tokio::sync::oneshot;
 
+mod children;
 mod execution;
+mod governance;
 pub(crate) mod orchestration;
 mod projects;
 
 const DATABASE_FILE: &str = "state.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 8;
 const MINIMUM_SQLITE_VERSION: i32 = 3_051_003;
 const MAX_QUEUE_CAPACITY: usize = 4096;
 const MAX_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -526,7 +528,7 @@ impl StoreClient {
         let turn_id = turn_id.to_owned();
         self.submit(move |connection| {
             let queued: bool = connection.query_row(
-                "SELECT status IN ('queued','running') AND EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='applied') FROM turns WHERE id=?1",
+                "SELECT status IN ('queued','running','awaiting_children') AND (EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='applied') OR EXISTS(SELECT 1 FROM child_waits WHERE parent_turn_id=?1)) FROM turns WHERE id=?1",
                 [&turn_id],
                 |row| row.get(0),
             ).optional().map_err(|_| StoreError::Database)?.ok_or(StoreError::NotFound)?;
@@ -822,6 +824,12 @@ where
     }
     if existing_version < 6 {
         orchestration::migrate(&tx)?;
+    }
+    if existing_version < 7 {
+        governance::migrate(&tx)?;
+    }
+    if existing_version < 8 {
+        children::migrate(&tx)?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|_| StoreError::Database)?;
@@ -1306,7 +1314,7 @@ fn send_message_tx(
     if delivery != DeliveryMode::AfterTurn {
         let active_turn: Option<String> = tx
             .query_row(
-                "SELECT id FROM turns t WHERE session_id=?1 AND (status='running' OR status='paused' OR (status='queued' AND EXISTS(SELECT 1 FROM model_requests r WHERE r.turn_id=t.id))) ORDER BY ordinal LIMIT 1",
+                "SELECT id FROM turns t WHERE session_id=?1 AND (status='running' OR status='paused' OR status='awaiting_children' OR (status='queued' AND EXISTS(SELECT 1 FROM model_requests r WHERE r.turn_id=t.id))) ORDER BY ordinal LIMIT 1",
                 [session_id],
                 |row| row.get(0),
             )
@@ -1584,6 +1592,18 @@ fn cancel_turn(
     if let Some(receipt) = prior_receipt(&tx, &request.command_id, &scope, &payload)? {
         return Ok(receipt);
     }
+    let receipt = cancel_turn_tx(&tx, turn_id, request)?;
+    tx.commit().map_err(|_| StoreError::Database)?;
+    Ok(receipt)
+}
+
+fn cancel_turn_tx(
+    tx: &Transaction<'_>,
+    turn_id: &str,
+    request: CancelTurnRequest,
+) -> StoreResult<CommandReceipt> {
+    let scope = format!("turn:{turn_id}:cancel");
+    let payload = canonical(&request)?;
     let (session_id, status): (String, String) = tx
         .query_row(
             "SELECT session_id,status FROM turns WHERE id=?1",
@@ -1594,10 +1614,16 @@ fn cancel_turn(
         .map_err(|_| StoreError::Database)?
         .ok_or(StoreError::NotFound)?;
     let kind = match status.as_str() {
-        "queued" | "paused" => {
+        "queued" | "paused" | "awaiting_children" => {
             tx.execute("UPDATE turns SET status='cancelled' WHERE id=?1", [turn_id])
                 .map_err(|_| StoreError::Database)?;
-            reject_steering_tx(&tx, turn_id, "turn_cancelled")?;
+            reject_steering_tx(tx, turn_id, "turn_cancelled")?;
+            execution::reconcile_tools(tx, turn_id, "turn_cancelled")?;
+            tx.execute(
+                "UPDATE child_waits SET completed=1 WHERE parent_turn_id=?1",
+                [turn_id],
+            )
+            .map_err(|_| StoreError::Database)?;
             "turn_cancelled"
         }
         "running" => {
@@ -1613,7 +1639,7 @@ fn cancel_turn(
         }
         _ => return Err(StoreError::Database),
     };
-    let (revision, event_sequence) = append_event(&tx, &session_id, kind, Some(turn_id), None)?;
+    let (revision, event_sequence) = append_event(tx, &session_id, kind, Some(turn_id), None)?;
     let receipt = make_receipt(
         &request.command_id,
         &session_id,
@@ -1622,8 +1648,9 @@ fn cancel_turn(
         revision,
         event_sequence,
     );
-    commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
-    tx.commit().map_err(|_| StoreError::Database)?;
+    commit_command(tx, &request.command_id, &scope, &payload, &receipt)?;
+    children::cancel_descendants(tx, turn_id)?;
+    children::wake(tx)?;
     Ok(receipt)
 }
 
@@ -1631,6 +1658,7 @@ fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
+    children::recover_waits(&tx)?;
     let mut stmt = tx
         .prepare("SELECT id,session_id FROM turns WHERE status='running'")
         .map_err(|_| StoreError::Database)?;
@@ -1654,6 +1682,7 @@ fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
         reject_steering_tx(&tx, &turn_id, "daemon_restarted")?;
         append_event(&tx, &session_id, "turn_interrupted", Some(&turn_id), None)?;
     }
+    children::wake(&tx)?;
     projects::recover(&tx)?;
     tx.commit().map_err(|_| StoreError::Database)
 }
@@ -1693,7 +1722,7 @@ fn turn_control(
                 .map_err(|_| StoreError::Database)?;
             "turn_pause_requested"
         }
-        ("pause", "queued") => {
+        ("pause", "queued" | "awaiting_children") => {
             tx.execute("UPDATE turns SET status='paused' WHERE id=?1", [turn_id])
                 .map_err(|_| StoreError::Database)?;
             "turn_paused"
@@ -1707,6 +1736,13 @@ fn turn_control(
                 [turn_id],
             )
             .map_err(|_| StoreError::Database)?;
+            if children::pending(&tx, turn_id)? {
+                tx.execute(
+                    "UPDATE turns SET status='awaiting_children' WHERE id=?1",
+                    [turn_id],
+                )
+                .map_err(|_| StoreError::Database)?;
+            }
             "turn_resumed"
         }
         _ => return Err(StoreError::Conflict),
@@ -1780,7 +1816,7 @@ fn turn_control_state(
 ) -> StoreResult<slop_runtime::chat::TurnControl> {
     connection
         .query_row(
-            "SELECT cancellation_requested,immediate_requested,pause_requested,EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') FROM turns WHERE id=?1",
+            "SELECT cancellation_requested,immediate_requested,pause_requested,EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted'),budget_exhausted,EXISTS(SELECT 1 FROM child_waits w WHERE w.parent_turn_id=?1 AND w.completed=0) FROM turns WHERE id=?1",
             [turn_id],
             |row| {
                 Ok(slop_runtime::chat::TurnControl {
@@ -1788,6 +1824,8 @@ fn turn_control_state(
                     immediate_requested: row.get::<_, i64>(1)? != 0,
                     pause_requested: row.get::<_, i64>(2)? != 0,
                     steering_pending: row.get(3)?,
+                    budget_exhausted: row.get(4)?,
+                    waiting_requested: row.get(5)?,
                 })
             },
         )
@@ -1974,7 +2012,22 @@ fn finish_turn(
         Some("steering_resume" | "steering_resume_unknown")
     ) || pending_steering && outcome.status == ChatStatus::Completed;
     let pause_yield = outcome.error_code.as_deref() == Some("pause_turn")
-        || pause_requested && outcome.status == ChatStatus::Completed;
+        || pause_requested
+            && (outcome.status == ChatStatus::Completed
+                || outcome.error_code.as_deref() == Some("awaiting_children"));
+    let wait_yield = outcome.error_code.as_deref() == Some("awaiting_children")
+        || children::pending(&tx, turn_id)? && outcome.status == ChatStatus::Completed;
+    if !cancel_requested && !pause_requested && wait_yield {
+        execution::reconcile_requests(&tx, turn_id, "awaiting_children")?;
+        execution::reconcile_tools(&tx, turn_id, "awaiting_children")?;
+        apply_steering_tx(&tx, turn_id)?;
+        let usage = outcome.usage;
+        tx.execute("UPDATE turns SET input_tokens=?1,output_tokens=?2,total_tokens=?3,total_source=?4 WHERE id=?5",rusqlite::params![usage.input_tokens.map(|n|n.to_string()),usage.output_tokens.map(|n|n.to_string()),usage.total_tokens.map(|n|n.to_string()),usage.total_source.map(|s|match s {slop_runtime::providers::UsageSource::Reported=>"reported",slop_runtime::providers::UsageSource::Derived=>"derived"}),turn_id]).map_err(|_|StoreError::Database)?;
+        children::park(&tx, turn_id)?;
+        children::wake(&tx)?;
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(());
+    }
     if !cancel_requested && (steering_yield || pause_yield) {
         execution::reconcile_requests(&tx, turn_id, "steering_interrupted")?;
         execution::reconcile_tools(&tx, turn_id, "steering_applied_before_dispatch")?;
@@ -2136,6 +2189,7 @@ fn finish_turn(
         Some(turn_id),
         assistant_id.as_deref(),
     )?;
+    children::wake(&tx)?;
     tx.commit().map_err(|_| StoreError::Database)
 }
 
@@ -2153,6 +2207,30 @@ fn cancellation_requested(connection: &Connection, turn_id: &str) -> StoreResult
 }
 
 impl slop_runtime::chat::ChatRepository for StoreClient {
+    fn orchestration_tool<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: &'a slop_runtime::agent::ToolIntent,
+    ) -> slop_runtime::chat::RepoFuture<'a, slop_runtime::orchestration::OrchestrationResult> {
+        Box::pin(async move {
+            match self.native_orchestration(turn_id, intent).await {
+                Ok(result) => Ok(result),
+                Err(error) => {
+                    let code = match error {
+                        StoreError::Invalid => "invalid_arguments",
+                        StoreError::NotFound => "child_not_found",
+                        StoreError::Conflict => "child_state_conflict",
+                        StoreError::Limit => "child_limit",
+                        StoreError::Unsupported(_) => "child_not_allowed",
+                        _ => return Err(Box::new(error) as slop_runtime::chat::RepoError),
+                    };
+                    Ok(slop_runtime::orchestration::OrchestrationResult::Completed(
+                        slop_runtime::tools::ToolOutcome::failed(code, false),
+                    ))
+                }
+            }
+        })
+    }
     fn prepare_workspace<'a>(
         &'a self,
         turn_id: &'a str,

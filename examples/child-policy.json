@@ -1,0 +1,6 @@
+{
+  "max_children": 4,
+  "max_depth": 2,
+  "allowed_models": ["opencode-go/glm-5.3-flash"],
+  "allowed_tools": ["write"]
+}

@@ -668,7 +668,7 @@ impl StoreClient {
 }
 
 fn busy(connection: &Connection, path: &str, queued: bool) -> StoreResult<bool> {
-    connection.query_row("SELECT EXISTS(SELECT 1 FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.workspace_root=?1 AND (t.status='running' OR (?2 AND t.status IN('queued','paused'))))", rusqlite::params![path, queued], |row| row.get(0)).map_err(|_| StoreError::Database)
+    connection.query_row("SELECT EXISTS(SELECT 1 FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.workspace_root=?1 AND (t.status='running' OR (?2 AND t.status IN('queued','paused','awaiting_children'))))", rusqlite::params![path, queued], |row| row.get(0)).map_err(|_| StoreError::Database)
 }
 fn page<T>(
     connection: &Connection,
@@ -910,7 +910,7 @@ mod tests {
         let receipt = client.create_session(request.clone()).await.unwrap();
         let session = client.session(&receipt.session_id).await.unwrap();
         client.submit(|connection| {
-            connection.execute_batch("DROP TABLE task_events; DROP TABLE runs; DROP TABLE tasks; DROP TABLE batches; ALTER TABLE sessions DROP COLUMN managed_workspace_id; DROP TABLE project_events; DROP TABLE managed_workspaces; DROP TABLE projects; PRAGMA user_version=4;").map_err(|_| StoreError::Database)
+            connection.execute_batch("DROP TABLE child_waits; DROP TABLE child_links; DROP TABLE admission_groups; DROP TABLE admission_clock; DROP TABLE operation_budgets; DROP TRIGGER readmission_epoch; ALTER TABLE turns DROP COLUMN admission_epoch; ALTER TABLE turns DROP COLUMN budget_exhausted; DROP TABLE task_events; DROP TABLE runs; DROP TABLE tasks; DROP TABLE batches; ALTER TABLE sessions DROP COLUMN managed_workspace_id; DROP TABLE project_events; DROP TABLE managed_workspaces; DROP TABLE projects; PRAGMA user_version=4;").map_err(|_| StoreError::Database)
         }).await.unwrap();
         store.shutdown().await.unwrap();
         let store = open(data).await;

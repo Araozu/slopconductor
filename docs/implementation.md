@@ -188,8 +188,9 @@ The [shared provider interface](provider-interface.md) is the adapter and
 public-surface contract. Go and Zen implement structured `ProviderClient::infer`
 and supply the daemon's durable chat/tool vertical slice, with blocks, private
 continuation, per-turn model/settings, and artifacts. Codex supports text-only
-turns. See [structured execution](structured-execution.md). Broader account
-discovery and child orchestration remain planned.
+turns. See [structured execution](structured-execution.md). Go/Zen also support
+the separately authorized [native child tools](child-tasks.md). Broader account
+discovery remains planned.
 
 Implement provider capability validation and API-key account references. Add a
 direct streaming request adapter and preserve response/tool-call metadata.
@@ -237,8 +238,8 @@ offline acceptance workflow are described in
 [projects/workspaces](projects-workspaces.md). Task/run controls and matrices are implemented
 as described in
 [tasks and batches](tasks-batches.md). The [recommended delivery order](roadmap.md#recommended-next-delivery-order)
-adds scheduling and batch controls before native children, then closes platform
-and capacity validation gaps before remote control.
+now marks scheduling/batch controls and native children implemented locally,
+with platform and capacity validation next before remote control.
 
 Record logical repository identity, current exact base commit, local mappings,
 and workspace policy. Use managed worktrees for parallel writers; default shared
@@ -251,25 +252,25 @@ combination indexes and selective retries.
 
 The [example request](../examples/batch-request.json) now matches the implemented
 `BatchSpec` accepted by `batch preview` and `batch submit`. Broader arbitrary
-parameter axes, aggregate budgets, and child creation remain future extensions.
+parameter axes remain future extensions. Aggregate budgets and native child
+creation are implemented.
 
-**Next proposed foundation:** replace oldest-eligible-turn admission with bounded
-fairness across batches and independent tasks. Add durable batch cancellation
-that prevents queued admission and cancels active members at existing execution
-boundaries. Add aggregate task/batch request and tool-call ledgers: reserve before
-dispatch and keep consumption across attempts and restart. Document the admission
-bound and test a batch whose concurrency cap equals the global cap. Current caps
-and spare-capacity tests do not establish cross-batch fairness.
+**Implemented orchestration foundation:** persistent admission tickets rotate
+across batches, independent task trees, and ordinary sessions. Newly queued and
+returning groups join at the current clock. Durable batch cancellation prevents
+queued admission, uses existing active cancellation boundaries, and closes retry
+admission. Aggregate operation ledgers reserve before dispatch and keep counts
+across attempts, descendants, and restart. Tests cover a batch whose cap fills
+global capacity and a returning group attempting to reuse old priority.
 
-Implement native child-task tools through the same application operations. Make
-fan-out, depth, inheritance, cancellation, and waiting-slot behavior explicit.
-Expose orchestration as a separate authorized capability from the four coding
-tools. Persist parent task/run links, child command receipts, and wait
-dependencies atomically; select context/artifact references explicitly. Child
-attempts receive fresh sessions and, when project-backed, their own workspace
-reservations. Waiting parents release execution slots; recovery reattaches to
-known child IDs without replaying unknown effects. Apply aggregate budgets to
-descendants as well as ordinary batch members.
+[Native child-task tools](child-tasks.md) use the public API's application
+operations under a separate policy from the four coding tools. Creation and its
+native tool result commit together with parent/run links and command receipts.
+Explicit context/artifact previews, model/tool subsets, finite ancestor budgets,
+depth/fan-out limits, cancellation policy, and wait dependencies are implemented.
+Children have fresh sessions and isolated project workspaces. Waiting parents
+release slots; recovery preserves known IDs/dependencies and pauses the parent
+until explicit resume, without replaying unknown effects.
 
 Acceptance: batch results are attributable to exact inputs/workspaces, bounded
 concurrency remains responsive, and waiting parents cannot block all children.

@@ -10,6 +10,10 @@ consumers use public structured records; neither owns execution.
 **Tool set updated, 2026-10-09.** The native runtime exposes only pi's four basic
 coding tools: `read`, `write`, `edit`, and `bash`. Their implementation stays in
 Rust; pi is a design reference, not a runtime dependency.
+An explicitly authorized task can additionally expose the five native
+[orchestration tools](child-tasks.md#native-tools-and-waiting). They use the same
+durable invocation/result records and aggregate operation accounting; the
+coding-tool allowlist alone does not enable delegation.
 
 ## Request and conversation model
 

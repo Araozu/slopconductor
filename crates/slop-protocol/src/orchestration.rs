@@ -4,6 +4,76 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct OperationBudget {
+    pub max_model_requests: u32,
+    pub max_tool_calls: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BudgetUsage {
+    pub model_requests: u64,
+    pub tool_calls: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationPolicy {
+    /// Maximum children across this root's entire tree, and direct fan-out at this node.
+    pub max_children: u32,
+    /// Remaining delegation depth; a leaf has no orchestration policy.
+    pub max_depth: u32,
+    pub allowed_models: Vec<String>,
+    pub allowed_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChildContext {
+    #[serde(default)]
+    pub message_ids: Vec<String>,
+    #[serde(default)]
+    pub artifact_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CreateChildRequest {
+    pub command_id: String,
+    pub spec: TaskSpec,
+    #[serde(default)]
+    pub context: ChildContext,
+    #[serde(default = "cancel_child_default")]
+    pub cancel_with_parent: bool,
+}
+fn cancel_child_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChildLink {
+    pub parent_task_id: String,
+    pub parent_run_id: String,
+    pub root_task_id: String,
+    pub depth: u32,
+    pub cancel_with_parent: bool,
+    pub context: ChildContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WaitChildrenRequest {
+    pub command_id: String,
+    pub child_run_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunResultResponse {
+    pub run: RunResponse,
+    pub output: Option<crate::chat::MessageResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TaskSpec {
     pub title: Option<String>,
     pub prompt: String,
@@ -12,6 +82,10 @@ pub struct TaskSpec {
     #[serde(default)]
     pub settings: GenerationSettings,
     pub project: Option<ProjectWorkspaceRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<OperationBudget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestration: Option<OrchestrationPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -44,6 +118,10 @@ pub struct TaskResponse {
     pub combination_index: Option<u32>,
     pub last_event_sequence: u64,
     pub latest_run: RunResponse,
+    #[serde(default)]
+    pub budget_usage: BudgetUsage,
+    #[serde(default)]
+    pub child: Option<ChildLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,6 +164,10 @@ pub struct BatchSpec {
     /// Preview freezes the daemon default for uncapped API-key cells.
     #[serde(default)]
     pub default_max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<OperationBudget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestration: Option<OrchestrationPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -125,6 +207,17 @@ pub struct BatchResponse {
     pub spec: BatchSpec,
     pub total: u32,
     pub statuses: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    pub cancellation_requested: bool,
+    #[serde(default)]
+    pub budget_usage: BudgetUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BatchCancelReceipt {
+    pub command_id: String,
+    pub batch_id: String,
+    pub run_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

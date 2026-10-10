@@ -18,6 +18,11 @@ IDs, and per-turn model/settings. Its DTOs live in `slop_protocol::execution`.
 Registered [projects/workspaces](projects-workspaces.md) and durable
 [tasks/run attempts and matrices](tasks-batches.md) are also implemented. Their
 wire structs live in `slop_protocol::projects` and `slop_protocol::orchestration`.
+The orchestration contract includes cumulative budgets, batch cancellation,
+delegation policies, parent/child links, exact-attempt waits, and public run
+results; see [child tasks](child-tasks.md#public-api-and-validation). Health
+advertises `orchestration-controls` and `child-tasks` for the corresponding new
+mutations. Awaiting children is a nonterminal run status.
 Resource summaries and the larger command/error envelope below remain proposed.
 The [provider credential surface](provider-credentials.md#public-api) is also
 implemented, with wire structs in `slop_protocol::providers`: private API-key

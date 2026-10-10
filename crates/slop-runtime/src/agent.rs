@@ -179,7 +179,7 @@ pub(crate) async fn execute<R: ChatRepository>(
         work.history.clone()
     };
     let settings = work.settings.clone();
-    let definitions: Vec<ToolDefinition> = work
+    let mut definitions: Vec<ToolDefinition> = work
         .execution
         .as_ref()
         .map(|policy| {
@@ -189,11 +189,17 @@ pub(crate) async fn execute<R: ChatRepository>(
                 .collect()
         })
         .unwrap_or_default();
+    if let Some(policy) = &work.orchestration {
+        definitions.extend(crate::orchestration::definitions(policy));
+    }
     let max_requests = work.max_model_requests.max(1);
-    let max_tools = work
-        .execution
-        .as_ref()
-        .map_or(0, |policy| policy.max_tool_calls);
+    let max_tools = if work.orchestration.is_some() {
+        128
+    } else {
+        work.execution
+            .as_ref()
+            .map_or(0, |policy| policy.max_tool_calls)
+    };
     let mut tool_count = work.tool_calls_used;
     let mut ordinal = work.next_request_ordinal.max(1);
     let mut cancel_tick = tokio::time::interval(Duration::from_millis(100));
@@ -220,6 +226,15 @@ pub(crate) async fn execute<R: ChatRepository>(
                 repository.as_ref(),
                 &work.turn_id,
                 steering_yield("pause_turn", total),
+                total,
+            )
+            .await;
+        }
+        if control.waiting_requested {
+            return stop(
+                repository.as_ref(),
+                &work.turn_id,
+                steering_yield("awaiting_children", total),
                 total,
             )
             .await;
@@ -304,6 +319,27 @@ pub(crate) async fn execute<R: ChatRepository>(
             };
             if control.cancellation_requested {
                 return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+            }
+            if control.waiting_requested {
+                return stop(
+                    repository.as_ref(),
+                    &work.turn_id,
+                    steering_yield("awaiting_children", total),
+                    total,
+                )
+                .await;
+            }
+            if control.budget_exhausted {
+                return stop(
+                    repository.as_ref(),
+                    &work.turn_id,
+                    failed(
+                        "operation_budget_exhausted",
+                        "The task or batch reached its aggregate operation budget.",
+                    ),
+                    total,
+                )
+                .await;
             }
             let code = if control.pause_requested {
                 "pause_turn"
@@ -492,14 +528,22 @@ pub(crate) async fn execute<R: ChatRepository>(
         for invocation in invocations {
             tool_count += 1;
             let policy = work.execution.clone();
+            let orchestration = crate::orchestration::NAMES.contains(&invocation.name.as_str());
             let outcome = if exhausted {
                 ToolOutcome::failed("tool_budget_exhausted", false)
-            } else if policy
-                .as_ref()
-                .is_none_or(|p| !p.allowed_tools.contains(&invocation.name))
-            {
+            } else if if orchestration {
+                work.orchestration.is_none()
+            } else {
+                policy
+                    .as_ref()
+                    .is_none_or(|p| !p.allowed_tools.contains(&invocation.name))
+            } {
                 ToolOutcome::failed("tool_not_allowed", false)
-            } else if !crate::tools::validate_arguments(&invocation.name, &invocation.arguments) {
+            } else if !(if orchestration {
+                crate::orchestration::validate_arguments(&invocation.name, &invocation.arguments)
+            } else {
+                crate::tools::validate_arguments(&invocation.name, &invocation.arguments)
+            }) {
                 ToolOutcome::failed("invalid_arguments", false)
             } else {
                 if *shutdown.borrow() {
@@ -529,6 +573,27 @@ pub(crate) async fn execute<R: ChatRepository>(
                             return stop(repository.as_ref(), &work.turn_id, canceled(), total)
                                 .await;
                         }
+                        if control.waiting_requested {
+                            return stop(
+                                repository.as_ref(),
+                                &work.turn_id,
+                                steering_yield("awaiting_children", total),
+                                total,
+                            )
+                            .await;
+                        }
+                        if control.budget_exhausted {
+                            return stop(
+                                repository.as_ref(),
+                                &work.turn_id,
+                                failed(
+                                    "operation_budget_exhausted",
+                                    "The task or batch reached its aggregate operation budget.",
+                                ),
+                                total,
+                            )
+                            .await;
+                        }
                         let code = if control.pause_requested {
                             "pause_turn"
                         } else {
@@ -544,43 +609,64 @@ pub(crate) async fn execute<R: ChatRepository>(
                     }
                     Err(_) => return false,
                 }
-                let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-                let session_id = work.session_id.clone();
-                let turn_id = work.turn_id.clone();
-                let id = invocation.id.clone();
-                let request_id = invocation.request_id.clone();
-                let result_message_id = invocation.result_message_id.clone();
-                let mut chunk_index = 0u64;
-                let mut on_output = |kind: &str, text: &str| {
-                    let _ = deltas.send(ChatDelta {
-                        session_id: session_id.clone(),
-                        turn_id: turn_id.clone(),
-                        text: text.into(),
-                        message_id: Some(result_message_id.clone()),
-                        block_id: None,
-                        request_id: Some(request_id.clone()),
-                        invocation_id: Some(id.clone()),
-                        stream_id: format!("{id}:{kind}"),
-                        chunk_index,
-                        kind: kind.into(),
-                    });
-                    chunk_index = chunk_index.saturating_add(1);
-                };
-                let mut execution = Box::pin(tools.run(
-                    policy.expect("checked policy"),
-                    &invocation.name,
-                    invocation.arguments.clone(),
-                    cancel_rx,
-                    &mut on_output,
-                ));
-                loop {
-                    tokio::select! {
-                        outcome=&mut execution=>break outcome,
-                        _=shutdown.changed()=>{cancel_tx.send_replace(true);break execution.await;},
-                        _=cancel_tick.tick()=>match repository.turn_control(&work.turn_id).await{
-                            Ok(control) if control.cancellation_requested || control.immediate_requested=>{cancel_tx.send_replace(true);break execution.await;},
-                            Ok(_)=>{},Err(_)=>{cancel_tx.send_replace(true);break execution.await;}
-                        },
+                if orchestration {
+                    match repository
+                        .orchestration_tool(&work.turn_id, &invocation)
+                        .await
+                    {
+                        Ok(crate::orchestration::OrchestrationResult::Completed(outcome)) => {
+                            outcome
+                        }
+                        Ok(crate::orchestration::OrchestrationResult::Waiting) => {
+                            return stop(
+                                repository.as_ref(),
+                                &work.turn_id,
+                                steering_yield("awaiting_children", total),
+                                total,
+                            )
+                            .await;
+                        }
+                        Err(_) => return false,
+                    }
+                } else {
+                    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                    let session_id = work.session_id.clone();
+                    let turn_id = work.turn_id.clone();
+                    let id = invocation.id.clone();
+                    let request_id = invocation.request_id.clone();
+                    let result_message_id = invocation.result_message_id.clone();
+                    let mut chunk_index = 0u64;
+                    let mut on_output = |kind: &str, text: &str| {
+                        let _ = deltas.send(ChatDelta {
+                            session_id: session_id.clone(),
+                            turn_id: turn_id.clone(),
+                            text: text.into(),
+                            message_id: Some(result_message_id.clone()),
+                            block_id: None,
+                            request_id: Some(request_id.clone()),
+                            invocation_id: Some(id.clone()),
+                            stream_id: format!("{id}:{kind}"),
+                            chunk_index,
+                            kind: kind.into(),
+                        });
+                        chunk_index = chunk_index.saturating_add(1);
+                    };
+                    let mut execution = Box::pin(tools.run(
+                        policy.expect("checked policy"),
+                        &invocation.name,
+                        invocation.arguments.clone(),
+                        cancel_rx,
+                        &mut on_output,
+                    ));
+                    loop {
+                        tokio::select! {
+                            outcome=&mut execution=>break outcome,
+                            _=shutdown.changed()=>{cancel_tx.send_replace(true);break execution.await;},
+                            _=cancel_tick.tick()=>match repository.turn_control(&work.turn_id).await{
+                                Ok(control) if control.cancellation_requested || control.immediate_requested=>{cancel_tx.send_replace(true);break execution.await;},
+                                Ok(_)=>{},Err(_)=>{cancel_tx.send_replace(true);break execution.await;}
+                            },
+                        }
                     }
                 }
             };

@@ -50,7 +50,7 @@ promise that an entire machine contains only one operating-system process.
 | F08 | Project registration and worktrees | M2, session slice implemented | Registered projects reserve frozen-base worktrees; independent sessions allocate lazily and expose diffs/cleanup. |
 | F09 | Prompt/model/parameter matrices | M2, three-axis slice implemented | Expansion is deterministic, previewable, and bounded. |
 | F10 | Batch results and selective retries | M2, local slice implemented | Outputs preserve parameters; successful tasks are retained. |
-| F11 | Agent-created child tasks | M2 | Parent links, context selection, budgets, and limits are explicit. |
+| F11 | Agent-created child tasks | M2, bounded local slice implemented | Parent links, context selection, budgets, limits, and waiting-slot release are explicit. |
 | F12 | Multiple providers and model catalogs | M2 | Unsupported settings fail validation rather than being dropped. |
 | F13 | Supported subscription authentication | M2, eligibility dependent | Direct documented flow; credentials remain outside task data. |
 | F14 | Peer registration and remote CLI access | M3 | Trusted clients target an owner over Tailscale. |

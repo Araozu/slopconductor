@@ -22,12 +22,13 @@ lazy detached worktrees, separate diffs, explicit cleanup, and Git recovery.
 The 2026-10-09 tool update limits coding tools to `read`, `write`, `edit`, and
 `bash`. Durable tasks/run attempts and deterministic matrices now add preview,
 atomic acceptance, bounded admission, explicit selective retries, and result
-export. Children remain planned. Commands,
+export. Fair admission, aggregate operation budgets, batch cancellation, and
+bounded native child tasks with durable waits are also implemented. Commands,
 schemas, and workflows marked proposed describe future work.
 
 The [recommended next delivery order](roadmap.md#recommended-next-delivery-order)
-is scheduling/batch controls, native child tasks, platform/capacity validation,
-then trusted remote CLI access. M1/M2 remain partial; Linux offline validation
+now moves from implemented scheduling/batch controls and native children to
+platform/capacity validation, then trusted remote CLI access. M1/M2 remain partial; Linux offline validation
 does not establish native Windows or live-provider behavior.
 
 ## Reading order
@@ -42,6 +43,7 @@ does not establish native Windows or live-provider behavior.
 | [Text chat](text-chat.md) | Implemented local chat ownership, API, durability, and recovery |
 | [Structured execution](structured-execution.md) | Implemented tool loop, structured streaming, artifacts, frozen model/settings, and recovery |
 | [Tasks and batches](tasks-batches.md) | Implemented jobs, explicit attempts, matrix preview/submission, selective retries, and results |
+| [Child tasks](child-tasks.md) | Implemented native delegation policy, isolated children, context selection, waits, and recovery |
 | [Projects and workspaces](projects-workspaces.md) | Implemented registration, lazy worktrees, frozen bases, diffs, cleanup, and Git recovery |
 | [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
 | [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |

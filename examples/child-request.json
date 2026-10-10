@@ -1,0 +1,13 @@
+{
+  "spec": {
+    "prompt": "Implement the requested change and report the resulting diff.",
+    "model": "opencode-go/glm-5.3-flash",
+    "settings": {"max_output_tokens": 2048},
+    "project": {
+      "project_id": "PROJECT_ID",
+      "allowed_tools": ["write"]
+    }
+  },
+  "context": {"message_ids": [], "artifact_ids": []},
+  "cancel_with_parent": true
+}

@@ -7,6 +7,12 @@ impl DaemonClient {
         request: &CreateTaskRequest,
     ) -> Result<TaskReceipt, ClientError> {
         self.require_feature("tasks-runs").await?;
+        if request.spec.orchestration.is_some() {
+            self.require_feature("child-tasks").await?;
+        }
+        if request.spec.budget.is_some() {
+            self.require_feature("orchestration-controls").await?;
+        }
         self.post_json(self.endpoint.join("/v1/tasks")?, request)
             .await
     }
@@ -80,6 +86,12 @@ impl DaemonClient {
         spec: &BatchSpec,
     ) -> Result<BatchPreviewResponse, ClientError> {
         self.require_feature("batch-matrices").await?;
+        if spec.budget.is_some() {
+            self.require_feature("orchestration-controls").await?;
+        }
+        if spec.orchestration.is_some() {
+            self.require_feature("child-tasks").await?;
+        }
         let body = serde_json::to_vec(spec).map_err(|_| ClientError::InvalidResponse)?;
         if body.len() > 2 * 1024 * 1024 {
             return Err(ClientError::RequestTooLarge);
@@ -100,8 +112,26 @@ impl DaemonClient {
         request: &CreateBatchRequest,
     ) -> Result<BatchReceipt, ClientError> {
         self.require_feature("batch-matrices").await?;
+        if request.spec.orchestration.is_some() {
+            self.require_feature("child-tasks").await?;
+        }
+        if request.spec.budget.is_some() {
+            self.require_feature("orchestration-controls").await?;
+        }
         self.post_json(self.endpoint.join("/v1/batches")?, request)
             .await
+    }
+    pub async fn cancel_batch(
+        &self,
+        id: &str,
+        request: &slop_protocol::chat::TurnControlRequest,
+    ) -> Result<BatchCancelReceipt, ClientError> {
+        self.require_feature("orchestration-controls").await?;
+        self.post_json(
+            id_url(&self.endpoint, "/v1/batches", id, Some("cancel"))?,
+            request,
+        )
+        .await
     }
     pub async fn batch(&self, id: &str) -> Result<BatchResponse, ClientError> {
         self.get_json(id_url(&self.endpoint, "/v1/batches", id, None)?)
@@ -151,6 +181,44 @@ impl DaemonClient {
 }
 
 impl DaemonClient {
+    pub async fn create_child(
+        &self,
+        id: &str,
+        request: &CreateChildRequest,
+    ) -> Result<TaskReceipt, ClientError> {
+        self.require_feature("child-tasks").await?;
+        self.post_json(
+            id_url(&self.endpoint, "/v1/runs", id, Some("children"))?,
+            request,
+        )
+        .await
+    }
+    pub async fn children(
+        &self,
+        id: &str,
+        after: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<Page<TaskResponse>, ClientError> {
+        let mut url = id_url(&self.endpoint, "/v1/runs", id, Some("children"))?;
+        append_page_query(&mut url, after, limit);
+        self.get_json(url).await
+    }
+    pub async fn wait_children(
+        &self,
+        id: &str,
+        request: &WaitChildrenRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("child-tasks").await?;
+        self.post_json(
+            id_url(&self.endpoint, "/v1/runs", id, Some("wait"))?,
+            request,
+        )
+        .await
+    }
+    pub async fn run_result(&self, id: &str) -> Result<RunResultResponse, ClientError> {
+        self.get_json(id_url(&self.endpoint, "/v1/runs", id, Some("result"))?)
+            .await
+    }
     pub async fn task_instruction(
         &self,
         id: &str,

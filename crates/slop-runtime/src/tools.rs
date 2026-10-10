@@ -1159,8 +1159,20 @@ mod tests {
         assert!(result.effects_unknown);
         #[cfg(target_os = "linux")]
         {
-            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
-            assert!(stat.is_err() || stat.unwrap().split_once(") ").unwrap().1.starts_with('Z'));
+            // SIGKILL delivery to the descendant can finish after the shell
+            // has been reaped. Require bounded termination, not an immediate
+            // process-state transition in the same scheduler tick.
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+                    if stat.is_err() || stat.unwrap().split_once(") ").unwrap().1.starts_with('Z') {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
         }
     }
 }

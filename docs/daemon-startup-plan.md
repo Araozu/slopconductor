@@ -1,11 +1,11 @@
 # Daemon startup and chat durability contract
 
-Status: startup foundation and durable text chat implemented, 2026-10-08.
+Status: startup foundation and durable local orchestration implemented, 2026-10-10.
 The daemon exposes health, authenticated node identity, and the
 [text-chat slice](text-chat.md) with its session store and execution supervisor.
 [Structured execution](structured-execution.md) adds opt-in file/shell tools,
-artifacts, and interrupted-step recovery. [Durable tasks and matrices](tasks-batches.md) now share turn execution and recovery;
-children remain planned.
+artifacts, and interrupted-step recovery. [Durable tasks and matrices](tasks-batches.md)
+and [native child tasks](child-tasks.md) share turn execution and recovery.
 
 ## Implemented scope
 

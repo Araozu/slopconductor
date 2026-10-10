@@ -32,9 +32,11 @@ that needs them, and record consequential decisions in an ADR.
    directories, submodules, and separate checkouts map to one logical project.
 9. **Workspace lifecycle:** select branch naming, retained worktree limits,
    user-owned versus managed directories, and cleanup policy.
-10. **Budget semantics:** establish enforceable request/tool/turn limits. Monetary
-    estimates may overshoot with in-flight calls and incomplete pricing data;
-    do not present them as unconditional hard billing caps.
+10. **Budget semantics:** cumulative task/tree/batch model-request and tool-call
+    limits are implemented as reservations before dispatch, retained across
+    attempts and restart. Existing per-turn limits remain. Account-specific
+    admission and monetary estimates remain open; operation counts are not
+    unconditional billing caps.
 11. **Offline instructions:** choose expiry defaults, revision checks, and whether
     a forwarder stores pending commands at all.
 12. **Peer trust:** choose pairing credentials, revocation, delegated read/write
