@@ -146,7 +146,12 @@ def check_projects(daemon_binary, cli_binary, root):
         beta_receipt = next(frame["receipt"] for frame in beta_frames if frame["type"] == "receipt")
         beta_session = get(f"/v1/sessions/{beta_receipt['session_id']}")
         beta = get(f"/v1/workspaces/{beta_session['managed_workspace_id']}")
-        assert fixture.both_started.wait(timeout=10), "two isolated turns did not execute concurrently"
+        if not fixture.both_started.wait(timeout=10):
+            states = {
+                "turns": [get(f"/v1/turns/{turn}") for turn in (alpha_turn, beta_receipt["turn_id"])],
+                "workspaces": [get(f"/v1/workspaces/{workspace['id']}") for workspace in (alpha, beta)],
+            }
+            raise AssertionError("two isolated turns did not execute concurrently: " + json.dumps(states))
         assert alpha["path"] != beta["path"]
         assert get(f"/v1/workspaces/{alpha['id']}")["status"] == "ready"
         status, _ = request(endpoint, token, "POST", {"command_id": "remove-active"}, f"/v1/workspaces/{alpha['id']}/remove")
