@@ -227,8 +227,8 @@ Both mutations return a receipt with a session ID, revision, and event sequence;
 
 ## Where to read next
 
-- [Text chat design and recovery details](docs/text-chat.md)
-- [Provider credential workflows](docs/provider-credentials.md)
-- [Architecture and crate boundaries](docs/architecture.md)
+- [Text chat design and recovery details](../../docs/text-chat.md)
+- [Provider credential workflows](../../docs/provider-credentials.md)
+- [Architecture and crate boundaries](../../docs/architecture.md)
 - [`slop-daemon` source](crates/slop-daemon/src)
 - [`slop-runtime` chat supervisor](crates/slop-runtime/src/chat.rs)

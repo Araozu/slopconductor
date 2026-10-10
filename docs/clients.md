@@ -19,7 +19,11 @@ It should ship useful local execution before the TUI, web, or Electron exists.
 The implemented commands are `status`, `node`, `models`, `capabilities`, `artifact`
 (show/download), `provider`
 (status/set-key/login/login-status), `chat`, `session`
-(list/show/history/send/follow), and `turn` (show/cancel), optionally with
+(list/show/history/send/follow), `turn` (show/requests/tools/cancel/pause/resume),
+`project` (register/list/show/workspaces/events), `workspace` (show/diff/remove),
+`task` (create/show/list/runs/events/send/follow), `run`
+(show/pause/resume/cancel/retry/children/create-child/wait/result), and `batch`
+(preview/submit/show/members/results/export/retry/cancel), optionally with
 `--json` and `--daemon`. Status remains anonymous. For loopback endpoints the
 CLI discovers the token in the platform data directory; `--token-file` and
 `SLOP_TOKEN_FILE` override it. Other origins require an explicit token file.

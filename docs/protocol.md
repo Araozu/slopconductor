@@ -151,7 +151,13 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/batches/{id} | Implemented: frozen parameters and latest-member status counts |
 | GET /v1/batches/{id}/members, /results | Implemented: paginated inputs and outcomes |
 | POST /v1/batches/{id}/retry | Implemented: atomically retry selected unsuccessful combinations |
-| POST /v1/batches/{id}/cancel | Proposed: batch-wide cancellation with propagation policy |
+| POST /v1/batches/{id}/cancel | Implemented: durable batch-wide cancellation; queued/paused/awaiting work stops, running work cancels at existing boundaries, batch stays closed to retries |
+| POST /v1/runs/{id}/children | Implemented: create a child task under an authorized delegation policy |
+| GET /v1/runs/{id}/children | Implemented: paginated direct-child task records |
+| POST /v1/runs/{id}/wait | Implemented: durable wait on explicit direct-child run IDs, releasing execution slots |
+| GET /v1/runs/{id}/result | Implemented: attempt result with public output |
+| GET /v1/projects/{id} | Implemented: project identity and local mapping |
+| GET /v1/projects/{id}/events | Implemented: paginated durable project/workspace events |
 | GET, POST /v1/peers | Configure and inspect trusted peer endpoints |
 | POST /v1/transfers | Future handoff preparation; unavailable before M6 |
 

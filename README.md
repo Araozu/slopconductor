@@ -229,7 +229,8 @@ Browser and Electron projects will have their own builds when introduced.
 
 ## Design documents
 
-Start at the [documentation index](docs/README.md). The main references are:
+Start at the [documentation index](docs/README.md) and the
+[master per-crate overview](docs/overview.md). The main references are:
 
 - [Product idea and workflows](docs/product.md)
 - [Features and non-negotiables](docs/requirements.md)

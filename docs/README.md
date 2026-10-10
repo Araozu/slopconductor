@@ -36,8 +36,12 @@ outstanding.
 
 ## Reading order
 
+Start with the [master overview](overview.md) for a per-crate map of what exists
+today, then read in this order:
+
 | Document | Purpose |
 | --- | --- |
+| [Overview](overview.md) | Master per-crate status map and entry point |
 | [Product](product.md) | Motivation, users, workflows, and product vocabulary |
 | [Requirements](requirements.md) | Feature inventory, priorities, and non-negotiables |
 | [Architecture](architecture.md) | System layers, crate dependencies, and ownership |

@@ -282,8 +282,11 @@ now passes on Linux and Windows.
 
 ## Step 7: providers, accounts, and supported subscriptions
 
-Add a second provider so the neutral context/capability boundary is exercised.
-Separate requested settings from effective settings in recorded runs.
+**Implemented provider slice:** OpenCode Go and Zen exercise the neutral
+context/capability boundary with separate catalogs and wire-shape mappings, and
+headless Codex adds ChatGPT subscription login plus Platform keys through the
+same `ProviderClient`. Requested and effective settings are recorded separately
+in run/turn records.
 
 Evaluate supported subscription auth per provider. For OpenAI, consult current
 Sign in with ChatGPT plan-usage docs, define the eligible app/host identities,

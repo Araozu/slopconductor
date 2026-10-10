@@ -15,8 +15,10 @@ that needs them, and record consequential decisions in an ADR.
    for headless systems. Credentials remain separate from conversations.
 4. **Default execution policy:** define permitted file roots, shell/network
    capabilities, resource caps, and when a task waits for human input.
-5. **First provider:** choose based on a working API credential and useful model
-   availability; do not hardcode a particular model into the domain.
+5. **Providers:** OpenCode Go was chosen first, with Zen and headless Codex added
+   afterward through the shared `ProviderClient`. Do not hardcode a particular
+   model into the domain; account-specific catalog/capability validation remains
+   open.
 6. **SQLite binding:** bundled `rusqlite` and one bounded database worker are
    selected and implemented for node identity. Backup/export behavior remains
    future work.

@@ -6,7 +6,8 @@ worktree, freeze an exact base commit, and use the existing four coding tools in
 that workspace. Allocation happens after turn admission. CLI/API consumers can
 inspect workspace records, project events, and separate diffs, and deliberately
 request cleanup. [Tasks and batches](tasks-batches.md) now build durable attempts and deterministic
-matrices on these session/workspace primitives. Children remain future work.
+matrices on these session/workspace primitives. [Native child tasks](child-tasks.md)
+build bounded delegation and durable waits on the same primitives.
 
 ## CLI workflow
 

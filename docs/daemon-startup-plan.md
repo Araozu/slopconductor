@@ -171,7 +171,8 @@ this shutdown path executing.
 The [text-chat slice](text-chat.md) now implements session/message acceptance,
 provider intent, visible checkpoints, terminal outcomes, and cancellation using
 this contract. Structured execution, artifacts, and [tasks/run attempts and
-matrices](tasks-batches.md) also implement it. Children remain future work.
+matrices](tasks-batches.md) also implement it. [Native child tasks](child-tasks.md)
+share turn execution, waits, and recovery.
 
 | Boundary | Records to commit atomically before advancing |
 | --- | --- |
