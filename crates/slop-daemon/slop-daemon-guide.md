@@ -2,7 +2,10 @@
 
 This guide follows the code that exists today. The short version is: **the daemon is the local service that owns sessions, accepts commands over HTTP, saves their durable state, and coordinates model calls.** Clients such as `slop` are replaceable remote controls. They do not own a conversation or call the model themselves.
 
-The current daemon runs on one machine, listens on loopback, stores its authoritative data locally, and executes text chat with OpenCode Go. Workspace sessions can use the four native coding tools (`read`, `write`, `edit`, and `bash`); see [structured execution](../../docs/structured-execution.md). Worktrees, remote access, session replication, and graphical clients are later work.
+The current daemon runs on one machine, listens on loopback, stores its authoritative data locally, and executes chat with OpenCode Go, Zen, and Codex. Workspace sessions can use the four native coding tools (`read`, `write`, `edit`, and `bash`); see [structured execution](../../docs/structured-execution.md). [Projects and workspaces](../../docs/projects-workspaces.md) add isolated Git
+worktrees. [Tasks and batches](../../docs/tasks-batches.md) add durable attempts,
+matrices, and selective retries through the same scheduler. Remote access, session
+replication, and graphical clients are later work.
 
 ## The map
 

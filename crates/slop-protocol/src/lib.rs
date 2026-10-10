@@ -297,4 +297,5 @@ pub mod chat {
 }
 
 pub mod execution;
+pub mod orchestration;
 pub mod projects;

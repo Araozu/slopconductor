@@ -1,17 +1,12 @@
-# Design examples
+# Example inputs
 
-[batch-request.json](batch-request.json) illustrates a proposed batch submission
-format for M2. It is not currently accepted by the CLI or daemon, and its schema
-is not frozen.
+[batch-request.json](batch-request.json) matches the implemented `BatchSpec`.
+Replace its project ID with one returned by `slop project register`, then run:
 
-The matrix has two prompts, two placeholder provider/model identifiers, and two
-runtime turn-limit settings: eight combinations. Replace node/project/model
-identifiers with real configured values once that feature exists.
+```sh
+slop --json batch preview examples/batch-request.json --output frozen-batch.json
+slop batch submit frozen-batch.json --command-id example-sweep
+```
 
-The proposed preview operation resolves `HEAD` to one exact commit, validates
-settings/caps, and reports the expansion before any worktree or inference is
-started. Admission then creates workspaces lazily with at most two active runs
-for this batch, within tighter daemon/account limits if configured.
-
-The runtime-setting axis is provider-independent. Provider-specific axes must
-be validated against each selected model rather than silently ignored.
+Preview creates no jobs or worktrees. See [tasks and batches](../docs/tasks-batches.md)
+for settings, bounds, results, and explicit selective retries.

@@ -695,6 +695,7 @@ pub(super) fn claim_next_turn(
         AND NOT EXISTS(SELECT 1 FROM turns active WHERE active.session_id=t.session_id AND active.status='running')
         AND NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN('queued','running','paused'))
         AND (s.workspace_root IS NULL OR NOT EXISTS(SELECT 1 FROM turns busy JOIN sessions bs ON bs.id=busy.session_id WHERE busy.status='running' AND bs.workspace_root=s.workspace_root))
+        AND NOT EXISTS(SELECT 1 FROM runs r JOIN tasks k ON k.id=r.task_id JOIN batches b ON b.id=k.batch_id WHERE r.turn_id=t.id AND (SELECT count(*) FROM runs br JOIN tasks bk ON bk.id=br.task_id JOIN turns bt ON bt.id=br.turn_id WHERE bk.batch_id=b.id AND bt.status='running')>=b.max_concurrent_runs)
         ORDER BY t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?,r.get(12)?))).optional().map_err(|_|StoreError::Database)?;
     let Some((
         turn_id,

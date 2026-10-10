@@ -25,11 +25,12 @@ use slop_protocol::{
 use tokio::sync::oneshot;
 
 mod execution;
+pub(crate) mod orchestration;
 mod projects;
 
 const DATABASE_FILE: &str = "state.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const MINIMUM_SQLITE_VERSION: i32 = 3_051_003;
 const MAX_QUEUE_CAPACITY: usize = 4096;
 const MAX_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -819,6 +820,9 @@ where
     if existing_version < 5 {
         projects::migrate(&tx)?;
     }
+    if existing_version < 6 {
+        orchestration::migrate(&tx)?;
+    }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|_| StoreError::Database)?;
     hook(&tx)?;
@@ -1058,6 +1062,7 @@ fn append_event(
         .map_err(|_| StoreError::Database)?;
     tx.execute("INSERT INTO session_events(session_id,sequence,kind,turn_id,message_id,revision) VALUES(?1,?2,?3,?4,?5,?6)",
         rusqlite::params![session_id,sequence,kind,turn_id,message_id,revision]).map_err(|_|StoreError::Database)?;
+    orchestration::session_event(tx, session_id, kind, turn_id, sequence as u64)?;
     Ok((revision as u64, sequence as u64))
 }
 
@@ -1085,6 +1090,20 @@ fn create_session(
     default_max_tokens: Option<u32>,
     resolved: Option<projects::ResolvedWorkspace>,
 ) -> StoreResult<CommandReceipt> {
+    let tx = connection
+        .unchecked_transaction()
+        .map_err(|_| StoreError::Database)?;
+    let receipt = create_session_tx(&tx, request, default_max_tokens, resolved)?;
+    tx.commit().map_err(|_| StoreError::Database)?;
+    Ok(receipt)
+}
+
+fn create_session_tx(
+    tx: &Transaction<'_>,
+    request: CreateSessionRequest,
+    default_max_tokens: Option<u32>,
+    resolved: Option<projects::ResolvedWorkspace>,
+) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.provider.trim().is_empty()
         || request.provider.len() > 128
@@ -1103,14 +1122,7 @@ fn create_session(
     }
     let scope = "create_session";
     let payload = canonical(&request)?;
-    if let Some(receipt) = prior_receipt(connection, &request.command_id, scope, &payload)? {
-        return Ok(receipt);
-    }
-    let tx = connection
-        .unchecked_transaction()
-        .map_err(|_| StoreError::Database)?;
-    // Recheck under the write transaction so concurrent retries cannot both commit.
-    if let Some(receipt) = prior_receipt(&tx, &request.command_id, scope, &payload)? {
+    if let Some(receipt) = prior_receipt(tx, &request.command_id, scope, &payload)? {
         return Ok(receipt);
     }
     let provider_id = match request.provider.parse::<slop_core::provider::ProviderId>() {
@@ -1123,7 +1135,7 @@ fn create_session(
     if provider.wire_protocol(&request.model).is_err() {
         return Err(StoreError::Invalid);
     }
-    let node = query_node(&tx)?;
+    let node = query_node(tx)?;
     let session_id = opaque_id()?;
     let settings = execution::session_settings(&request, default_max_tokens)?;
     let effective_max_tokens = settings
@@ -1138,7 +1150,7 @@ fn create_session(
         .as_ref()
         .map(|project| {
             projects::reserve(
-                &tx,
+                tx,
                 &session_id,
                 project,
                 resolved.as_ref().ok_or(StoreError::Invalid)?,
@@ -1175,9 +1187,9 @@ fn create_session(
     )
     .map_err(|_| StoreError::Database)?;
     let (mut revision, mut sequence) =
-        append_event(&tx, &session_id, "session_created", None, None)?;
+        append_event(tx, &session_id, "session_created", None, None)?;
     if let Some((workspace, _)) = managed {
-        (revision, sequence) = projects::insert_workspace(&tx, &workspace)?;
+        (revision, sequence) = projects::insert_workspace(tx, &workspace)?;
     }
     let receipt = make_receipt(
         &request.command_id,
@@ -1187,8 +1199,7 @@ fn create_session(
         revision,
         sequence,
     );
-    commit_command(&tx, &request.command_id, scope, &payload, &receipt)?;
-    tx.commit().map_err(|_| StoreError::Database)?;
+    commit_command(tx, &request.command_id, scope, &payload, &receipt)?;
     Ok(receipt)
 }
 
@@ -1256,6 +1267,21 @@ fn send_message(
     effective_settings: Option<slop_protocol::execution::GenerationSettings>,
     idle_failure: Option<(&'static str, &'static str)>,
 ) -> StoreResult<CommandReceipt> {
+    let tx = connection
+        .unchecked_transaction()
+        .map_err(|_| StoreError::Database)?;
+    let receipt = send_message_tx(&tx, session_id, request, effective_settings, idle_failure)?;
+    tx.commit().map_err(|_| StoreError::Database)?;
+    Ok(receipt)
+}
+
+fn send_message_tx(
+    tx: &Transaction<'_>,
+    session_id: &str,
+    request: SendMessageRequest,
+    effective_settings: Option<slop_protocol::execution::GenerationSettings>,
+    idle_failure: Option<(&'static str, &'static str)>,
+) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.text.trim().is_empty()
         || request.text.len() > MAX_MESSAGE_BYTES
@@ -1265,17 +1291,11 @@ fn send_message(
     }
     let scope = format!("session:{session_id}:message");
     let payload = canonical(&request)?;
-    if let Some(receipt) = prior_receipt(connection, &request.command_id, &scope, &payload)? {
+    if let Some(receipt) = prior_receipt(tx, &request.command_id, &scope, &payload)? {
         return Ok(receipt);
     }
-    let tx = connection
-        .unchecked_transaction()
-        .map_err(|_| StoreError::Database)?;
-    if let Some(receipt) = prior_receipt(&tx, &request.command_id, &scope, &payload)? {
-        return Ok(receipt);
-    }
-    let session = get_session(&tx, session_id)?;
-    projects::require_available(&tx, &session)?;
+    let session = get_session(tx, session_id)?;
+    projects::require_available(tx, &session)?;
     if request
         .expected_revision
         .is_some_and(|revision| revision != session.revision)
@@ -1331,7 +1351,7 @@ fn send_message(
                 .map_err(|_| StoreError::Database)?;
             }
             let (revision, event_sequence) = append_event(
-                &tx,
+                tx,
                 session_id,
                 "steering_instruction_accepted",
                 Some(&active_turn),
@@ -1345,10 +1365,19 @@ fn send_message(
                 revision,
                 event_sequence,
             );
-            commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
-            tx.commit().map_err(|_| StoreError::Database)?;
+            commit_command(tx, &request.command_id, &scope, &payload, &receipt)?;
             return Ok(receipt);
         }
+    }
+    if tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=?1)",
+            [session_id],
+            |r| r.get::<_, bool>(0),
+        )
+        .map_err(|_| StoreError::Database)?
+    {
+        return Err(StoreError::Conflict);
     }
     if let Some((code, message)) = idle_failure {
         return Err(StoreError::Preflight(code, message));
@@ -1403,7 +1432,7 @@ fn send_message(
     .map_err(|_| StoreError::Database)?;
     tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'user',?5,'completed')",rusqlite::params![message_id,session_id,turn_id,user_order,request.text]).map_err(|_|StoreError::Database)?;
     let (revision, event_sequence) = append_event(
-        &tx,
+        tx,
         session_id,
         "user_message_accepted",
         Some(&turn_id),
@@ -1417,8 +1446,7 @@ fn send_message(
         revision,
         event_sequence,
     );
-    commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
-    tx.commit().map_err(|_| StoreError::Database)?;
+    commit_command(tx, &request.command_id, &scope, &payload, &receipt)?;
     Ok(receipt)
 }
 

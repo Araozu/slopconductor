@@ -20,7 +20,9 @@ steering keeps its provider snapshot; a resumed pause takes a fresh snapshot.
 Managed projects/workspaces now add repository registration, frozen base commits,
 lazy detached worktrees, separate diffs, explicit cleanup, and Git recovery.
 The 2026-10-09 tool update limits coding tools to `read`, `write`, `edit`, and
-`bash`. General task orchestration remains planned. Commands,
+`bash`. Durable tasks/run attempts and deterministic matrices now add preview,
+atomic acceptance, bounded admission, explicit selective retries, and result
+export. Children remain planned. Commands,
 schemas, and workflows marked proposed describe future work.
 
 ## Reading order
@@ -34,6 +36,7 @@ schemas, and workflows marked proposed describe future work.
 | [Protocol](protocol.md) | Proposed commands, responses, events, and compatibility |
 | [Text chat](text-chat.md) | Implemented local chat ownership, API, durability, and recovery |
 | [Structured execution](structured-execution.md) | Implemented tool loop, structured streaming, artifacts, frozen model/settings, and recovery |
+| [Tasks and batches](tasks-batches.md) | Implemented jobs, explicit attempts, matrix preview/submission, selective retries, and results |
 | [Projects and workspaces](projects-workspaces.md) | Implemented registration, lazy worktrees, frozen bases, diffs, cleanup, and Git recovery |
 | [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
 | [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |

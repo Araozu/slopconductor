@@ -1,6 +1,7 @@
 mod artifact;
 mod chat;
 mod discovery;
+mod orchestration;
 mod projects;
 mod provider;
 mod session;
@@ -39,6 +40,9 @@ pub async fn run(args: Args) -> Result<()> {
     };
 
     match command {
+        Command::Task { command } => orchestration::task(command, &context).await,
+        Command::Run { command } => orchestration::run(command, &context).await,
+        Command::Batch { command } => orchestration::batch(command, &context).await,
         Command::Status => discovery::status(&context).await,
         Command::Node => discovery::node(&context).await,
         Command::Models => discovery::models(&context).await,

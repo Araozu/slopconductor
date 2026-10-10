@@ -38,7 +38,8 @@ message commands, paginated history/events, daemon-owned Go inference, explicit
 cancellation, and a consumer chat CLI. [Structured execution](structured-execution.md)
 now implements file/shell tools, explicit workspace policy/leases, artifacts,
 structured streaming, frozen per-turn model/settings, and no-replay recovery.
-General task/run lifecycle and native Windows validation remain unfinished.
+Durable task/run lifecycle and matrix submission are now implemented; see
+[tasks and batches](tasks-batches.md). Native Windows validation remains unfinished.
 The first M2 project/workspace slice is now implemented: registered repositories,
 frozen bases, lazy detached worktree admission, separate diffs, explicit cleanup,
 and no-replay Git recovery. See [projects/workspaces](projects-workspaces.md).
@@ -51,7 +52,7 @@ persisted session on one machine.
 **Partial implementation:** local text chat covers durable acceptance, CLI detach,
 event reconnect, completed history after restart, command deduplication, and
 model-turn cancellation. File/shell execution and recovery now have offline
-real-binary checks on Linux. General task controls, live tool validation, and
+real-binary checks on Linux. Live tool validation and
 native Windows scenarios remain before the full M1 exit gate.
 
 Implement durable node/session/task/run identities, local SQLite storage and
@@ -93,9 +94,11 @@ selective retries, and result export.
 
 **Partial implementation:** sessions can select registered projects and reserve
 detached workspaces. Real-binary offline checks exercise concurrent independent
-edits, frozen commits, diffs, cleanup refusals, and restart durability. General
-tasks/runs, matrix submission, richer result artifacts, branch publishing, and
-automated retention remain before the full M2 exit gate.
+edits, frozen commits, diffs, cleanup refusals, and restart durability. Durable tasks/runs and deterministic
+prompt/model/settings matrices now cover
+preview, atomic submission, lazy admission, selective retries, and JSON Lines
+results. Children, richer result artifacts, branch publishing, and automated
+retention remain before the full M2 exit gate.
 
 Implement native child-task creation with explicit context/tool/budget selection,
 bounded fan-out/depth, fair scheduling, and parent/child links. Waiting parents

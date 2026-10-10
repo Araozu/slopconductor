@@ -4,7 +4,8 @@ Status: startup foundation and durable text chat implemented, 2026-10-08.
 The daemon exposes health, authenticated node identity, and the
 [text-chat slice](text-chat.md) with its session store and execution supervisor.
 [Structured execution](structured-execution.md) adds opt-in file/shell tools,
-artifacts, and interrupted-step recovery. General task execution remains planned.
+artifacts, and interrupted-step recovery. [Durable tasks and matrices](tasks-batches.md) now share turn execution and recovery;
+children remain planned.
 
 ## Implemented scope
 
@@ -169,8 +170,8 @@ this shutdown path executing.
 
 The [text-chat slice](text-chat.md) now implements session/message acceptance,
 provider intent, visible checkpoints, terminal outcomes, and cancellation using
-this contract. Structured reasoning/continuation, tools, artifacts, and the
-broader task/run surface remain future work.
+this contract. Structured execution, artifacts, and [tasks/run attempts and
+matrices](tasks-batches.md) also implement it. Children remain future work.
 
 | Boundary | Records to commit atomically before advancing |
 | --- | --- |
@@ -225,8 +226,8 @@ failed execution does not imply absence of changes. Interrupted thinking is
 discarded rather than restored. A new inference requires an explicit bounded
 policy and may consume quota again.
 Startup restores facts and identifies chat interruptions; it does not silently
-resume thinking. Continue a session with a new message. Explicit task/run resume
-commands remain future work.
+resume thinking. Continue an ordinary chat with a new message, explicitly
+resume a paused run, or explicitly retry an interrupted job into a fresh attempt.
 
 ## Validation and documentation
 

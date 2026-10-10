@@ -59,7 +59,7 @@ The [implemented module layout and extension steps](implementation.md#suggested-
 describe where new command groups belong. These remain CLI concerns;
 `slop-client` stays independent of argument parsing and terminal presentation.
 
-The proposed broader command groups are:
+The command groups and remaining extensions are:
 
 | Group | Examples of responsibilities |
 | --- | --- |
@@ -83,15 +83,16 @@ slop turn pause TURN_ID
 slop turn resume TURN_ID
 ```
 
-The remaining examples below are **proposed syntax**:
+These job and matrix operations are also implemented; see
+[tasks and batches](tasks-batches.md):
 
 ```sh
-slop project add /path/to/repo --name app
-slop task create --project app --model provider/model --prompt-file task.md
-slop task follow TASK_ID --events
-slop batch preview --file examples/batch-request.json --json
-slop batch submit --file examples/batch-request.json --json
-slop task cancel TASK_ID
+slop project register /absolute/repo
+slop task create --project PROJECT_ID --model opencode-go/glm-5.3-flash --prompt-file task.md
+slop task follow TASK_ID
+slop batch preview examples/batch-request.json --output frozen-batch.json --json
+slop batch submit frozen-batch.json --json
+slop run cancel RUN_ID
 ```
 
 Task submission defaults to returning durable IDs after acceptance. Following

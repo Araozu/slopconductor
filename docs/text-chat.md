@@ -6,7 +6,8 @@ OpenCode Go and Zen provide structured text/tool requests; Codex provides
 text-only requests through Platform keys or saved ChatGPT authorization.
 [Structured execution](structured-execution.md) now extends these
 turns with opt-in workspace tools, artifacts, and per-turn model/settings.
-Projects, worktrees, and general task/run orchestration remain future work.
+[Projects/workspaces](projects-workspaces.md) and [tasks/batches](tasks-batches.md)
+now build repository isolation and durable job orchestration on these primitives.
 
 ## Ownership and durability
 

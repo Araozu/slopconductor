@@ -10,10 +10,11 @@ const MAX_PROJECTS: i64 = 256;
 const MAX_WORKSPACES: i64 = 256;
 const MAX_PROJECT_WORKSPACES: i64 = 32;
 
+#[derive(Clone)]
 pub(super) struct ResolvedWorkspace {
-    project: ProjectResponse,
-    base_commit: String,
-    data_dir: PathBuf,
+    pub(super) project: ProjectResponse,
+    pub(super) base_commit: String,
+    pub(super) data_dir: PathBuf,
 }
 
 pub(super) fn migrate(tx: &Transaction<'_>) -> StoreResult<()> {
@@ -70,7 +71,7 @@ fn workspace(connection: &Connection, id: &str) -> StoreResult<WorkspaceResponse
     connection.query_row("SELECT id,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown FROM managed_workspaces WHERE id=?1", [id], workspace_row)
         .optional().map_err(|_| StoreError::Database)?.ok_or(StoreError::NotFound)
 }
-fn repository(project: &ProjectResponse) -> Repository {
+pub(super) fn repository(project: &ProjectResponse) -> Repository {
     Repository {
         path: project.path.clone(),
         common_dir: project.git_common_dir.clone(),
@@ -90,7 +91,7 @@ fn event(
     Ok(())
 }
 
-fn prior<T: serde::de::DeserializeOwned>(
+pub(super) fn prior<T: serde::de::DeserializeOwned>(
     connection: &Connection,
     command_id: &str,
     scope: &str,
@@ -125,7 +126,7 @@ fn prior<T: serde::de::DeserializeOwned>(
         Some(_) => Err(StoreError::Conflict),
     }
 }
-fn save<T: serde::Serialize>(
+pub(super) fn save<T: serde::Serialize>(
     tx: &Transaction<'_>,
     command: &str,
     scope: &str,
@@ -274,6 +275,18 @@ pub(super) fn recover(tx: &Transaction<'_>) -> StoreResult<()> {
 }
 
 impl StoreClient {
+    pub(super) async fn require_workspace_capacity(
+        &self,
+        id: &str,
+        needed: usize,
+    ) -> StoreResult<()> {
+        let id = id.to_owned();
+        self.submit(move |c| {
+            project(c,&id)?;
+            let (global,local):(i64,i64)=c.query_row("SELECT count(*),count(CASE WHEN project_id=?1 THEN 1 END) FROM managed_workspaces WHERE status!='removed'",[id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|StoreError::Database)?;
+            if global+needed as i64>MAX_WORKSPACES || local+needed as i64>MAX_PROJECT_WORKSPACES {Err(StoreError::Limit)} else {Ok(())}
+        }).await
+    }
     pub async fn register_project(
         &self,
         request: RegisterProjectRequest,
@@ -897,7 +910,7 @@ mod tests {
         let receipt = client.create_session(request.clone()).await.unwrap();
         let session = client.session(&receipt.session_id).await.unwrap();
         client.submit(|connection| {
-            connection.execute_batch("ALTER TABLE sessions DROP COLUMN managed_workspace_id; DROP TABLE project_events; DROP TABLE managed_workspaces; DROP TABLE projects; PRAGMA user_version=4;").map_err(|_| StoreError::Database)
+            connection.execute_batch("DROP TABLE task_events; DROP TABLE runs; DROP TABLE tasks; DROP TABLE batches; ALTER TABLE sessions DROP COLUMN managed_workspace_id; DROP TABLE project_events; DROP TABLE managed_workspaces; DROP TABLE projects; PRAGMA user_version=4;").map_err(|_| StoreError::Database)
         }).await.unwrap();
         store.shutdown().await.unwrap();
         let store = open(data).await;

@@ -1,38 +1,21 @@
 {
-  "schema_version": 1,
   "name": "prompt-model-sweep",
-  "target": {
-    "node_id": "replace-with-owner-node-id"
-  },
-  "workspace": {
+  "prompts": [
+    "Improve error handling in the selected project and document your changes.",
+    "Inspect failure paths in the selected project, improve them, and verify your changes."
+  ],
+  "models": [
+    "opencode-go/glm-5.3-flash",
+    "opencode-go/glm-5.3"
+  ],
+  "settings": [
+    { "max_output_tokens": 1024 },
+    { "max_output_tokens": 2048 }
+  ],
+  "project": {
     "project_id": "replace-with-project-id",
-    "mode": "worktree",
-    "base_ref": "HEAD"
+    "base_ref": "HEAD",
+    "allowed_tools": ["read", "write", "edit", "bash"]
   },
-  "matrix": {
-    "prompt": [
-      "Improve error handling in the selected project and document your changes.",
-      "Inspect failure paths in the selected project, improve them, and verify your changes."
-    ],
-    "model": [
-      "provider/model-a",
-      "provider/model-b"
-    ],
-    "runtime.max_turns": [
-      10,
-      20
-    ]
-  },
-  "context": {
-    "mode": "fresh"
-  },
-  "limits": {
-    "max_concurrent_runs": 2,
-    "max_total_runs": 8,
-    "max_child_tasks_per_run": 4
-  },
-  "budget": {
-    "max_model_requests_per_run": 20,
-    "max_tool_invocations_per_run": 50
-  }
+  "max_concurrent_runs": 2
 }

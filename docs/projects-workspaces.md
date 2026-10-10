@@ -5,7 +5,8 @@ authoritative daemon's machine. A new session can reserve a detached Git
 worktree, freeze an exact base commit, and use the existing four coding tools in
 that workspace. Allocation happens after turn admission. CLI/API consumers can
 inspect workspace records, project events, and separate diffs, and deliberately
-request cleanup. General tasks/runs, matrices, and children remain future slices.
+request cleanup. [Tasks and batches](tasks-batches.md) now build durable attempts and deterministic
+matrices on these session/workspace primitives. Children remain future work.
 
 ## CLI workflow
 

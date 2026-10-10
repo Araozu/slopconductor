@@ -31,8 +31,10 @@ results. Its only coding tools are `read`, `write`, `edit`, and `bash`, implemen
 in Rust; workspace chats enable all four unless an explicit allowlist restricts
 them. Registered projects, frozen-base managed session worktrees, lazy allocation,
 separate diffs, explicit cleanup, and Git recovery are now implemented; see
-[projects/workspaces](projects-workspaces.md). General tasks/runs, batches, and
-peer control remain next-stage work.
+[projects/workspaces](projects-workspaces.md). Durable tasks/run attempts and
+matrices with preview, selective retry, and result export are implemented; see
+[tasks and batches](tasks-batches.md). Children and peer control remain next-stage
+work.
 
 ## Suggested module growth
 
@@ -133,10 +135,12 @@ data directory, and configuration errors are actionable without revealing secret
 
 ## Step 2: domain state and durable repository
 
-**Implemented session subset:** schema 5 stores sessions, turns, ordered messages,
+**Implemented local execution subset:** schema 6 stores sessions, turns, ordered messages,
 canonical command payloads/receipts, session/project events, structured requests
 and tools, artifacts, steering, and managed workspaces through the bounded
-database worker. General tasks/runs remain proposed.
+database worker, with tasks/run attempts, requested/effective inputs, task events,
+and frozen batches. Fresh attempt/session ownership is documented in
+[tasks and batches](tasks-batches.md).
 
 Implement session/task/run IDs and transition functions in `slop-core`. Keep
 errors and invariants domain-specific. Decide run creation/admission semantics
@@ -160,7 +164,9 @@ reuse a command ID.
 **Implemented text subset:** authenticated sessions/messages/history/events,
 turn inspection/cancellation, model metadata, the native client, and consumer
 chat CLI. [Text chat](text-chat.md) specifies the actual routes and recovery
-behavior; the broader task/command-status surface below remains proposed.
+behavior. [Tasks and batches](tasks-batches.md) now supply task creation/state,
+run controls, matrix acceptance, and results. A general command-status query
+remains proposed.
 
 Translate domain objects into protocol DTOs in the service/API layer. Keep API
 handlers short: authenticate, validate, invoke an operation, render its result.
@@ -183,7 +189,7 @@ public-surface contract. Go and Zen implement structured `ProviderClient::infer`
 and supply the daemon's durable chat/tool vertical slice, with blocks, private
 continuation, per-turn model/settings, and artifacts. Codex supports text-only
 turns. See [structured execution](structured-execution.md). Broader account
-discovery and task orchestration remain planned.
+discovery and child orchestration remain planned.
 
 Implement provider capability validation and API-key account references. Add a
 direct streaming request adapter and preserve response/tool-call metadata.
@@ -226,10 +232,11 @@ Check Linux and Windows process behavior with real children.
 **Implemented project/workspace subset:** repository registration, frozen base
 commits, metadata-only reservations, detached allocation on turn admission,
 bounded Git supervision, independent diffs, explicit conservative cleanup, and
-no-replay Git recovery. Workspaces currently belong to sessions. The CLI/API and
+no-replay Git recovery. Each workspace belongs to a session; a task attempt owns its session. The CLI/API and
 offline acceptance workflow are described in
-[projects/workspaces](projects-workspaces.md). Matrices, children, and general
-task/run controls remain the next slices.
+[projects/workspaces](projects-workspaces.md). Task/run controls and matrices are implemented
+as described in
+[tasks and batches](tasks-batches.md). Children remain the next slice.
 
 Record logical repository identity, current exact base commit, local mappings,
 and workspace policy. Use managed worktrees for parallel writers; default shared
@@ -240,8 +247,9 @@ overflow protection and a configured cap, freeze inputs, and persist member
 metadata. Allocate contexts/worktrees lazily on admission. Keep deterministic
 combination indexes and selective retries.
 
-The [example request](../examples/batch-request.json) is a future input design,
-not a currently accepted CLI command or stable schema.
+The [example request](../examples/batch-request.json) now matches the implemented
+`BatchSpec` accepted by `batch preview` and `batch submit`. Broader arbitrary
+parameter axes, aggregate budgets, and child creation remain future extensions.
 
 Implement native child-task tools through the same application operations. Make
 fan-out, depth, inheritance, cancellation, and waiting-slot behavior explicit.

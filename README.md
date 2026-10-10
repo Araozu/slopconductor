@@ -44,7 +44,13 @@ Implemented:
   lazy allocation, independent diffs, explicit cleanup, and Git recovery without
   replay. See [projects and workspaces](docs/projects-workspaces.md).
 
-Planned: more daemon provider options, task/run orchestration, batch execution, child tasks, remote
+- Durable tasks and explicit run attempts, with pause/resume/cancel, steering,
+  fresh retries, and preserved prior workspaces/results.
+- Deterministic prompt/model/settings matrices with preview, atomic acceptance,
+  bounded batch admission, selective retries, and JSON Lines export. See
+  [tasks and batches](docs/tasks-batches.md).
+
+Planned: more daemon provider options, child tasks, remote
 control, additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
 
@@ -145,6 +151,23 @@ when its first turn is admitted. Git must be on the daemon's PATH. Cleanup is
 explicit and refuses active workspaces, dirty files, and new detached commits;
 inspect its asynchronous outcome with `workspace show`. See the
 [workspace guide](docs/projects-workspaces.md) for API, limits, and recovery.
+
+Durable jobs and prompt/model/settings matrices use the same runtime:
+
+```sh
+cargo run -- task create --model opencode-go/glm-5.3-flash --project PROJECT_ID --text "Fix the failing test." --command-id fix-test
+cargo run -- task follow TASK_ID
+cargo run -- run retry FAILED_RUN_ID --command-id retry-fix
+cargo run -- --json batch preview examples/batch-request.json --output frozen-batch.json
+cargo run -- batch submit frozen-batch.json --command-id sweep-1
+cargo run -- batch results BATCH_ID
+cargo run -- batch export BATCH_ID --output results.jsonl
+cargo run -- batch retry BATCH_ID --index 3 --command-id retry-selected
+```
+
+Replace the example's project ID before previewing. Each attempt retains its
+own session/workspace; retries preserve successful batch members. See
+[tasks and batches](docs/tasks-batches.md) for API, controls, and recovery.
 
 `SLOP_LISTEN` and `SLOP_DAEMON_URL` provide the equivalent endpoint settings.
 Use `--config`/`SLOP_CONFIG`, `--data-dir`/`SLOP_DATA_DIR`, and

@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use slop_protocol::DEFAULT_DAEMON_URL;
 
+mod orchestration;
+pub use orchestration::{BatchCommand, RunCommand, TaskCommand};
+
 #[derive(Debug, Parser)]
 #[command(name = "slop", version, about = "Slop Conductor command-line client")]
 pub struct Args {
@@ -24,6 +27,21 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Submit and inspect durable jobs.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+    /// Control or explicitly retry a durable attempt.
+    Run {
+        #[command(subcommand)]
+        command: RunCommand,
+    },
+    /// Preview, submit, and inspect prompt/model/settings matrices.
+    Batch {
+        #[command(subcommand)]
+        command: BatchCommand,
+    },
     /// Check daemon connectivity, API compatibility, and capabilities.
     Status,
     /// Show this daemon's authenticated node identity.

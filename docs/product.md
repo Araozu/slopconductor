@@ -100,15 +100,17 @@ checkpoint design now without blocking the first useful CLI release.
 | Workspace | The concrete directory, worktree, or other environment used by a run |
 | Session | A persistent conversation with context, messages, and an owner |
 | Task | A durable goal or work item associated with a session |
-| Run | One execution attempt for a task; restarts create explicit attempts |
+| Run | One execution attempt for a task; retry creates a new attempt explicitly |
 | Turn | A model interaction and associated tool-processing steps |
 | Batch | A named collection of tasks with recorded parameter combinations |
 | Artifact | A durable output such as a diff, report, log, or attachment |
 | Client | An interface that sends commands and renders daemon state |
 
-Initially, a session has one primary task at a time. A follow-up after a terminal
-task can create a new task in the same conversation. Detailed task/session
-relationships can evolve without making clients own the execution loop.
+The implemented job slice gives each attempt a fresh session with one primary
+turn and retains prior sessions/workspaces on retry. Reusing a conversation for a
+follow-up task remains proposed. Ordinary chat sessions support conversational
+follow-ups. Detailed task/session relationships can evolve without making clients
+own the execution loop.
 
 ## Scope and product character
 

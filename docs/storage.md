@@ -15,6 +15,8 @@ frozen settings, model requests, tool intents/results, workspace roots, and
 artifact metadata. Schema 4 adds durable steering instructions and
 pause/resume/usage-uncertainty state. Schema 5 adds projects, managed session
 workspaces, project events, and a session's managed-workspace reference.
+Schema 6 adds tasks with requested/effective inputs, run/session/turn links,
+task events, and batches with frozen matrix inputs and admission caps.
 See [structured execution](structured-execution.md) and
 [projects/workspaces](projects-workspaces.md). The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,
@@ -157,7 +159,10 @@ interrupted without reissuing inference, and leaves undispatched queued turns
 eligible for admission. Paused turns remain paused; accepted steering attached
 to a crashed running turn is rejected with a durable event. Unfinished tools receive paired failure records with
 uncertain effects when started; completed steps are preserved and no operation
-is replayed. Handoff recovery remains planned.
+is replayed. Task events commit alongside these facts. Explicit retry creates
+a new attempt/session/workspace while retaining prior outcomes. Batch members
+remain queued until admitted under both global and batch caps. Handoff recovery
+remains planned.
 A future durable outbox for peer replication contains committed
 application records.
 Its backpressure does not prevent ordinary local execution indefinitely.

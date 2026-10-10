@@ -245,10 +245,10 @@ All provider traffic in the new checks is offline. Linux is exercised; Windows
 supervision is implemented but needs a native Windows run. No new live tool call
 or paid model test is claimed.
 
-General task/run controls, child agents, matrix orchestration, account quotas,
+[Tasks and matrices](tasks-batches.md) now reuse these tools, steering, controls,
+and recovery records through durable run attempts. Child agents, account quotas,
 hosted tools, media attachments, reasoning summaries, remote pairing, and
-graphical clients remain outside this slice. Text-chat turn pause/resume and
-steering are implemented without general task/run orchestration. Transport assumptions
+graphical clients remain outside this slice. Transport assumptions
 follow the [provider references](provider-interface.md#decoder-references), plus
 [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
 and [Anthropic tool definitions](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools).

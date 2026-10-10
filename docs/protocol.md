@@ -15,6 +15,9 @@ durable acceptance receipts. Errors use `ErrorResponse { code, message }`.
 [Structured execution](structured-execution.md) also adds message blocks,
 model requests, tool invocations, artifacts, capability discovery, causal delta
 IDs, and per-turn model/settings. Its DTOs live in `slop_protocol::execution`.
+Registered [projects/workspaces](projects-workspaces.md) and durable
+[tasks/run attempts and matrices](tasks-batches.md) are also implemented. Their
+wire structs live in `slop_protocol::projects` and `slop_protocol::orchestration`.
 Resource summaries and the larger command/error envelope below remain proposed.
 The [provider credential surface](provider-credentials.md#public-api) is also
 implemented, with wire structs in `slop_protocol::providers`: private API-key
@@ -111,7 +114,10 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | PUT /v1/providers/{provider}/api-key | Implemented: persist an API key and activate new supported requests without restart |
 | POST /v1/providers/codex/login | Implemented: start/reuse the current ChatGPT authorization attempt |
 | GET /v1/providers/codex/login/{id} | Implemented: inspect the latest daemon-owned login attempt |
-| GET, POST /v1/projects | Register/list logical projects and local mappings |
+| GET, POST /v1/projects | Implemented: register/list repositories and local mappings |
+| GET /v1/projects/{id}/workspaces | Implemented: paginated managed workspaces |
+| GET /v1/workspaces/{id}, /diff | Implemented: workspace state and tracked patch |
+| POST /v1/workspaces/{id}/remove | Implemented: explicit conservative cleanup |
 | GET /v1/workspaces | Inspect active worktree and exclusive workspace reservations |
 | GET, POST /v1/sessions | Implemented: list/create conversations owned by this node |
 | GET /v1/sessions/{id} | Implemented: snapshot with revision and event watermark |
@@ -128,24 +134,26 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/tools/{id} | Implemented: one canonical tool invocation |
 | GET /v1/artifacts/{id} | Implemented: artifact metadata |
 | GET /v1/artifacts/{id}/content | Implemented: authenticated artifact byte stream |
-| GET, POST /v1/tasks | List/create queued work, optionally creating a session |
-| GET /v1/tasks/{id} | Goal, status, attempts, and outputs |
-| POST /v1/tasks/{id}/cancel | Request cancellation of pending/active work |
-| POST /v1/tasks/{id}/retry | Create a new attempt after checking uncertain effects |
-| POST /v1/runs/{id}/pause | Request a safe execution checkpoint |
-| POST /v1/runs/{id}/resume | Resume an explicitly paused run |
-| GET /v1/runs/{id} | Execution attempt, steps, usage, and workspace |
-| POST /v1/batches/preview | Validate and count matrix expansion without starting work |
-| GET, POST /v1/batches | Create/list batch records and member tasks |
-| GET /v1/batches/{id} | Progress, parameters, members, and aggregate outputs |
-| POST /v1/batches/{id}/cancel | Request cancellation according to recorded propagation policy |
+| GET, POST /v1/tasks | Implemented: list/create durable jobs with initial run/session/turn IDs |
+| GET /v1/tasks/{id} | Implemented: requested/effective inputs, latest attempt, and event watermark |
+| GET /v1/tasks/{id}/runs, /events | Implemented: paginated attempt history and committed facts |
+| POST /v1/tasks/{id}/instructions | Implemented: steer the current active or paused attempt |
+| GET /v1/runs/{id} | Implemented: execution attempt, turn, usage, workspace, and effects uncertainty |
+| POST /v1/runs/{id}/pause, /resume, /cancel | Implemented: existing durable turn control |
+| POST /v1/runs/{id}/retry | Implemented: explicit fresh attempt, preserving prior outcomes |
+| POST /v1/batches/preview | Implemented: validate and expand without starting work |
+| GET, POST /v1/batches | Implemented: create/list batches and member tasks |
+| GET /v1/batches/{id} | Implemented: frozen parameters and latest-member status counts |
+| GET /v1/batches/{id}/members, /results | Implemented: paginated inputs and outcomes |
+| POST /v1/batches/{id}/retry | Implemented: atomically retry selected unsuccessful combinations |
+| POST /v1/batches/{id}/cancel | Proposed: batch-wide cancellation with propagation policy |
 | GET, POST /v1/peers | Configure and inspect trusted peer endpoints |
 | POST /v1/transfers | Future handoff preparation; unavailable before M6 |
 
 Routes marked implemented are available now; other spelling is a proposal.
-Listing endpoints
-are paginated and filterable. Task creation returns task/session IDs immediately;
-a run ID appears when an execution attempt is admitted.
+Implemented listings are paginated; broader filtering remains proposed. Task
+creation returns task/run/session/turn IDs atomically before admission. See
+[tasks and batches](tasks-batches.md) for payloads, limits, and retry semantics.
 
 ## Event contract
 

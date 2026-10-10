@@ -47,11 +47,13 @@ Go, Zen, and Codex turns independently of client lifetime through the shared
 provider interface. [Structured execution](structured-execution.md) adds a
 durable Go/Zen tool loop, explicit workspace leases, artifacts, and frozen
 per-turn model/settings. Codex currently supports text-only turns. General
-task/run orchestration remains planned.
+tasks, run attempts, and matrix orchestration are implemented through the same
+turn scheduler; see [tasks and batches](tasks-batches.md). Children remain planned.
 Registered [projects and managed workspaces](projects-workspaces.md) now add
 frozen repository commits, lazy detached worktree allocation after admission,
-separate diffs, explicit cleanup, and no-replay Git recovery. Workspaces belong
-to sessions until a general task/run layer exists.
+separate diffs, explicit cleanup, and no-replay Git recovery. Each task attempt owns a fresh session and its managed
+workspace; retries retain
+previous sessions and workspaces.
 
 The daemon also owns [runtime provider credential configuration](provider-credentials.md):
 private XDG records, API-key replacement, and a bounded ChatGPT login listener.

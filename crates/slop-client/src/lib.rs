@@ -17,6 +17,8 @@ use slop_protocol::{
 use thiserror::Error;
 use url::Url;
 
+mod orchestration;
+
 const MAX_TOKEN_FILE_BYTES: u64 = 66;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
@@ -1005,6 +1007,53 @@ mod tests {
         assert!(matches!(
             error,
             ClientError::UnsupportedCapability("managed-workspaces")
+        ));
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn jobs_and_matrices_require_advertised_capabilities_before_delivery() {
+        use slop_protocol::orchestration::*;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = server(API_VERSION, seen.clone(), false).await;
+        let client = DaemonClient::with_token(&endpoint, Some(TOKEN.into())).unwrap();
+        let spec = TaskSpec {
+            title: None,
+            prompt: "work".into(),
+            model: "opencode-go/glm-5.3-flash".into(),
+            settings: Default::default(),
+            project: None,
+        };
+        assert!(matches!(
+            client
+                .create_task(&CreateTaskRequest {
+                    command_id: "job".into(),
+                    spec
+                })
+                .await,
+            Err(ClientError::UnsupportedCapability("tasks-runs"))
+        ));
+        let batch = BatchSpec {
+            name: "sweep".into(),
+            prompts: vec!["work".into()],
+            models: vec!["opencode-go/glm-5.3-flash".into()],
+            settings: vec![Default::default()],
+            project: None,
+            max_concurrent_runs: 1,
+            default_max_output_tokens: None,
+        };
+        assert!(matches!(
+            client.preview_batch(&batch).await,
+            Err(ClientError::UnsupportedCapability("batch-matrices"))
+        ));
+        assert!(matches!(
+            client
+                .create_batch(&CreateBatchRequest {
+                    command_id: "batch".into(),
+                    spec: batch
+                })
+                .await,
+            Err(ClientError::UnsupportedCapability("batch-matrices"))
         ));
         assert!(seen.lock().unwrap().is_empty());
     }

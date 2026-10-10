@@ -22,16 +22,17 @@ a bounded turn supervisor, durable repository port, session/workspace
 serialization, visible checkpoints, and cancellation. Go and Zen support the
 bounded file/shell tool loop; Codex is text-only. Provider clients are selected
 per turn and snapshotted at admission. See [text chat](text-chat.md) and
-[structured execution](structured-execution.md). General task/child
-orchestration remains proposed.
+[structured execution](structured-execution.md). [Durable tasks and matrices](tasks-batches.md) share this turn scheduler, with
+per-batch admission caps and explicit fresh retries. Child orchestration remains
+proposed.
 
 ## Agent loop
 
 The following is the target general task loop. The implemented user-turn loop
 covers model intent, structured completion, tool policy/dispatch/results, budgets,
 streaming, cancellation, boundary/immediate steering, explicit pause/resume, and
-terminal/recovery records. Task inboxes, children, and general run orchestration
-remain proposed.
+terminal/recovery records. Tasks map each attempt to one primary turn and use
+its steering/control inbox. Children and awaiting-input states remain proposed.
 
 Steering instructions are durably accepted with command IDs and applied once at
 execution boundaries. Next-boundary delivery never interrupts the current
@@ -91,7 +92,7 @@ private continuation, and normalized incremental events for Go/Zen; Codex uses
 a text-only bridge with explicit unsupported errors. The public API projects
 canonical messages, provider capabilities, usage, and cancellation; Go/Zen also
 expose tools and artifacts. Private provider events stay internal. Account-scoped
-discovery and broader task orchestration remain proposed.
+discovery and child orchestration remain proposed.
 
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.
@@ -225,8 +226,9 @@ Interrupted thinking is discarded. An unfinished tool call is recorded as
 failed due to daemon/process failure; the daemon does not restore or replay it.
 The failure record preserves the invocation ID and warns when its external
 effects are unknown. The agent decides whether to inspect those effects or issue
-a new call. This behavior is implemented for Go user turns and local tools;
-general task/run/handoff recovery remains proposed.
+a new call. This behavior is implemented for supported user turns, local tools,
+and task attempts. Retry creates a fresh attempt explicitly; handoff recovery
+remains proposed.
 
 Measure release-build baseline RSS, incremental active context and buffer memory,
 idle-session metadata cost, context assembly CPU, queue fairness, and tool

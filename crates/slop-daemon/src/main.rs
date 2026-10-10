@@ -124,6 +124,7 @@ async fn run(args: Args) -> Result<()> {
         .merge(api::chat::router(Arc::clone(&state.token)))
         .merge(api::providers::router(Arc::clone(&state.token)))
         .merge(api::projects::router(Arc::clone(&state.token)))
+        .merge(api::orchestration::router(Arc::clone(&state.token)))
         .with_state(state.clone());
     eprintln!("Listening on http://{address}");
 
@@ -230,6 +231,8 @@ async fn health() -> Json<HealthResponse> {
             "execution-steering".to_owned(),
             "turn-pause-resume".to_owned(),
             "managed-workspaces".to_owned(),
+            "tasks-runs".to_owned(),
+            "batch-matrices".to_owned(),
         ],
     })
 }
