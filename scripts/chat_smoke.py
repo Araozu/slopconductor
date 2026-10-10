@@ -149,6 +149,10 @@ def isolated_env(root, fixture):
     env["XDG_CONFIG_HOME"] = str(root / "xdg-config")
     env["XDG_DATA_HOME"] = str(root / "xdg-data")
     env["XDG_STATE_HOME"] = str(root / "xdg-state")
+    # Fixture Git must share the daemon's configuration isolation. Otherwise
+    # Windows' system autocrlf setting can make a restored checkout look dirty.
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["OPENCODE_GO_API_KEY"] = "offline-test-key"
     env["SLOP_PROVIDER_BASE_URL"] = fixture.base_url
     env["SLOP_DEFAULT_MODEL"] = f"{PROVIDER}/{MODEL}"
