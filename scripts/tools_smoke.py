@@ -114,7 +114,7 @@ def check_tools(daemon_binary, cli_binary, root):
         data = root / "data"
         workspace = root / "workspace"
         workspace.mkdir(parents=True)
-        (workspace / "file.txt").write_text("header\nbefore\nfooter", encoding="utf-8")
+        (workspace / "file.txt").write_text("header\nbefore\nfooter", encoding="utf-8", newline="\n")
         daemon, endpoint, log = start_daemon(daemon_binary, root / "first", data, env)
         token_path = data / "credentials" / "local-api-token"
         token = token_path.read_text(encoding="ascii").strip()
