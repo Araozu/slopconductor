@@ -102,8 +102,11 @@ environment allowlist; interactive credentials, pagers, hooks, fsmonitor, and
 external diff/text converters are disabled. Provider credentials are excluded.
 Windows keeps canonical verbatim paths for workspace identity and containment
 checks, but passes conventional drive/UNC paths to Git and enables
-`core.longpaths` for each command. This supports deep managed paths without
-changing the user's Git configuration.
+`core.longpaths` for each command. This supports long tracked paths inside a
+worktree without changing the user's Git configuration. Git for Windows still
+applies a shorter `$GIT_DIR` metadata-path limit; deep data-directory overrides
+can exceed that limit and fail allocation. CI uses short per-user fixture roots
+to leave room for the managed workspace IDs.
 Checkout filters remain repository configuration and can execute subprocesses
 under the user's permissions. Unix process groups and Windows Job Objects
 supervise descendants; hard daemon death on Unix can leave subprocesses alive.
@@ -170,8 +173,9 @@ cleanup refusal, detached commit preservation, preexisting destination failure,
 and persisted state after restart. Storage fault injection checks both unfinished
 Git operation states, preserved paths, no replay, and schema-4 migration preserving
 session receipts. A runtime test creates, edits, inspects, and safely removes a
-real worktree beyond the legacy Windows path limit. Linux is exercised; native
-Windows and live-provider checks remain separate validation gates.
+real worktree containing a tracked file beyond the legacy Windows path limit.
+Linux is exercised; native Windows and live-provider checks remain separate
+validation gates.
 
 Git behavior follows upstream [worktree](https://git-scm.com/docs/git-worktree),
 [revision resolution](https://git-scm.com/docs/git-rev-parse), and

@@ -510,7 +510,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn managed_worktree_supports_canonical_paths_beyond_windows_path_limit() {
+    async fn managed_worktree_supports_canonical_roots_and_long_tracked_paths() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("repository with spaces");
         std::fs::create_dir(&source).unwrap();
@@ -521,6 +521,8 @@ mod tests {
                     "user.name=Test",
                     "-c",
                     "user.email=test@example.invalid",
+                    "-c",
+                    "core.longpaths=true",
                 ])
                 .args(args)
                 .current_dir(&source)
@@ -536,14 +538,17 @@ mod tests {
         // Runtime Git configuration must override a repository's short-path
         // default, without changing the user's persisted configuration.
         git(&["config", "core.longpaths", "false"]);
-        std::fs::write(source.join("file.txt"), "before\n").unwrap();
-        git(&["add", "file.txt"]);
+        let mut tracked = PathBuf::new();
+        for index in 0..5 {
+            tracked = tracked.join(format!("{index}-{}end", "deep path ".repeat(4)));
+        }
+        tracked = tracked.join("file.txt");
+        std::fs::create_dir_all(source.join(tracked.parent().unwrap())).unwrap();
+        std::fs::write(source.join(&tracked), "before\n").unwrap();
+        git(&["add", "."]);
         git(&["commit", "-m", "base"]);
 
-        let mut data = directory.path().join("data");
-        for index in 0..6 {
-            data = data.join(format!("{index}-{}end", "deep path ".repeat(4)));
-        }
+        let data = directory.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
         let data = std::fs::canonicalize(data).unwrap();
         let service = GitService::new(data.clone());
@@ -551,7 +556,7 @@ mod tests {
         let base = service.resolve(&repo, None).await.unwrap();
         let workspace = data.join("workspaces").join("project").join("workspace");
         let path = workspace.to_str().unwrap();
-        assert!(path.len() > 260);
+        assert!(workspace.join(&tracked).to_str().unwrap().len() > 260);
         let (_sender, mut cancel) = watch::channel(false);
         service
             .allocate(&repo, path, &base, &mut cancel)
@@ -559,10 +564,10 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::canonicalize(&workspace).unwrap(), workspace);
         assert_eq!(
-            std::fs::read_to_string(workspace.join("file.txt")).unwrap(),
+            std::fs::read_to_string(workspace.join(&tracked)).unwrap(),
             "before\n"
         );
-        std::fs::write(workspace.join("file.txt"), "after\n").unwrap();
+        std::fs::write(workspace.join(&tracked), "after\n").unwrap();
         let diff = service.diff(&repo, path, &base).await.unwrap();
         assert_eq!(diff.head_commit, base);
         assert!(diff.patch.contains("+after"));
@@ -575,10 +580,10 @@ mod tests {
         assert!(!error.effects_unknown);
         assert!(workspace.is_dir());
         assert_eq!(
-            std::fs::read_to_string(source.join("file.txt")).unwrap(),
+            std::fs::read_to_string(source.join(&tracked)).unwrap(),
             "before\n"
         );
-        std::fs::write(workspace.join("file.txt"), "before\n").unwrap();
+        std::fs::write(workspace.join(&tracked), "before\n").unwrap();
         service
             .remove(&repo, path, &base, &mut cancel)
             .await

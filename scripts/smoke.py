@@ -375,7 +375,9 @@ def main():
     daemon_binary = binaries / ("slopd" + suffix)
     cli_binary = binaries / ("slop" + suffix)
 
-    with tempfile.TemporaryDirectory(prefix="slop-smoke-") as directory:
+    # Git for Windows bounds $GIT_DIR even when long tracked paths are enabled.
+    prefix = "sc-" if os.name == "nt" else "slop-smoke-"
+    with tempfile.TemporaryDirectory(prefix=prefix) as directory:
         root = Path(directory)
         check_primary_lifecycle(daemon_binary, cli_binary, root / "lifecycle")
         check_distinct_data_dirs(daemon_binary, cli_binary, root / "distinct")
@@ -392,7 +394,7 @@ def main():
 
         check_chat_lifecycle(daemon_binary, cli_binary, root / "durable-chat")
         check_tools(daemon_binary, cli_binary, root / "structured-tools")
-        check_projects(daemon_binary, cli_binary, root / "managed-projects")
+        check_projects(daemon_binary, cli_binary, root / "projects")
         check_orchestration(daemon_binary, cli_binary, root / "orchestration")
         check_delegation(daemon_binary, cli_binary, root / "delegation")
         check_credentials(daemon_binary, cli_binary, root / "credentials", start_daemon, stop_daemon, isolated_env)

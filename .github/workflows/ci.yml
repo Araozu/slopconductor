@@ -38,7 +38,8 @@ jobs:
           $gitBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           git config --global core.autocrlf false
           # Credential fixtures must inherit the per-user app-data ACLs.
-          $testTemp = Join-Path $env:LOCALAPPDATA 'slop-ci-temp'
+          # Short roots also leave room for Git's worktree metadata paths.
+          $testTemp = Join-Path $env:LOCALAPPDATA 'slop'
           New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
           "TMP=$testTemp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "TEMP=$testTemp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
