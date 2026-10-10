@@ -149,6 +149,8 @@ impl GitService {
         let output = async {
             let read = async {
                 let mut out = Vec::new();
+                #[cfg(test)]
+                let mut err = Vec::new();
                 let mut out_open = true;
                 let mut err_open = true;
                 let mut out_buffer = [0; 4096];
@@ -175,9 +177,15 @@ impl GitService {
                     if is_stdout {
                         out.extend_from_slice(&out_buffer[..count]);
                     }
+                    #[cfg(test)]
+                    if !is_stdout {
+                        err.extend_from_slice(&err_buffer[..count]);
+                    }
                 }
                 let status = child.wait().await.map_err(|_| "git_wait_failed")?;
                 if !status.success() {
+                    #[cfg(test)]
+                    eprintln!("Git {args:?} failed: {}", String::from_utf8_lossy(&err));
                     return Err("git_failed");
                 }
                 Ok(out)
