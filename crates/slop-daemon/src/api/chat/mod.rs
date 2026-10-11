@@ -85,6 +85,7 @@ mod turns;
 
 use events::*;
 use execution::*;
+pub(super) use sessions::send_message;
 use sessions::*;
 pub(in crate::api) use support::error;
 pub(in crate::api) use support::{

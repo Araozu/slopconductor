@@ -7,7 +7,7 @@ operations. Ordinary chats and tasks have no delegation capability by default.
 
 ## Explicit authority and inputs
 
-Set `TaskSpec.orchestration` to an `OrchestrationPolicy` and provide a finite
+Set `SessionSpec.orchestration` to an `OrchestrationPolicy` and provide a finite
 `budget`. The policy selects allowed provider-qualified models, coding tools,
 maximum child count, and remaining delegation depth. The root allows at most
 32 children across its whole tree, including children created by earlier
@@ -23,7 +23,8 @@ use the parent's frozen cap; requested inputs remain separately recorded. No
 conversation is copied implicitly. A child may omit its project for text-only work, or select the
 same registered project with a subset of authorized coding tools. Its base must
 be the parent's frozen commit; a dirty parent workspace is never copied. Each
-attempt has a fresh session and its own lazily allocated worktree reservation.
+child is a conversation with its own lazily allocated worktree reservation. Its
+follow-ups and retries reuse that conversation and workspace.
 
 An omitted child budget inherits the parent's finite limits. An explicit child
 budget cannot exceed them. Every child request/tool dispatch also consumes the
@@ -134,7 +135,7 @@ All routes use the existing local bearer token:
 | Route | Input/result |
 | --- | --- |
 | POST /v1/runs/{id}/children | `CreateChildRequest` → `TaskReceipt`, HTTP 202 |
-| GET /v1/runs/{id}/children | Paginated direct-child `TaskResponse` records |
+| GET /v1/runs/{id}/children | Paginated direct-child `SessionResponse` records |
 | POST /v1/runs/{id}/wait | `WaitChildrenRequest` → `CommandReceipt`, HTTP 202 |
 | GET /v1/runs/{id}/result | `RunResultResponse` with attempt and public output |
 

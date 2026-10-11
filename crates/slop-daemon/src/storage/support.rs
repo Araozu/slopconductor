@@ -95,7 +95,6 @@ pub(super) fn append_event(
         .map_err(|_| StoreError::Database)?;
     tx.execute("INSERT INTO session_events(session_id,sequence,kind,turn_id,message_id,revision) VALUES(?1,?2,?3,?4,?5,?6)",
         rusqlite::params![session_id,sequence,kind,turn_id,message_id,revision]).map_err(|_|StoreError::Database)?;
-    orchestration::session_event(tx, session_id, kind, turn_id, sequence as u64)?;
     Ok((revision as u64, sequence as u64))
 }
 

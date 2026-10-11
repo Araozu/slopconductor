@@ -36,6 +36,20 @@ pub(super) fn create_session_tx(
     {
         return Err(StoreError::Invalid);
     }
+    governance::validate(request.budget.as_ref())?;
+    let requested = slop_protocol::orchestration::SessionSpec {
+        title: request.title.clone(),
+        prompt: request.prompt.clone().unwrap_or_default(),
+        model: format!("{}/{}", request.provider, request.model),
+        settings: request.settings.clone().unwrap_or_default(),
+        project: request.project.clone(),
+        budget: request.budget.clone(),
+        orchestration: request.orchestration.clone(),
+    };
+    children::validate_policy(&requested)?;
+    if request.prompt.is_some() {
+        orchestration::validate_spec(&requested)?;
+    }
     let scope = "create_session";
     let payload = canonical(&request)?;
     if let Some(receipt) = prior_receipt(tx, &request.command_id, scope, &payload)? {
@@ -117,12 +131,26 @@ pub(super) fn create_session_tx(
         ],
     )
     .map_err(|_| StoreError::Database)?;
+    let mut spec = requested.clone();
+    spec.settings = settings;
+    if let Some(resolved) = &resolved
+        && let Some(project) = &mut spec.project
+        && !resolved.base_commit.is_empty()
+    {
+        project.base_ref = Some(resolved.base_commit.clone());
+    }
+    tx.execute(
+        "UPDATE sessions SET spec=?1,requested_spec=?2,root_task_id=id WHERE id=?3",
+        rusqlite::params![canonical(&spec)?, canonical(&requested)?, session_id],
+    )
+    .map_err(|_| StoreError::Database)?;
+    governance::register(tx, &format!("session:{session_id}"), spec.budget.as_ref())?;
     let (mut revision, mut sequence) =
         append_event(tx, &session_id, "session_created", None, None)?;
     if let Some((workspace, _)) = managed {
         (revision, sequence) = projects::insert_workspace(tx, &workspace)?;
     }
-    let receipt = make_receipt(
+    let mut receipt = make_receipt(
         &request.command_id,
         &session_id,
         None,
@@ -130,6 +158,28 @@ pub(super) fn create_session_tx(
         revision,
         sequence,
     );
+    if let Some(prompt) = request.prompt {
+        let initial = send_message_tx(
+            tx,
+            &session_id,
+            SendMessageRequest {
+                command_id: opaque_id()?,
+                text: prompt,
+                settings: request.settings,
+                ..Default::default()
+            },
+            Some(spec.settings),
+            None,
+        )?;
+        receipt = make_receipt(
+            &request.command_id,
+            &session_id,
+            initial.turn_id,
+            initial.message_id,
+            initial.revision,
+            initial.event_sequence,
+        );
+    }
     commit_command(tx, &request.command_id, scope, &payload, &receipt)?;
     Ok(receipt)
 }
@@ -148,12 +198,20 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
         settings,
         execution: execution::optional_json_column(row, 9)?,
         managed_workspace_id: row.get(10)?,
+        spec: execution::json_column(row, 11)?,
+        requested_spec: execution::json_column(row, 12)?,
+        batch_id: row.get(13)?,
+        combination_index: row.get(14)?,
+        latest_run: None,
+        budget_usage: Default::default(),
+        child: None,
     })
 }
 
 pub(super) fn get_session(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
-    connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id FROM sessions WHERE id=?1",[id],session_from_row)
-        .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)
+    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index FROM sessions WHERE id=?1",[id],session_from_row)
+        .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
+    enrich(connection, session)
 }
 
 pub(super) fn list_sessions(
@@ -162,7 +220,7 @@ pub(super) fn list_sessions(
     limit: usize,
 ) -> StoreResult<Page<SessionResponse>> {
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
+    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
         .map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![after, (limit + 1) as i64])
@@ -173,8 +231,11 @@ pub(super) fn list_sessions(
         if items.len() == limit {
             break;
         }
-        let item = session_from_row(row).map_err(|_| StoreError::Database)?;
-        next_after = Some(row.get::<_, i64>(11).map_err(|_| StoreError::Database)? as u64);
+        let item = enrich(
+            connection,
+            session_from_row(row).map_err(|_| StoreError::Database)?,
+        )?;
+        next_after = Some(row.get::<_, i64>(15).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     let has_more = items.len() == limit
@@ -189,4 +250,21 @@ pub(super) fn list_sessions(
         next_after = None;
     }
     Ok(Page { items, next_after })
+}
+
+fn enrich(connection: &Connection, mut session: SessionResponse) -> StoreResult<SessionResponse> {
+    let latest: Option<String> = connection
+        .query_row(
+            "SELECT id FROM turns WHERE session_id=?1 ORDER BY ordinal DESC LIMIT 1",
+            [&session.id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::Database)?;
+    session.latest_run = latest
+        .map(|id| orchestration::run(connection, &id))
+        .transpose()?;
+    session.budget_usage = governance::usage(connection, &format!("session:{}", session.id))?;
+    session.child = children::link(connection, &session.id)?;
+    Ok(session)
 }

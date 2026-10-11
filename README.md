@@ -44,7 +44,7 @@ Implemented:
 - Registered projects and managed session worktrees with frozen base commits,
   lazy allocation, independent diffs, explicit cleanup, and Git recovery without
   replay. See [projects and workspaces](docs/projects-workspaces.md).
-- Durable tasks and explicit run attempts, with pause/resume/cancel, steering,
+- Persistent conversations and execution turns, with pause/resume/cancel, steering,
   fresh retries, and preserved prior workspaces/results.
 - Deterministic prompt/model/settings matrices with preview, atomic acceptance,
   bounded batch admission, selective retries, and JSON Lines export. See

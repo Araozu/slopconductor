@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct TaskSpec {
+pub struct SessionSpec {
     pub title: Option<String>,
     pub prompt: String,
     /// Provider-qualified model identifier.

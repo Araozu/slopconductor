@@ -5,6 +5,7 @@ use crate::{
     input::prompt_value,
     mutation::{choose_command_id, mutation_error},
 };
+use slop_protocol::chat::SessionResponse;
 use slop_protocol::{
     chat::{DeliveryMode, SendMessageRequest, TurnControlRequest},
     execution::GenerationSettings,
@@ -41,7 +42,7 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
             let response = client
                 .create_task(&CreateTaskRequest {
                     command_id: command_id.clone(),
-                    spec: TaskSpec {
+                    spec: SessionSpec {
                         budget: (max_model_requests.is_some()
                             || max_tool_calls.is_some()
                             || orchestration.is_some())
@@ -109,8 +110,13 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
             let response = client.task(&id).await?;
             crate::follow::follow_turn(
                 &client,
-                &response.latest_run.session_id,
-                &response.latest_run.turn.id,
+                &response.id,
+                &response
+                    .latest_run
+                    .as_ref()
+                    .ok_or("Conversation has no turns.")?
+                    .turn
+                    .id,
                 after,
                 context.output,
             )
@@ -131,10 +137,10 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
                     &SendMessageRequest {
                         command_id: command_id.clone(),
                         text,
-                        delivery: Some(if delivery == "immediate" {
-                            DeliveryMode::Immediate
-                        } else {
-                            DeliveryMode::NextBoundary
+                        delivery: Some(match delivery.as_str() {
+                            "immediate" => DeliveryMode::Immediate,
+                            "next-boundary" => DeliveryMode::NextBoundary,
+                            _ => DeliveryMode::AfterTurn,
                         }),
                         ..Default::default()
                     },
@@ -441,10 +447,15 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 fn read_spec(path: &Path) -> Result<BatchSpec> {
     read_json(path)
 }
-fn show_task(t: &TaskResponse) {
+fn show_task(t: &SessionResponse) {
     println!(
         "{}\t{}\t{}\t{}",
-        t.id, t.latest_run.turn.status, t.spec.model, t.latest_run.id
+        t.id,
+        t.latest_run
+            .as_ref()
+            .map_or("ready", |r| r.turn.status.as_str()),
+        t.spec.model,
+        t.latest_run.as_ref().map_or("-", |r| r.id.as_str())
     );
 }
 fn show_run(r: &RunResponse) {

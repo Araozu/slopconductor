@@ -22,7 +22,7 @@ steering keeps its provider snapshot; a resumed pause takes a fresh snapshot.
 Managed projects/workspaces now add repository registration, frozen base commits,
 lazy detached worktrees, separate diffs, explicit cleanup, and Git recovery.
 The 2026-10-09 tool update limits coding tools to `read`, `write`, `edit`, and
-`bash`. Durable tasks/run attempts and deterministic matrices now add preview,
+`bash`. Persistent conversations/turns and deterministic matrices now add preview,
 atomic acceptance, bounded admission, explicit selective retries, and result
 export. Fair admission, aggregate operation budgets, batch cancellation, and
 bounded native child tasks with durable waits are also implemented. Commands,

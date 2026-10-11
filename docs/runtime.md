@@ -32,8 +32,8 @@ implemented with separate authority and durable waits that release slots.
 The following is the target general task loop. The implemented user-turn loop
 covers model intent, structured completion, tool policy/dispatch/results, budgets,
 streaming, cancellation, boundary/immediate steering, explicit pause/resume, and
-terminal/recovery records. Tasks map each attempt to one primary turn and use
-its steering/control inbox. Child creation and awaiting-children states are
+terminal/recovery records. All work lives in persistent conversations; execution turns share one
+steering/control inbox per turn. Follow-ups queue within the same conversation. Child creation and awaiting-children states are
 implemented; awaiting-input states remain proposed.
 
 Steering instructions are durably accepted with command IDs and applied once at

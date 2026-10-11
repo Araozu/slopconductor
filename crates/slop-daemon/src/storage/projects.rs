@@ -1018,9 +1018,10 @@ mod tests {
         };
         let receipt = client.create_session(request.clone()).await.unwrap();
         let session = client.session(&receipt.session_id).await.unwrap();
-        client.submit(|connection| {
-            connection.execute_batch("DROP TABLE child_waits; DROP TABLE child_links; DROP TABLE admission_groups; DROP TABLE admission_clock; DROP TABLE operation_budgets; DROP TRIGGER readmission_epoch; ALTER TABLE turns DROP COLUMN admission_epoch; ALTER TABLE turns DROP COLUMN budget_exhausted; DROP TABLE task_events; DROP TABLE runs; DROP TABLE tasks; DROP TABLE batches; ALTER TABLE sessions DROP COLUMN managed_workspace_id; DROP TABLE project_events; DROP TABLE managed_workspaces; DROP TABLE projects; PRAGMA user_version=4;").map_err(|_| StoreError::Database)
-        }).await.unwrap();
+        client
+            .submit(|connection| conversations::legacy_fixture(connection, 4))
+            .await
+            .unwrap();
         store.shutdown().await.unwrap();
         let store = open(data).await;
         let client = store.client();

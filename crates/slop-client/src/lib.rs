@@ -406,7 +406,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let endpoint = server(API_VERSION, seen.clone(), false).await;
         let client = DaemonClient::with_token(&endpoint, Some(TOKEN.into())).unwrap();
-        let spec = TaskSpec {
+        let spec = SessionSpec {
             budget: None,
             orchestration: None,
             title: None,
@@ -422,7 +422,9 @@ mod tests {
                     spec
                 })
                 .await,
-            Err(ClientError::UnsupportedCapability("tasks-runs"))
+            Err(ClientError::UnsupportedCapability(
+                "persistent-conversations"
+            ))
         ));
         let batch = BatchSpec {
             budget: None,

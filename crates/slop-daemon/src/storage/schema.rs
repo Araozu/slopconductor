@@ -26,62 +26,83 @@ pub(super) fn migrate_with_hook<F>(
 where
     F: FnOnce(&Transaction<'_>) -> StoreResult<()>,
 {
-    let tx = connection
-        .unchecked_transaction()
+    // Schema 9 folds job identities into their conversation and turn records.
+    connection
+        .pragma_update(None, "foreign_keys", "OFF")
         .map_err(|_| StoreError::Database)?;
-    if existing_version == 0 {
-        tx.execute_batch(
-            "CREATE TABLE node_identity (
+    let result = (|| {
+        let tx = connection
+            .unchecked_transaction()
+            .map_err(|_| StoreError::Database)?;
+        if existing_version == 0 {
+            tx.execute_batch(
+                "CREATE TABLE node_identity (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 node_id TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 os TEXT NOT NULL
             );",
-        )
-        .map_err(|_| StoreError::Database)?;
-        let identity = node_name.unwrap_or_else(default_node_name);
-        tx.execute(
-            "INSERT INTO node_identity (singleton, node_id, name, os) VALUES (1, ?1, ?2, ?3)",
-            rusqlite::params![random_node_id()?, identity, env::consts::OS],
-        )
-        .map_err(|_| StoreError::Database)?;
-    } else if let Some(name) = node_name {
-        let existing = query_node(&tx)?;
-        validate_identity(&existing)?;
-        tx.execute(
-            "UPDATE node_identity SET name = ?1 WHERE singleton = 1",
-            [name],
-        )
-        .map_err(|_| StoreError::Database)?;
-        if tx.changes() != 1 {
+            )
+            .map_err(|_| StoreError::Database)?;
+            let identity = node_name.unwrap_or_else(default_node_name);
+            tx.execute(
+                "INSERT INTO node_identity (singleton, node_id, name, os) VALUES (1, ?1, ?2, ?3)",
+                rusqlite::params![random_node_id()?, identity, env::consts::OS],
+            )
+            .map_err(|_| StoreError::Database)?;
+        } else if let Some(name) = node_name {
+            let existing = query_node(&tx)?;
+            validate_identity(&existing)?;
+            tx.execute(
+                "UPDATE node_identity SET name = ?1 WHERE singleton = 1",
+                [name],
+            )
+            .map_err(|_| StoreError::Database)?;
+            if tx.changes() != 1 {
+                return Err(StoreError::Database);
+            }
+        }
+        if existing_version <= 1 {
+            create_chat_schema(&tx)?;
+        }
+        if existing_version < 3 {
+            execution::migrate(&tx)?;
+        }
+        if existing_version < 4 {
+            steering_migrate(&tx)?;
+        }
+        if existing_version < 5 {
+            projects::migrate(&tx)?;
+        }
+        if existing_version < 6 {
+            orchestration::migrate(&tx)?;
+        }
+        if existing_version < 7 {
+            governance::migrate(&tx)?;
+        }
+        if existing_version < 8 {
+            children::migrate(&tx)?;
+        }
+        if existing_version < 9 {
+            conversations::migrate(&tx)?;
+        }
+        let broken: bool = tx
+            .prepare("PRAGMA foreign_key_check")
+            .map_err(|_| StoreError::Database)?
+            .exists([])
+            .map_err(|_| StoreError::Database)?;
+        if broken {
             return Err(StoreError::Database);
         }
-    }
-    if existing_version <= 1 {
-        create_chat_schema(&tx)?;
-    }
-    if existing_version < 3 {
-        execution::migrate(&tx)?;
-    }
-    if existing_version < 4 {
-        steering_migrate(&tx)?;
-    }
-    if existing_version < 5 {
-        projects::migrate(&tx)?;
-    }
-    if existing_version < 6 {
-        orchestration::migrate(&tx)?;
-    }
-    if existing_version < 7 {
-        governance::migrate(&tx)?;
-    }
-    if existing_version < 8 {
-        children::migrate(&tx)?;
-    }
-    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .map_err(|_| StoreError::Database)?;
+        hook(&tx)?;
+        tx.commit().map_err(|_| StoreError::Database)
+    })();
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
         .map_err(|_| StoreError::Database)?;
-    hook(&tx)?;
-    tx.commit().map_err(|_| StoreError::Database)
+    result
 }
 
 pub(super) fn create_chat_schema(tx: &Transaction<'_>) -> StoreResult<()> {

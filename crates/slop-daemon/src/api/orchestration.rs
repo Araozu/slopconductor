@@ -59,11 +59,11 @@ fn admission(state: &AppState) -> Result<(), StoreError> {
     }
 }
 
-fn preflight(
+pub(super) fn preflight(
     state: &AppState,
-    mut spec: TaskSpec,
+    mut spec: SessionSpec,
     default_max_tokens: Option<u32>,
-) -> Result<TaskSpec, StoreError> {
+) -> Result<SessionSpec, StoreError> {
     validate_spec(&spec)?;
     let model: slop_core::provider::ProviderModelRef =
         spec.model.parse().map_err(|_| StoreError::Invalid)?;
@@ -348,7 +348,7 @@ async fn instruction(
     if let Err(e) = admission(&state) {
         return store_error(e);
     }
-    accepted(state.store.task_instruction(&id, request).await)
+    chat::send_message(State(state), Path(id), Json(request)).await
 }
 
 async fn cancel_batch(
@@ -377,11 +377,12 @@ async fn create_child(
     let effective = if seen {
         None
     } else {
-        let parent = match state.store.run(&id).await {
-            Ok(run) => match state.store.task(&run.task_id).await {
-                Ok(task) => task,
-                Err(e) => return store_error(e),
-            },
+        let parent_run = match state.store.run(&id).await {
+            Ok(run) => run,
+            Err(e) => return store_error(e),
+        };
+        let parent = match state.store.task(&parent_run.task_id).await {
+            Ok(task) => task,
             Err(e) => return store_error(e),
         };
         let mut spec = request.spec.clone();
@@ -391,7 +392,7 @@ async fn create_child(
         let default_tokens = if spec.model.starts_with("codex/") {
             None
         } else {
-            parent.spec.settings.max_output_tokens
+            parent_run.turn.settings.max_output_tokens
         };
         match preflight(&state, spec, default_tokens) {
             Ok(s) => Some(s),

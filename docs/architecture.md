@@ -56,9 +56,9 @@ Persisted waits release execution slots and reattach to known children after
 restart without replaying unknown operations.
 Registered [projects and managed workspaces](projects-workspaces.md) now add
 frozen repository commits, lazy detached worktree allocation after admission,
-separate diffs, explicit cleanup, and no-replay Git recovery. Each task attempt owns a fresh session and its managed
-workspace; retries retain
-previous sessions and workspaces.
+separate diffs, explicit cleanup, and no-replay Git recovery. Each conversation owns its workspace and all of its turns. Follow-ups and retries
+retain that conversation and workspace. Batch and child metadata live on the same
+conversation record; there are no separate task or run entities.
 
 The daemon also owns [runtime provider credential configuration](provider-credentials.md):
 private XDG records, API-key replacement, and a bounded ChatGPT login listener.

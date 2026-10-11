@@ -5,23 +5,31 @@ preview/submission, results, selective retries, and JSON Lines export use the
 authenticated public API and native CLI. They execute through the existing Rust
 turn scheduler. Closing a client leaves accepted work running.
 
-## Job and attempt ownership
+## Conversation and turn ownership
 
-A task records immutable requested inputs and effective inputs: prompt, title,
-provider-qualified model, generation settings, and optional registered project.
-Acceptance returns task, run, session, and turn IDs together. A run exists while
-queued; admission changes its status rather than creating its identity.
+There is one persistent work model: a conversation. Every conversation owns its
+messages, workspace, requested/effective settings, budgets, and optional batch or
+child-agent metadata. A task ID is the conversation ID, and a run ID is its turn
+ID. Session and task operations return the same `SessionResponse`; there is no
+separate task response type or persisted task/run record.
 
-Each attempt owns a fresh session with one primary turn. That turn can perform
-multiple model requests and coding-tool calls under the existing execution
-bounds. A project selection reserves a separate worktree, freezes its exact base
-commit, and allocates the directory only after admission. A text task without a
-project needs no Git checkout. Go, Zen, and Codex tasks share this tool loop.
+`POST /v1/sessions` accepts an optional initial `prompt`, `budget`, and
+`orchestration` policy alongside the existing model, workspace, and project
+settings. When a prompt is supplied, creation and initial message acceptance are
+atomic. The task convenience API creates this same conversation. Every creation
+path supports subsequent messages and the same execution controls.
 
-This chooses fresh attempts for reproducibility. Reusing a conversation for
-successive tasks remains a future extension. Ordinary chat sessions retain their
-existing conversational behavior. Attempts reject additional primary turns
-through the session message API; active or paused attempts accept steering.
+Each follow-up creates a turn in the existing conversation. `after-turn` queues
+it behind current work, `next-boundary` steers at a safe boundary, and `immediate`
+interrupts the active model request and steers the same turn. Steering keeps the
+active turn's frozen settings. If there is no active turn, the message starts a
+new turn. Turn context includes prior completed work and excludes later queued
+messages. A turn may contain multiple model requests and coding-tool calls.
+
+Project selection reserves a worktree once for the conversation, freezes its
+base, and allocates it after admission. Follow-ups and retries use that workspace.
+Independent conversations, including batch members and children, still get their
+own project workspaces. Closing a client leaves accepted work running.
 
 ```sh
 slop task create --model opencode-go/glm-5.3-flash \
@@ -38,14 +46,11 @@ slop task events TASK_ID
 slop workspace diff WORKSPACE_ID
 ```
 
-`task create` returns immediately. `task follow` attaches to the attempt current
-when the command starts; it does not switch to a subsequent retry. History,
-structured tools, model requests, and artifacts remain available through that
-attempt's existing session/turn/artifact operations. Project tasks enable all
-four coding tools unless `--tool` restricts them. Steering accepts next-boundary
-or immediate delivery, keeps the active turn's frozen model/settings, and
-requires an active, paused, or awaiting-children attempt. Instruction retries return the original
-receipt even if the task has since acquired another attempt.
+`task create` returns immediately. `task follow` attaches to the turn current
+when it starts. `task send`, session messages, and chat share message acceptance:
+follow-up by default, or explicit safe-boundary/immediate steering. History,
+requests, tools, and artifacts belong to the same conversation. Repeated command
+IDs return their original receipts even after more turns have been accepted.
 
 ## Status and recovery
 
@@ -55,10 +60,9 @@ acknowledgements indicate acceptance; a running operation reaches a safe boundar
 before the resulting state is visible. Paused runs release execution capacity.
 Resume explicitly readmits the same run and preserves its workspace/context.
 
-Task events mirror committed session facts with a task sequence, run ID, status,
-and source session event sequence. Task creation and retry add their own facts.
-State, events, and command receipts commit in one SQLite transaction. Event
-queries are paginated JSON; live content uses the existing session NDJSON feed.
+Conversation state, events, and command receipts commit in one SQLite
+transaction. Task event queries project the same conversation journal and cursor;
+there is no second task event log. Live content uses the session NDJSON feed.
 
 Startup leaves undispatched queued work eligible for admission and paused work
 paused. A previously running turn becomes interrupted. Unfinished tools receive
@@ -72,19 +76,17 @@ slop run retry INTERRUPTED_RUN_ID --command-id retry-inspected \
   --acknowledge-unknown-effects
 ```
 
-Only the latest unsuccessful attempt can retry. Completed, active, and paused
-runs refuse retry. Each task allows at most eight attempts. A retry preserves the
-prompt, effective settings, and frozen base commit, creates a fresh session and
-worktree reservation, and records `retry_of`. Old sessions, outputs, workspaces,
-and tool outcomes remain inspectable. Successful external changes in an old
-workspace are not copied to the new attempt. Unknown external effects require
-the explicit acknowledgement above; it does not undo or reconcile those effects.
-No tool, provider, or whole-job retry occurs automatically.
+Only the latest unsuccessful turn can retry. Completed, active, and paused turns
+refuse retry. Retry adds a turn in the same conversation and workspace, records
+`retry_of`, and retains prior messages, outputs, and tool outcomes. Unknown
+external effects require explicit acknowledgement; that acknowledgement does not
+undo or reconcile them. No tool, provider, or whole-work retry occurs automatically.
+Conversation turns have no lifetime count limit; pending queues and execution
+budgets remain bounded.
 
 ## Fair admission, budgets, and batch cancellation
 
-Admission rotates across eligible batches, independent task trees, and ordinary
-sessions. Persistent tickets and an admission clock survive restart. Newly
+Admission rotates across eligible batches, independent task trees, and conversations. Persistent tickets and an admission clock survive restart. Newly
 queued or returning idle groups join at the current clock; a continuous stream
 of arrivals cannot reuse old priority to jump ahead of waiting work. Each
 admission advances its group's ticket, with creation order resolving ties.
@@ -92,7 +94,7 @@ An eligible group gets its turn after at most one admission per other group
 already queued at that point. This bounds admissions, not elapsed time: active
 runs are not preempted. Descendants share the root's group and batch cap.
 
-`TaskSpec.budget` and `BatchSpec.budget` optionally set `max_model_requests` and
+`SessionSpec.budget` and `BatchSpec.budget` optionally set `max_model_requests` and
 `max_tool_calls`, each 0–1,000,000. A missing budget retains the existing per-turn
 limits without an additional aggregate cap. Zero forbids that operation.
 Task budgets cover all attempts and descendants; batch budgets cover every
@@ -191,7 +193,7 @@ All routes below require the existing local bearer token. Health advertises
 
 | Method and route | Payload / result |
 | --- | --- |
-| POST /v1/tasks | `{command_id, spec: TaskSpec}` → `TaskReceipt`, HTTP 202 |
+| POST /v1/tasks | `{command_id, spec: SessionSpec}` → `TaskReceipt`, HTTP 202 |
 | GET /v1/tasks | Paginated tasks |
 | GET /v1/tasks/{id} | Task inputs, owner, batch/index, event watermark, latest run |
 | GET /v1/tasks/{id}/runs | Paginated attempt history |
@@ -246,5 +248,5 @@ aggregate reservation across retries/restart, budget denial before filesystem
 dispatch, atomic batch cancellation, and [native delegation](child-tasks.md).
 [Recorded offline validation](native-validation.md) passes on Linux and native
 Windows; live-provider validation remains outstanding. Awaiting-input
-states, branch publishing, automatic retention, and conversation reuse remain
+states, branch publishing, automatic retention, and conversation cloning remain
 future work.

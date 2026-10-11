@@ -16,4 +16,11 @@ pub struct SessionResponse {
     pub execution: Option<crate::execution::WorkspacePolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_workspace_id: Option<String>,
+    pub spec: crate::orchestration::SessionSpec,
+    pub requested_spec: crate::orchestration::SessionSpec,
+    pub batch_id: Option<String>,
+    pub combination_index: Option<u32>,
+    pub latest_run: Option<crate::orchestration::RunResponse>,
+    pub budget_usage: crate::orchestration::BudgetUsage,
+    pub child: Option<crate::orchestration::ChildLink>,
 }

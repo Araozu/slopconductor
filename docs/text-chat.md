@@ -11,6 +11,10 @@ now build repository isolation and durable job orchestration on these primitives
 
 ## Ownership and durability
 
+All work uses this conversation model, including batches and child agents.
+Durability applies to every conversation. Additional policy and membership are
+metadata on the same record, and follow-ups use the same history and workspace.
+
 The daemon owns accepted turns. Closing a CLI, losing its event connection, or
 pressing Ctrl-C while following detaches that client. Explicit cancellation is a
 separate durable command. Each session has one authoritative node and at most

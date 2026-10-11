@@ -13,4 +13,10 @@ pub struct CreateSessionRequest {
     pub execution: Option<crate::execution::WorkspacePolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<crate::projects::ProjectWorkspaceRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::orchestration::OperationBudget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestration: Option<crate::orchestration::OrchestrationPolicy>,
 }

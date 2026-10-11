@@ -14,6 +14,7 @@ impl DaemonClient {
         if request.settings.is_some() {
             self.require_feature("per-turn-settings").await?;
         }
+        self.require_feature("persistent-conversations").await?;
         self.post_json(self.endpoint.join("/v1/sessions")?, request)
             .await
     }

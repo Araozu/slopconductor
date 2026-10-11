@@ -129,7 +129,7 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/workspaces/{id}, /diff | Implemented: workspace state and tracked patch |
 | POST /v1/workspaces/{id}/remove | Implemented: explicit conservative cleanup |
 | GET /v1/workspaces | Inspect active worktree and exclusive workspace reservations |
-| GET, POST /v1/sessions | Implemented: list/create conversations owned by this node |
+| GET, POST /v1/sessions | Implemented: list/create persistent conversations; optional prompt and policy are accepted atomically |
 | GET /v1/sessions/{id} | Implemented: snapshot with revision and event watermark |
 | GET /v1/sessions/{id}/messages | Implemented: paginated durable conversation |
 | POST /v1/sessions/{id}/messages | Implemented: accept a message with optional model/settings and `after-turn`, `next-boundary`, or `immediate` delivery |
@@ -144,13 +144,13 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/tools/{id} | Implemented: one canonical tool invocation |
 | GET /v1/artifacts/{id} | Implemented: artifact metadata |
 | GET /v1/artifacts/{id}/content | Implemented: authenticated artifact byte stream |
-| GET, POST /v1/tasks | Implemented: list/create durable jobs with initial run/session/turn IDs |
+| GET, POST /v1/tasks | Implemented: conversation convenience operations; task/session and run/turn IDs are identical |
 | GET /v1/tasks/{id} | Implemented: requested/effective inputs, latest attempt, and event watermark |
 | GET /v1/tasks/{id}/runs, /events | Implemented: paginated attempt history and committed facts |
 | POST /v1/tasks/{id}/instructions | Implemented: steer the current active or paused attempt |
 | GET /v1/runs/{id} | Implemented: execution attempt, turn, usage, workspace, and effects uncertainty |
 | POST /v1/runs/{id}/pause, /resume, /cancel | Implemented: existing durable turn control |
-| POST /v1/runs/{id}/retry | Implemented: explicit fresh attempt, preserving prior outcomes |
+| POST /v1/runs/{id}/retry | Implemented: explicit new turn in the same conversation and workspace, preserving prior outcomes |
 | POST /v1/batches/preview | Implemented: validate and expand without starting work |
 | GET, POST /v1/batches | Implemented: create/list batches and member tasks |
 | GET /v1/batches/{id} | Implemented: frozen parameters and latest-member status counts |

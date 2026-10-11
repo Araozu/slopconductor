@@ -22,6 +22,14 @@ and durable batch cancellation. Schema 8 adds child parent/run/root links,
 inherited admission scopes, selected context references, and exact-attempt wait
 dependencies. Child creation and its native tool result commit together; a
 completed wait result commits before readmission. See [child tasks](child-tasks.md).
+Schema 9 unifies all work in `sessions` and all execution in `turns`.
+Conversation rows hold policy, requested/effective inputs, batch membership, and
+lineage; turn rows hold retry links. It removes the separate `tasks`, `runs`, and
+`task_events` tables. Every conversation has an operation ledger. Historical
+sessions, messages, tools, and workspaces are retained during migration; historical
+retry sessions remain individually inspectable, while new retries stay in their
+conversation and workspace. Historical task/run identifiers change to the
+corresponding session/turn IDs.
 See [structured execution](structured-execution.md) and
 [projects/workspaces](projects-workspaces.md). The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,

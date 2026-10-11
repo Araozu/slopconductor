@@ -205,6 +205,7 @@ async fn create_session(
         settings,
         execution,
         project,
+        ..Default::default()
     };
     let receipt = client
         .create_session(&request)

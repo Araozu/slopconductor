@@ -234,7 +234,7 @@ async fn health() -> Json<HealthResponse> {
             "turn-pause-resume".to_owned(),
             "managed-workspaces".to_owned(),
             "filesystem-navigation".to_owned(),
-            "tasks-runs".to_owned(),
+            "persistent-conversations".to_owned(),
             "orchestration-controls".to_owned(),
             "child-tasks".to_owned(),
             "batch-matrices".to_owned(),

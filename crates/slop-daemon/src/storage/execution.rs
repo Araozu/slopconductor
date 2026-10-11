@@ -719,8 +719,8 @@ pub(super) fn claim_next_turn(
         AND NOT EXISTS(SELECT 1 FROM turns active WHERE active.session_id=t.session_id AND active.status='running')
         AND NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN('queued','running','paused','awaiting_children'))
         AND (s.workspace_root IS NULL OR NOT EXISTS(SELECT 1 FROM turns busy JOIN sessions bs ON bs.id=busy.session_id WHERE busy.status='running' AND bs.workspace_root=s.workspace_root))
-        AND NOT EXISTS(SELECT 1 FROM runs r JOIN tasks k ON k.id=r.task_id JOIN batches b ON b.id=k.admission_batch_id WHERE r.turn_id=t.id AND (SELECT count(*) FROM runs br JOIN tasks bk ON bk.id=br.task_id JOIN turns bt ON bt.id=br.turn_id WHERE bk.admission_batch_id=b.id AND bt.status='running')>=b.max_concurrent_runs)
-        ORDER BY (SELECT last_admission FROM admission_groups WHERE id=COALESCE((SELECT 'batch:'||k.admission_batch_id FROM runs r JOIN tasks k ON k.id=r.task_id WHERE r.turn_id=t.id),(SELECT 'task:'||k.root_task_id FROM runs r JOIN tasks k ON k.id=r.task_id WHERE r.turn_id=t.id),'session:'||t.session_id)),t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?,r.get(12)?))).optional().map_err(|_|StoreError::Database)?;
+        AND NOT EXISTS(SELECT 1 FROM turns r JOIN sessions k ON k.id=r.session_id JOIN batches b ON b.id=k.admission_batch_id WHERE r.id=t.id AND (SELECT count(*) FROM turns br JOIN sessions bk ON bk.id=br.session_id JOIN turns bt ON bt.id=br.id WHERE bk.admission_batch_id=b.id AND bt.status='running')>=b.max_concurrent_runs)
+        ORDER BY (SELECT last_admission FROM admission_groups WHERE id=COALESCE((SELECT 'batch:'||k.admission_batch_id FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=t.id),(SELECT 'session:'||k.root_task_id FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=t.id),'session:'||t.session_id)),t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?,r.get(12)?))).optional().map_err(|_|StoreError::Database)?;
     let Some((
         turn_id,
         session_id,
@@ -757,7 +757,7 @@ pub(super) fn claim_next_turn(
             |row| row.get(0),
         )
         .map_err(|_| StoreError::Database)?;
-    let orchestration:Option<slop_runtime::orchestration::OrchestrationPolicy>=tx.query_row("SELECT json_extract(k.spec,'$.orchestration') FROM runs r JOIN tasks k ON k.id=r.task_id WHERE r.turn_id=?1",[&turn_id],|r|r.get::<_,Option<String>>(0)).optional().map_err(|_|StoreError::Database)?.flatten().map(|s|decode(&s)).transpose()?;
+    let orchestration:Option<slop_runtime::orchestration::OrchestrationPolicy>=tx.query_row("SELECT json_extract(k.spec,'$.orchestration') FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=?1",[&turn_id],|r|r.get::<_,Option<String>>(0)).optional().map_err(|_|StoreError::Database)?.flatten().map(|s|decode(&s)).transpose()?;
     let base_request_limit = execution
         .as_ref()
         .map_or(1_i64, |policy| i64::from(policy.max_model_requests));

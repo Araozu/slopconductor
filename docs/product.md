@@ -98,19 +98,22 @@ checkpoint design now without blocking the first useful CLI release.
 | Node / execution environment | One daemon installation and its OS-local data directory |
 | Project | A registered repository or directory, with logical identity and local mappings |
 | Workspace | The concrete directory, worktree, or other environment used by a run |
-| Session | A persistent conversation with context, messages, and an owner |
-| Task | A durable goal or work item associated with a session |
-| Run | One execution attempt for a task; retry creates a new attempt explicitly |
-| Turn | A model interaction and associated tool-processing steps |
+| Conversation / session | One persistent work item with messages, context, workspace, policy, budgets, and an owner |
+| Turn | One queued or active execution within a conversation; it can contain multiple model requests and tool calls |
 | Batch | A named collection of tasks with recorded parameter combinations |
 | Artifact | A durable output such as a diff, report, log, or attachment |
 | Client | An interface that sends commands and renders daemon state |
 
-The implemented job slice gives each attempt a fresh session with one primary
-turn and retains prior sessions/workspaces on retry. Reusing a conversation for a
-follow-up task remains proposed. Ordinary chat sessions support conversational
-follow-ups. Detailed task/session relationships can evolve without making clients
-own the execution loop.
+All work uses the same conversation model. Follow-ups add turns to its existing
+history and workspace. Messages can queue after the current turn, steer at the
+next safe boundary, or interrupt and steer immediately. Batches and child agents
+create conversations with additional membership or parent metadata.
+
+Durability is a property of every conversation: accepted messages, execution
+state, results, and tool outcomes persist independently of the client. Restart
+preserves this data, marks interrupted execution honestly, and never replays an
+operation with unknown effects. The historical task/run API and CLI names address
+these same conversation/turn records; they do not create a different work type.
 
 ## Scope and product character
 

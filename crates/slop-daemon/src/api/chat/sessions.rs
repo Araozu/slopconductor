@@ -80,6 +80,22 @@ pub(super) async fn create_session(
             );
         }
     }
+    if let Some(prompt) = &request.prompt {
+        let spec = slop_protocol::orchestration::SessionSpec {
+            title: request.title.clone(),
+            prompt: prompt.clone(),
+            model: format!("{}/{}", request.provider, request.model),
+            settings: request.settings.clone().unwrap_or_default(),
+            project: request.project.clone(),
+            budget: request.budget.clone(),
+            orchestration: request.orchestration.clone(),
+        };
+        if let Err(error) =
+            crate::api::orchestration::preflight(&state, spec, Some(state.runtime.max_tokens()))
+        {
+            return store_error(error);
+        }
+    }
     accepted(
         state
             .store
@@ -114,7 +130,7 @@ pub(super) async fn messages(
     storage_response(state.store.messages(&session_id, query.after, limit).await)
 }
 
-pub(super) async fn send_message(
+pub(crate) async fn send_message(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Json(request): Json<SendMessageRequest>,

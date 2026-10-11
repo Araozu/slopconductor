@@ -26,7 +26,7 @@ pub(super) fn link(c: &Connection, task: &str) -> StoreResult<Option<ChildLink>>
     c.query_row("SELECT parent_task_id,parent_run_id,root_task_id,depth,cancel_with_parent,context FROM child_links WHERE child_task_id=?1",[task],|r|Ok(ChildLink{parent_task_id:r.get(0)?,parent_run_id:r.get(1)?,root_task_id:r.get(2)?,depth:r.get(3)?,cancel_with_parent:r.get(4)?,context:execution::json_column(r,5)?})).optional().map_err(|_|StoreError::Database)
 }
 
-pub(crate) fn validate_policy(spec: &TaskSpec) -> StoreResult<()> {
+pub(crate) fn validate_policy(spec: &SessionSpec) -> StoreResult<()> {
     let Some(policy) = &spec.orchestration else {
         return Ok(());
     };
@@ -48,21 +48,19 @@ pub(crate) fn validate_policy(spec: &TaskSpec) -> StoreResult<()> {
     Ok(())
 }
 
-fn parent(c: &Connection, id: &str) -> StoreResult<TaskResponse> {
+fn parent(c: &Connection, id: &str) -> StoreResult<SessionResponse> {
     let run = orchestration::run(c, id)?;
-    let task = orchestration::task(c, &run.task_id)?;
-    if task.latest_run.id != id
-        || !matches!(
-            run.turn.status.as_str(),
-            "queued" | "running" | "paused" | "awaiting_children"
-        )
-        || task.spec.orchestration.is_none()
+    let mut task = orchestration::task(c, &run.task_id)?;
+    if !matches!(
+        run.turn.status.as_str(),
+        "queued" | "running" | "paused" | "awaiting_children"
+    ) || task.spec.orchestration.is_none()
     {
         return Err(StoreError::Conflict);
     }
     if let Some(batch) = c
         .query_row(
-            "SELECT admission_batch_id FROM tasks WHERE id=?1",
+            "SELECT admission_batch_id FROM sessions WHERE id=?1",
             [&task.id],
             |r| r.get::<_, Option<String>>(0),
         )
@@ -74,13 +72,18 @@ fn parent(c: &Connection, id: &str) -> StoreResult<TaskResponse> {
     if cancellation_requested(c, &run.turn.id)? {
         return Err(StoreError::Conflict);
     }
+    // Queued follow-ups may have different settings. Child authority and
+    // defaults come from the addressed active turn.
+    task.spec.settings = run.turn.settings.clone();
+    task.spec.model = run.turn.requested_model.clone();
+    task.latest_run = Some(run);
     Ok(task)
 }
 
 fn constrain(
     c: &Connection,
-    parent: &TaskResponse,
-    spec: &mut TaskSpec,
+    parent: &SessionResponse,
+    spec: &mut SessionSpec,
 ) -> StoreResult<(String, u32)> {
     let policy = parent
         .spec
@@ -167,7 +170,7 @@ fn constrain(
 
 fn selected_context(
     c: &Connection,
-    parent: &TaskResponse,
+    parent: &SessionResponse,
     selection: &ChildContext,
     prompt: &str,
     artifact_dir: &Path,
@@ -190,7 +193,14 @@ fn selected_context(
             .optional()
             .map_err(|_| StoreError::Database)?
             .ok_or(StoreError::NotFound)?;
-        if session != parent.latest_run.session_id || status != "completed" {
+        if session
+            != parent
+                .latest_run
+                .as_ref()
+                .ok_or(StoreError::Conflict)?
+                .session_id
+            || status != "completed"
+        {
             return Err(StoreError::Unsupported("child.context"));
         }
         text.push_str(&format!("\n\nSelected public message {id}:\n{public}"));
@@ -207,7 +217,7 @@ fn selected_context(
         {
             return Err(StoreError::Invalid);
         }
-        let owned:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM tool_invocations i JOIN turns t ON t.id=i.turn_id JOIN json_each(i.outcome,'$.artifacts') a WHERE t.session_id=?1 AND json_extract(a.value,'$.id')=?2)",rusqlite::params![parent.latest_run.session_id,id],|r|r.get(0)).map_err(|_|StoreError::Database)?;
+        let owned:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM tool_invocations i JOIN turns t ON t.id=i.turn_id JOIN json_each(i.outcome,'$.artifacts') a WHERE t.session_id=?1 AND json_extract(a.value,'$.id')=?2)",rusqlite::params![parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.session_id,id],|r|r.get(0)).map_err(|_|StoreError::Database)?;
         if !owned {
             return Err(StoreError::Unsupported("child.artifact"));
         }
@@ -285,7 +295,11 @@ fn summaries(c: &Connection, ids: &[String]) -> StoreResult<String> {
     Ok(encoded)
 }
 
-fn direct_child(c: &Connection, parent_run: &str, child_task: &str) -> StoreResult<TaskResponse> {
+fn direct_child(
+    c: &Connection,
+    parent_run: &str,
+    child_task: &str,
+) -> StoreResult<SessionResponse> {
     let matched: bool = c
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM child_links WHERE parent_run_id=?1 AND child_task_id=?2)",
@@ -331,7 +345,13 @@ fn accept_wait(
         .optional()
         .map_err(|_| StoreError::Database)?;
     if let Some((turn, invocation, ids)) = existing {
-        if turn != parent.latest_run.turn.id
+        if turn
+            != parent
+                .latest_run
+                .as_ref()
+                .ok_or(StoreError::Conflict)?
+                .turn
+                .id
             || invocation.as_deref() != intent.map(|i| i.id.as_str())
             || ids != encoded
         {
@@ -342,21 +362,31 @@ fn accept_wait(
     let pending: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM child_waits WHERE parent_turn_id=?1 AND completed=0)",
-            [&parent.latest_run.turn.id],
+            [&parent
+                .latest_run
+                .as_ref()
+                .ok_or(StoreError::Conflict)?
+                .turn
+                .id],
             |r| r.get(0),
         )
         .map_err(|_| StoreError::Database)?;
     let total: u32 = tx
         .query_row(
             "SELECT count(*) FROM child_waits WHERE parent_turn_id=?1",
-            [&parent.latest_run.turn.id],
+            [&parent
+                .latest_run
+                .as_ref()
+                .ok_or(StoreError::Conflict)?
+                .turn
+                .id],
             |r| r.get(0),
         )
         .map_err(|_| StoreError::Database)?;
     if pending || total >= 64 {
         return Err(StoreError::Conflict);
     }
-    tx.execute("INSERT INTO child_waits(id,parent_turn_id,invocation_id,child_run_ids) VALUES(?1,?2,?3,?4)",rusqlite::params![request.command_id,parent.latest_run.turn.id,intent.map(|i|&i.id),encoded]).map_err(|_|StoreError::Database)?;
+    tx.execute("INSERT INTO child_waits(id,parent_turn_id,invocation_id,child_run_ids) VALUES(?1,?2,?3,?4)",rusqlite::params![request.command_id,parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.id,intent.map(|i|&i.id),encoded]).map_err(|_|StoreError::Database)?;
     if let Some(intent) = intent {
         tx.execute(
             "UPDATE tool_invocations SET status='waiting' WHERE id=?1",
@@ -366,9 +396,20 @@ fn accept_wait(
     }
     append_event(
         tx,
-        &parent.latest_run.session_id,
+        &parent
+            .latest_run
+            .as_ref()
+            .ok_or(StoreError::Conflict)?
+            .session_id,
         "child_wait_accepted",
-        Some(&parent.latest_run.turn.id),
+        Some(
+            &parent
+                .latest_run
+                .as_ref()
+                .ok_or(StoreError::Conflict)?
+                .turn
+                .id,
+        ),
         None,
     )?;
     wake(tx)?;
@@ -401,7 +442,7 @@ pub(super) fn wake(tx: &Transaction<'_>) -> StoreResult<()> {
         .map_err(|_| StoreError::Database)?;
     drop(stmt);
     for (id, turn, invocation, ids) in waits {
-        let all:bool=tx.query_row("SELECT NOT EXISTS(SELECT 1 FROM json_each(?1) j JOIN runs r ON r.id=j.value JOIN turns t ON t.id=r.turn_id WHERE t.status IN('queued','running','paused','awaiting_children'))",[canonical(&ids)?],|r|r.get(0)).map_err(|_|StoreError::Database)?;
+        let all:bool=tx.query_row("SELECT NOT EXISTS(SELECT 1 FROM json_each(?1) j JOIN turns r ON r.id=j.value JOIN turns t ON t.id=r.id WHERE t.status IN('queued','running','paused','awaiting_children'))",[canonical(&ids)?],|r|r.get(0)).map_err(|_|StoreError::Database)?;
         if !all {
             continue;
         }
@@ -457,7 +498,7 @@ fn tool_intent(c: &Connection, id: &str) -> StoreResult<ToolIntent> {
 }
 
 pub(super) fn cancel_descendants(tx: &Transaction<'_>, parent_turn: &str) -> StoreResult<()> {
-    let mut stmt=tx.prepare("SELECT t.id FROM child_links l JOIN runs parent ON parent.id=l.parent_run_id JOIN runs r ON r.task_id=l.child_task_id JOIN turns t ON t.id=r.turn_id WHERE parent.turn_id=?1 AND l.cancel_with_parent=1 AND t.status IN('queued','running','paused','awaiting_children')").map_err(|_|StoreError::Database)?;
+    let mut stmt=tx.prepare("SELECT t.id FROM child_links l JOIN turns parent ON parent.id=l.parent_run_id JOIN turns r ON r.session_id=l.child_task_id JOIN turns t ON t.id=r.id WHERE parent.id=?1 AND l.cancel_with_parent=1 AND t.status IN('queued','running','paused','awaiting_children')").map_err(|_|StoreError::Database)?;
     let ids = stmt
         .query_map([parent_turn], |r| r.get::<_, String>(0))
         .map_err(|_| StoreError::Database)?
@@ -476,7 +517,7 @@ pub(super) fn cancel_descendants(tx: &Transaction<'_>, parent_turn: &str) -> Sto
     Ok(())
 }
 
-pub(super) fn retry_allowed(c: &Connection, task: &TaskResponse) -> StoreResult<()> {
+pub(super) fn retry_allowed(c: &Connection, task: &SessionResponse) -> StoreResult<()> {
     let mut current = task.id.clone();
     while let Some(link) = link(c, &current)? {
         if !link.cancel_with_parent {
@@ -490,7 +531,7 @@ pub(super) fn retry_allowed(c: &Connection, task: &TaskResponse) -> StoreResult<
     }
     let batch: Option<String> = c
         .query_row(
-            "SELECT admission_batch_id FROM tasks WHERE id=?1",
+            "SELECT admission_batch_id FROM sessions WHERE id=?1",
             [&task.id],
             |r| r.get(0),
         )
@@ -524,7 +565,7 @@ impl StoreClient {
         &self,
         parent_run: &str,
         request: CreateChildRequest,
-        effective: Option<TaskSpec>,
+        effective: Option<SessionSpec>,
     ) -> StoreResult<TaskReceipt> {
         self.create_child_inner(parent_run, request, effective, None)
             .await
@@ -534,7 +575,7 @@ impl StoreClient {
         &self,
         parent_run: &str,
         request: CreateChildRequest,
-        effective: Option<TaskSpec>,
+        effective: Option<SessionSpec>,
         intent: Option<ToolIntent>,
     ) -> StoreResult<TaskReceipt> {
         if !valid_command_id(&request.command_id) {
@@ -577,10 +618,10 @@ impl StoreClient {
             spec.prompt=selected_context(&tx,&parent,&request.context,&spec.prompt,&artifact_dir)?;
             let receipt=orchestration::insert_task(&tx,&spec,&request.spec,resolved,None,&request.command_id)?;
             tx.execute("INSERT INTO child_links(child_task_id,parent_task_id,parent_run_id,root_task_id,depth,cancel_with_parent,context) VALUES(?1,?2,?3,?4,?5,?6,?7)",rusqlite::params![receipt.task_id,parent.id,parent_id,root,depth,request.cancel_with_parent,canonical(&request.context)?]).map_err(|_|StoreError::Database)?;
-            tx.execute("UPDATE tasks SET root_task_id=?1,admission_batch_id=(SELECT admission_batch_id FROM tasks WHERE id=?2) WHERE id=?3",rusqlite::params![root,parent.id,receipt.task_id]).map_err(|_|StoreError::Database)?;
-            append_event(&tx,&parent.latest_run.session_id,"child_created",Some(&parent.latest_run.turn.id),None)?;
+            tx.execute("UPDATE sessions SET root_task_id=?1,admission_batch_id=(SELECT admission_batch_id FROM sessions WHERE id=?2) WHERE id=?3",rusqlite::params![root,parent.id,receipt.task_id]).map_err(|_|StoreError::Database)?;
+            append_event(&tx,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.session_id,"child_created",Some(&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.id),None)?;
             projects::save(&tx,&request.command_id,&scope,&payload,&receipt)?;
-            if let Some(intent)=intent {execution::finish_tool_tx(&tx,&parent.latest_run.session_id,&parent.latest_run.turn.id,&intent,&completed(canonical(&receipt)?))?;}
+            if let Some(intent)=intent {execution::finish_tool_tx(&tx,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.session_id,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.id,&intent,&completed(canonical(&receipt)?))?;}
             tx.commit().map_err(|_|StoreError::Database)?;
             Ok(receipt)
         }).await
@@ -591,10 +632,10 @@ impl StoreClient {
         id: &str,
         after: Option<u64>,
         limit: usize,
-    ) -> StoreResult<Page<TaskResponse>> {
+    ) -> StoreResult<Page<SessionResponse>> {
         let id = id.to_owned();
         let limit = page_limit(limit)?;
-        self.submit(move|c| {orchestration::run(c,&id)?;orchestration::page(c,"SELECT k.id,k.created_order FROM tasks k JOIN child_links l ON l.child_task_id=k.id WHERE l.parent_run_id=?1 AND k.created_order>?2 ORDER BY k.created_order LIMIT ?3",Some(&id),after,limit,orchestration::task)}).await
+        self.submit(move|c| {orchestration::run(c,&id)?;orchestration::page(c,"SELECT k.id,k.created_order FROM sessions k JOIN child_links l ON l.child_task_id=k.id WHERE l.parent_run_id=?1 AND k.created_order>?2 ORDER BY k.created_order LIMIT ?3",Some(&id),after,limit,orchestration::task)}).await
     }
 
     pub async fn run_result(&self, id: &str) -> StoreResult<RunResultResponse> {
@@ -632,16 +673,53 @@ impl StoreClient {
             }
             let parent = parent(&tx, &id)?;
             accept_wait(&tx, &id, &request, None)?;
-            if parent.latest_run.turn.status == "queued"
-                && pending(&tx, &parent.latest_run.turn.id)?
+            if parent
+                .latest_run
+                .as_ref()
+                .ok_or(StoreError::Conflict)?
+                .turn
+                .status
+                == "queued"
+                && pending(
+                    &tx,
+                    &parent
+                        .latest_run
+                        .as_ref()
+                        .ok_or(StoreError::Conflict)?
+                        .turn
+                        .id,
+                )?
             {
-                park(&tx, &parent.latest_run.turn.id)?;
+                park(
+                    &tx,
+                    &parent
+                        .latest_run
+                        .as_ref()
+                        .ok_or(StoreError::Conflict)?
+                        .turn
+                        .id,
+                )?;
             }
-            let current = get_session(&tx, &parent.latest_run.session_id)?;
+            let current = get_session(
+                &tx,
+                &parent
+                    .latest_run
+                    .as_ref()
+                    .ok_or(StoreError::Conflict)?
+                    .session_id,
+            )?;
             let receipt = make_receipt(
                 &request.command_id,
                 &current.id,
-                Some(parent.latest_run.turn.id),
+                Some(
+                    parent
+                        .latest_run
+                        .as_ref()
+                        .ok_or(StoreError::Conflict)?
+                        .turn
+                        .id
+                        .clone(),
+                ),
                 None,
                 current.revision,
                 current.last_event_sequence,
@@ -662,7 +740,7 @@ impl StoreClient {
         let lookup = turn_id.clone();
         let run_id = self
             .submit(move |c| {
-                c.query_row("SELECT id FROM runs WHERE turn_id=?1", [lookup], |r| {
+                c.query_row("SELECT id FROM turns WHERE id=?1", [lookup], |r| {
                     r.get::<_, String>(0)
                 })
                 .map_err(|_| StoreError::Database)
@@ -674,11 +752,11 @@ impl StoreClient {
             let request: CreateChildRequest =
                 serde_json::from_value(args).map_err(|_| StoreError::Invalid)?;
             let mut effective = request.spec.clone();
-            let p = self.task(&self.run(&run_id).await?.task_id).await?;
+            let active = self.run(&run_id).await?;
             if effective.settings.max_output_tokens.is_none()
                 && !effective.model.starts_with("codex/")
             {
-                effective.settings.max_output_tokens = p.spec.settings.max_output_tokens;
+                effective.settings.max_output_tokens = active.turn.settings.max_output_tokens;
             }
             let receipt = self
                 .create_child_inner(&run_id, request, Some(effective), Some(intent.clone()))
@@ -699,16 +777,16 @@ impl StoreClient {
                 let task_id=intent.arguments["task_id"].as_str().ok_or(StoreError::Invalid)?;
                 let child=direct_child(&tx,&run_id,task_id)?;
                 let output=match intent.name.as_str() {
-                    "child_inspect"=>canonical(&serde_json::json!({"task_id":child.id,"run_id":child.latest_run.id,"status":child.latest_run.turn.status,"workspace_id":child.latest_run.workspace_id,"model":child.spec.model,"budget_usage":child.budget_usage}))?,
+                    "child_inspect"=>canonical(&serde_json::json!({"task_id":child.id,"run_id":child.latest_run.as_ref().ok_or(StoreError::Conflict)?.id,"status":child.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.status,"workspace_id":child.latest_run.as_ref().ok_or(StoreError::Conflict)?.workspace_id,"model":child.spec.model,"budget_usage":child.budget_usage}))?,
                     "child_result"=>{
-                        if matches!(child.latest_run.turn.status.as_str(),"queued"|"running"|"paused"|"awaiting_children") {return Err(StoreError::Conflict);}
-                        summaries(&tx,&[child.latest_run.id])?
+                        if matches!(child.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.status.as_str(),"queued"|"running"|"paused"|"awaiting_children") {return Err(StoreError::Conflict);}
+                        summaries(&tx,&[child.latest_run.as_ref().ok_or(StoreError::Conflict)?.id.clone()])?
                     },
-                    "child_cancel"=>canonical(&cancel_turn_tx(&tx,&child.latest_run.turn.id,CancelTurnRequest{command_id:format!("cancel-{}",intent.id)})?)?,
+                    "child_cancel"=>canonical(&cancel_turn_tx(&tx,&child.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.id,CancelTurnRequest{command_id:format!("cancel-{}",intent.id)})?)?,
                     _=>return Err(StoreError::Invalid),
                 };
                 let outcome=completed(output);
-                execution::finish_tool_tx(&tx,&parent.latest_run.session_id,&turn_id,&intent,&outcome)?;
+                execution::finish_tool_tx(&tx,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.session_id,&turn_id,&intent,&outcome)?;
                 OrchestrationResult::Completed(outcome)
             };
             tx.commit().map_err(|_|StoreError::Database)?;Ok(result)
@@ -730,8 +808,8 @@ mod tests {
             .await
             .unwrap()
     }
-    fn spec(prompt: &str) -> TaskSpec {
-        TaskSpec {
+    fn spec(prompt: &str) -> SessionSpec {
+        SessionSpec {
             title: None,
             prompt: prompt.into(),
             model: "opencode-go/glm-5.3-flash".into(),
@@ -886,7 +964,9 @@ mod tests {
         c.finish_chat_turn(&receipt.turn_id, outcome(None))
             .await
             .unwrap();
-        c.submit(|db|db.execute_batch("DROP TABLE child_waits; DROP TABLE child_links; DROP TABLE admission_groups; DROP TABLE admission_clock; DROP TABLE operation_budgets; DROP TRIGGER readmission_epoch; ALTER TABLE turns DROP COLUMN admission_epoch; ALTER TABLE turns DROP COLUMN budget_exhausted; ALTER TABLE tasks DROP COLUMN root_task_id; ALTER TABLE tasks DROP COLUMN admission_batch_id; ALTER TABLE batches DROP COLUMN cancellation_requested; PRAGMA user_version=6;").map_err(|_|StoreError::Database)).await.unwrap();
+        c.submit(|db| conversations::legacy_fixture(db, 6))
+            .await
+            .unwrap();
         store.shutdown().await.unwrap();
         let store = open(data).await;
         let c = store.client();
@@ -901,7 +981,7 @@ mod tests {
         );
         assert!(task.child.is_none());
         assert!(task.spec.budget.is_none());
-        assert_eq!(task.latest_run.turn.status, "completed");
+        assert_eq!(task.latest_run.as_ref().unwrap().turn.status, "completed");
         assert_eq!(
             c.tool_invocations(&receipt.turn_id, None, 10)
                 .await

@@ -194,16 +194,12 @@ data directory, and configuration errors are actionable without revealing secret
 
 ## Step 2: domain state and durable repository
 
-**Implemented local execution subset:** schema 6 stores sessions, turns, ordered messages,
-canonical command payloads/receipts, session/project events, structured requests
-and tools, artifacts, steering, and managed workspaces through the bounded
-database worker, with tasks/run attempts, requested/effective inputs, task events,
-and frozen batches. Fresh attempt/session ownership is documented in
-[tasks and batches](tasks-batches.md).
-
-Implement session/task/run IDs and transition functions in `slop-core`. Keep
-errors and invariants domain-specific. Decide run creation/admission semantics
-and implement one-primary-task-per-session initially.
+**Implemented local execution subset:** schema 9 stores one conversation/work
+model in sessions, with execution turns, ordered messages, requested/effective
+inputs, command receipts, structured requests/tools, artifacts, steering,
+workspaces, policy, budgets, batches, and child lineage. There are no separate
+task/run/task-event records. Follow-ups and retries stay in the conversation.
+See [conversations and batches](tasks-batches.md).
 
 Extend the existing SQLite schema/migrations and bounded database worker with
 session repository operations. The selected bundled `rusqlite` binding preserves

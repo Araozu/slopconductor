@@ -62,14 +62,14 @@ pub enum TaskCommand {
         #[arg(long, default_value_t = 0)]
         after: u64,
     },
-    /// Steer the current active or paused attempt.
+    /// Send a follow-up, queue a turn, or steer the current turn.
     Send {
         id: String,
         #[arg(long, conflicts_with = "prompt_file")]
         text: Option<String>,
         #[arg(long)]
         prompt_file: Option<PathBuf>,
-        #[arg(long,value_parser=["next-boundary","immediate"],default_value="next-boundary")]
+        #[arg(long,value_parser=["after-turn","next-boundary","immediate"],default_value="after-turn")]
         delivery: String,
         #[arg(long)]
         command_id: Option<String>,

@@ -67,8 +67,8 @@ pub(super) fn usage(c: &Connection, scope: &str) -> StoreResult<BudgetUsage> {
 
 /// Count accepted dispatches, including uncertain outcomes; never refund a reservation.
 pub(super) fn reserve(tx: &Transaction<'_>, turn: &str, model: bool) -> StoreResult<bool> {
-    let mut statement = tx.prepare("WITH RECURSIVE ancestors(id) AS (SELECT task_id FROM runs WHERE turn_id=?1 UNION ALL SELECT l.parent_task_id FROM child_links l JOIN ancestors a ON a.id=l.child_task_id)
-        SELECT 'task:'||id FROM ancestors UNION SELECT 'batch:'||k.admission_batch_id FROM runs r JOIN tasks k ON k.id=r.task_id WHERE r.turn_id=?1 AND k.admission_batch_id IS NOT NULL")
+    let mut statement = tx.prepare("WITH RECURSIVE ancestors(id) AS (SELECT session_id FROM turns WHERE id=?1 UNION ALL SELECT l.parent_task_id FROM child_links l JOIN ancestors a ON a.id=l.child_task_id)
+        SELECT 'session:'||id FROM ancestors UNION SELECT 'batch:'||k.admission_batch_id FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=?1 AND k.admission_batch_id IS NOT NULL")
         .map_err(|_|StoreError::Database)?;
     let scopes = statement
         .query_map([turn], |r| r.get::<_, String>(0))
@@ -110,16 +110,16 @@ pub(super) fn prepare_groups(tx: &Transaction<'_>) -> StoreResult<()> {
     // ahead of a group already waiting. FIFO ordering is retained inside groups.
     tx.execute("UPDATE turns SET admission_epoch=(SELECT sequence FROM admission_clock WHERE singleton=1) WHERE status='queued' AND admission_epoch=-1",[]).map_err(|_|StoreError::Database)?;
     tx.execute("INSERT OR IGNORE INTO admission_groups(id,last_admission)
-        SELECT COALESCE('batch:'||k.admission_batch_id,'task:'||k.root_task_id,'session:'||t.session_id),
+        SELECT COALESCE('batch:'||k.admission_batch_id,'session:'||k.root_task_id,'session:'||t.session_id),
             (SELECT sequence FROM admission_clock WHERE singleton=1)
-        FROM turns t LEFT JOIN runs r ON r.turn_id=t.id LEFT JOIN tasks k ON k.id=r.task_id WHERE t.status='queued'",[]).map_err(|_|StoreError::Database)?;
+        FROM turns t LEFT JOIN turns r ON r.id=t.id LEFT JOIN sessions k ON k.id=r.session_id WHERE t.status='queued'",[]).map_err(|_|StoreError::Database)?;
     // A returning idle group joins with its new queue's arrival, rather than
     // reusing an old ticket to jump ahead of work already waiting.
     tx.execute("UPDATE admission_groups SET last_admission=MAX(last_admission,
-        (SELECT MIN(t.admission_epoch) FROM turns t LEFT JOIN runs r ON r.turn_id=t.id LEFT JOIN tasks k ON k.id=r.task_id
-            WHERE t.status='queued' AND COALESCE('batch:'||k.admission_batch_id,'task:'||k.root_task_id,'session:'||t.session_id)=admission_groups.id))
-        WHERE id IN(SELECT COALESCE('batch:'||k.admission_batch_id,'task:'||k.root_task_id,'session:'||t.session_id)
-            FROM turns t LEFT JOIN runs r ON r.turn_id=t.id LEFT JOIN tasks k ON k.id=r.task_id WHERE t.status='queued')",[]).map_err(|_|StoreError::Database)?;
+        (SELECT MIN(t.admission_epoch) FROM turns t LEFT JOIN turns r ON r.id=t.id LEFT JOIN sessions k ON k.id=r.session_id
+            WHERE t.status='queued' AND COALESCE('batch:'||k.admission_batch_id,'session:'||k.root_task_id,'session:'||t.session_id)=admission_groups.id))
+        WHERE id IN(SELECT COALESCE('batch:'||k.admission_batch_id,'session:'||k.root_task_id,'session:'||t.session_id)
+            FROM turns t LEFT JOIN turns r ON r.id=t.id LEFT JOIN sessions k ON k.id=r.session_id WHERE t.status='queued')",[]).map_err(|_|StoreError::Database)?;
     Ok(())
 }
 
@@ -130,7 +130,7 @@ pub(super) fn admitted(tx: &Transaction<'_>, turn: &str) -> StoreResult<()> {
     )
     .map_err(|_| StoreError::Database)?;
     tx.execute("UPDATE admission_groups SET last_admission=(SELECT sequence FROM admission_clock WHERE singleton=1)
-        WHERE id=(SELECT COALESCE('batch:'||k.admission_batch_id,'task:'||k.root_task_id,'session:'||t.session_id)
-            FROM turns t LEFT JOIN runs r ON r.turn_id=t.id LEFT JOIN tasks k ON k.id=r.task_id WHERE t.id=?1)",[turn]).map_err(|_|StoreError::Database)?;
+        WHERE id=(SELECT COALESCE('batch:'||k.admission_batch_id,'session:'||k.root_task_id,'session:'||t.session_id)
+            FROM turns t LEFT JOIN turns r ON r.id=t.id LEFT JOIN sessions k ON k.id=r.session_id WHERE t.id=?1)",[turn]).map_err(|_|StoreError::Database)?;
     Ok(())
 }

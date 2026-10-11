@@ -1,7 +1,6 @@
-//! Pure rules for attempts and bounded, deterministic matrix expansion.
+//! Pure rules for execution turns and bounded, deterministic matrix expansion.
 
 pub const MAX_MATRIX_MEMBERS: usize = 256;
-pub const MAX_ATTEMPTS: u32 = 8;
 
 pub fn retryable(status: &str) -> bool {
     matches!(

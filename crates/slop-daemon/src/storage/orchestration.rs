@@ -27,49 +27,6 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> StoreResult<()> {
     .map_err(|_| StoreError::Database)
 }
 
-fn event(
-    tx: &Transaction<'_>,
-    task: &str,
-    run: &str,
-    kind: &str,
-    status: &str,
-    source: Option<u64>,
-) -> StoreResult<u64> {
-    tx.execute(
-        "UPDATE tasks SET last_event_sequence=last_event_sequence+1 WHERE id=?1",
-        [task],
-    )
-    .map_err(|_| StoreError::Database)?;
-    tx.execute(
-        "INSERT INTO task_events(task_id,sequence,run_id,kind,status,session_event_sequence)
-        VALUES(?1,(SELECT last_event_sequence FROM tasks WHERE id=?1),?2,?3,?4,?5)",
-        rusqlite::params![task, run, kind, status, source.map(|s| s as i64)],
-    )
-    .map_err(|_| StoreError::Database)?;
-    tx.query_row(
-        "SELECT last_event_sequence FROM tasks WHERE id=?1",
-        [task],
-        |r| r.get::<_, i64>(0).map(|s| s as u64),
-    )
-    .map_err(|_| StoreError::Database)
-}
-
-pub(super) fn session_event(
-    tx: &Transaction<'_>,
-    session: &str,
-    kind: &str,
-    turn: Option<&str>,
-    source: u64,
-) -> StoreResult<()> {
-    let row: Option<(String,String,String)> = tx.query_row(
-        "SELECT r.task_id,r.id,t.status FROM runs r JOIN turns t ON t.id=r.turn_id WHERE r.session_id=?1 AND (?2 IS NULL OR r.turn_id=?2)",
-        rusqlite::params![session,turn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|StoreError::Database)?;
-    if let Some((task, run, status)) = row {
-        event(tx, &task, &run, kind, &status, Some(source))?;
-    }
-    Ok(())
-}
-
 pub(super) fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse> {
     let (task_id, attempt, retry_of, session_id, turn_id): (
         String,
@@ -79,14 +36,20 @@ pub(super) fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse>
         String,
     ) = connection
         .query_row(
-            "SELECT task_id,attempt,retry_of,session_id,turn_id FROM runs WHERE id=?1",
+            "SELECT session_id,ordinal,retry_of,session_id,id FROM turns WHERE id=?1",
             [id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()
         .map_err(|_| StoreError::Database)?
         .ok_or(StoreError::NotFound)?;
-    let session = get_session(connection, &session_id)?;
+    let workspace_id = connection
+        .query_row(
+            "SELECT managed_workspace_id FROM sessions WHERE id=?1",
+            [&session_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
     let effects_unknown: bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM tool_invocations WHERE turn_id=?1 AND (status='running' OR json_extract(outcome,'$.effects_unknown')=1)) OR EXISTS(SELECT 1 FROM managed_workspaces WHERE session_id=?2 AND effects_unknown=1)",rusqlite::params![turn_id,session_id],|r|r.get(0)).map_err(|_|StoreError::Database)?;
     Ok(RunResponse {
         id: id.into(),
@@ -94,42 +57,17 @@ pub(super) fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse>
         attempt,
         retry_of,
         session_id,
-        workspace_id: session.managed_workspace_id,
+        workspace_id,
         effects_unknown,
         turn: get_turn(connection, &turn_id)?,
     })
 }
 
-pub(super) fn task(connection: &Connection, id: &str) -> StoreResult<TaskResponse> {
-    let (owner,spec,batch,index,sequence):(String,String,Option<String>,Option<u32>,i64)=connection.query_row(
-        "SELECT owner_node_id,spec,batch_id,combination_index,last_event_sequence FROM tasks WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
-    let latest: String = connection
-        .query_row(
-            "SELECT id FROM runs WHERE task_id=?1 ORDER BY attempt DESC LIMIT 1",
-            [id],
-            |r| r.get(0),
-        )
-        .map_err(|_| StoreError::Database)?;
-    let requested: String = connection
-        .query_row("SELECT requested_spec FROM tasks WHERE id=?1", [id], |r| {
-            r.get(0)
-        })
-        .map_err(|_| StoreError::Database)?;
-    Ok(TaskResponse {
-        id: id.into(),
-        owner_node_id: owner,
-        spec: serde_json::from_str(&spec).map_err(|_| StoreError::Database)?,
-        requested_spec: serde_json::from_str(&requested).map_err(|_| StoreError::Database)?,
-        batch_id: batch,
-        combination_index: index,
-        last_event_sequence: sequence as u64,
-        latest_run: run(connection, &latest)?,
-        budget_usage: governance::usage(connection, &format!("task:{id}"))?,
-        child: children::link(connection, id)?,
-    })
+pub(super) fn task(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
+    get_session(connection, id)
 }
 
-pub(crate) fn validate_spec(spec: &TaskSpec) -> StoreResult<()> {
+pub(crate) fn validate_spec(spec: &SessionSpec) -> StoreResult<()> {
     governance::validate(spec.budget.as_ref())?;
     children::validate_policy(spec)?;
     if spec.prompt.trim().is_empty()
@@ -179,7 +117,7 @@ pub(crate) fn combinations(spec: &BatchSpec) -> StoreResult<Vec<CombinationRespo
         .into_iter()
         .enumerate()
         .map(|(index, [p, m, s])| {
-            let task = TaskSpec {
+            let task = SessionSpec {
                 title: Some(spec.name.clone()),
                 prompt: spec.prompts[p].clone(),
                 model: spec.models[m].clone(),
@@ -203,16 +141,52 @@ pub(crate) fn combinations(spec: &BatchSpec) -> StoreResult<Vec<CombinationRespo
 fn insert_run(
     tx: &Transaction<'_>,
     task_id: &str,
-    spec: &TaskSpec,
-    resolved: Option<projects::ResolvedWorkspace>,
+    spec: &SessionSpec,
+    _resolved: Option<projects::ResolvedWorkspace>,
     previous: Option<&RunResponse>,
     command: &str,
 ) -> StoreResult<TaskReceipt> {
     validate_spec(spec)?;
-    let active: i64 = tx.query_row("SELECT count(*) FROM runs r JOIN turns t ON t.id=r.turn_id WHERE t.status IN('queued','running','paused','awaiting_children')", [], |r|r.get(0)).map_err(|_|StoreError::Database)?;
-    if active >= MAX_QUEUE_GLOBAL {
-        return Err(StoreError::Limit);
-    }
+    let previous = previous.ok_or(StoreError::Invalid)?;
+    let receipt = send_message_tx(
+        tx,
+        task_id,
+        SendMessageRequest {
+            command_id: opaque_id()?,
+            text: spec.prompt.clone(),
+            model: Some(spec.model.clone()),
+            settings: Some(spec.settings.clone()),
+            ..Default::default()
+        },
+        Some(spec.settings.clone()),
+        None,
+    )?;
+    let turn_id = receipt.turn_id.ok_or(StoreError::Database)?;
+    tx.execute(
+        "UPDATE turns SET retry_of=?1 WHERE id=?2",
+        rusqlite::params![previous.id, turn_id],
+    )
+    .map_err(|_| StoreError::Database)?;
+    let (_, sequence) = append_event(tx, task_id, "run_retry_accepted", Some(&turn_id), None)?;
+    Ok(TaskReceipt {
+        command_id: command.into(),
+        task_id: task_id.into(),
+        run_id: turn_id.clone(),
+        session_id: task_id.into(),
+        turn_id,
+        event_sequence: sequence,
+    })
+}
+
+pub(super) fn insert_task(
+    tx: &Transaction<'_>,
+    spec: &SessionSpec,
+    requested: &SessionSpec,
+    resolved: Option<projects::ResolvedWorkspace>,
+    batch: Option<(&str, u32)>,
+    command: &str,
+) -> StoreResult<TaskReceipt> {
+    validate_spec(spec)?;
     let model: slop_core::provider::ProviderModelRef =
         spec.model.parse().map_err(|_| StoreError::Invalid)?;
     let session = create_session_tx(
@@ -222,88 +196,46 @@ fn insert_run(
             title: spec.title.clone(),
             provider: model.provider().as_str().into(),
             model: model.model().into(),
-            max_tokens: None,
             settings: Some(spec.settings.clone()),
-            execution: None,
             project: spec.project.clone(),
+            budget: spec.budget.clone(),
+            orchestration: spec.orchestration.clone(),
+            ..Default::default()
         },
         spec.settings.max_output_tokens,
         resolved,
     )?;
-    let turn = send_message_tx(
+    let id = session.session_id;
+    tx.execute("UPDATE sessions SET spec=?1,requested_spec=?2,batch_id=?3,combination_index=?4,admission_batch_id=?3 WHERE id=?5",
+        rusqlite::params![canonical(spec)?,canonical(requested)?,batch.map(|b|b.0),batch.map(|b|b.1),id]).map_err(|_| StoreError::Database)?;
+    let receipt = send_message_tx(
         tx,
-        &session.session_id,
+        &id,
         SendMessageRequest {
             command_id: opaque_id()?,
             text: spec.prompt.clone(),
-            settings: Some(
-                tx.query_row(
-                    "SELECT requested_spec FROM tasks WHERE id=?1",
-                    [task_id],
-                    |r| r.get::<_, String>(0),
-                )
-                .map_err(|_| StoreError::Database)
-                .and_then(|s| {
-                    serde_json::from_str::<TaskSpec>(&s)
-                        .map(|s| s.settings)
-                        .map_err(|_| StoreError::Database)
-                })?,
-            ),
+            settings: Some(requested.settings.clone()),
             ..Default::default()
         },
         Some(spec.settings.clone()),
         None,
     )?;
-    let run_id = opaque_id()?;
-    let turn_id = turn.turn_id.ok_or(StoreError::Database)?;
-    tx.execute("INSERT INTO runs(id,task_id,attempt,retry_of,session_id,turn_id) VALUES(?1,?2,?3,?4,?5,?6)",rusqlite::params![run_id,task_id,previous.map_or(1,|r|r.attempt+1),previous.map(|r|&r.id),session.session_id,turn_id]).map_err(|_|StoreError::Database)?;
-    let sequence = event(
-        tx,
-        task_id,
-        &run_id,
-        if previous.is_some() {
-            "run_retry_accepted"
-        } else {
-            "task_created"
-        },
-        "queued",
-        Some(turn.event_sequence),
-    )?;
+    let turn_id = receipt.turn_id.ok_or(StoreError::Database)?;
     Ok(TaskReceipt {
         command_id: command.into(),
-        task_id: task_id.into(),
-        run_id,
-        session_id: session.session_id,
+        task_id: id.clone(),
+        run_id: turn_id.clone(),
+        session_id: id,
         turn_id,
-        event_sequence: sequence,
+        event_sequence: receipt.event_sequence,
     })
-}
-
-pub(super) fn insert_task(
-    tx: &Transaction<'_>,
-    spec: &TaskSpec,
-    requested: &TaskSpec,
-    resolved: Option<projects::ResolvedWorkspace>,
-    batch: Option<(&str, u32)>,
-    command: &str,
-) -> StoreResult<TaskReceipt> {
-    let id = opaque_id()?;
-    tx.execute("INSERT INTO tasks(id,owner_node_id,spec,requested_spec,batch_id,combination_index,created_order) VALUES(?1,?2,?3,?4,?5,?6,(SELECT COALESCE(MAX(created_order),0)+1 FROM tasks))",
-        rusqlite::params![id,query_node(tx)?.node_id,canonical(spec)?,canonical(requested)?,batch.map(|b|b.0),batch.map(|b|b.1)]).map_err(|_|StoreError::Database)?;
-    tx.execute(
-        "UPDATE tasks SET root_task_id=id,admission_batch_id=batch_id WHERE id=?1",
-        [&id],
-    )
-    .map_err(|_| StoreError::Database)?;
-    governance::register(tx, &format!("task:{id}"), spec.budget.as_ref())?;
-    insert_run(tx, &id, spec, resolved, None, command)
 }
 
 fn retry_allowed(
     connection: &Connection,
     previous: &RunResponse,
     acknowledge: bool,
-) -> StoreResult<TaskResponse> {
+) -> StoreResult<SessionResponse> {
     let current = task(connection, &previous.task_id)?;
     children::retry_allowed(connection, &current)?;
     if let Some(batch) = &current.batch_id
@@ -311,9 +243,8 @@ fn retry_allowed(
     {
         return Err(StoreError::Conflict);
     }
-    if current.latest_run.id != previous.id
+    if current.latest_run.as_ref().ok_or(StoreError::Conflict)?.id != previous.id
         || !slop_core::orchestration::retryable(&previous.turn.status)
-        || previous.attempt >= slop_core::orchestration::MAX_ATTEMPTS
     {
         return Err(StoreError::Conflict);
     }
@@ -342,7 +273,7 @@ impl StoreClient {
             if let Some(receipt) = projects::prior(&tx,&request.command_id,&scope,&payload)? { return Ok(receipt); }
             get_batch(&tx,&id)?;
             tx.execute("UPDATE batches SET cancellation_requested=1 WHERE id=?1",[&id]).map_err(|_|StoreError::Database)?;
-            let mut stmt = tx.prepare("SELECT r.id,r.turn_id FROM runs r JOIN tasks k ON k.id=r.task_id JOIN turns t ON t.id=r.turn_id WHERE k.admission_batch_id=?1 AND t.status IN('queued','running','paused','awaiting_children') ORDER BY k.created_order,r.attempt").map_err(|_|StoreError::Database)?;
+            let mut stmt = tx.prepare("SELECT r.id,r.id FROM turns r JOIN sessions k ON k.id=r.session_id JOIN turns t ON t.id=r.id WHERE k.admission_batch_id=?1 AND t.status IN('queued','running','paused','awaiting_children') ORDER BY k.created_order,r.ordinal").map_err(|_|StoreError::Database)?;
             let rows = stmt.query_map([&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|_|StoreError::Database)?
                 .collect::<Result<Vec<_>,_>>().map_err(|_|StoreError::Database)?;
             drop(stmt);
@@ -359,43 +290,6 @@ impl StoreClient {
         }).await
     }
 
-    pub async fn task_instruction(
-        &self,
-        id: &str,
-        request: SendMessageRequest,
-    ) -> StoreResult<CommandReceipt> {
-        if !self.shared.workspace_healthy.load(Ordering::Acquire) {
-            return Err(StoreError::Unavailable);
-        }
-        let id = id.to_owned();
-        let scope = format!("task:{id}:instruction");
-        let payload = canonical(&request)?;
-        self.submit(move |c| {
-            let tx = c
-                .unchecked_transaction()
-                .map_err(|_| StoreError::Database)?;
-            if let Some(receipt) = projects::prior(&tx, &request.command_id, &scope, &payload)? {
-                return Ok(receipt);
-            }
-            if request.model.is_some()
-                || request.settings.is_some()
-                || request.delivery.unwrap_or_default() == DeliveryMode::AfterTurn
-            {
-                return Err(StoreError::Invalid);
-            }
-            let current = task(&tx, &id)?;
-            let command = request.command_id.clone();
-            let mut inner = request;
-            inner.command_id = opaque_id()?;
-            let mut receipt =
-                send_message_tx(&tx, &current.latest_run.session_id, inner, None, None)?;
-            receipt.command_id = command.clone();
-            projects::save(&tx, &command, &scope, &payload, &receipt)?;
-            tx.commit().map_err(|_| StoreError::Database)?;
-            Ok(receipt)
-        })
-        .await
-    }
     pub(super) async fn prior_job<T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
         command: &str,
@@ -446,7 +340,7 @@ impl StoreClient {
     pub async fn create_task(
         &self,
         request: CreateTaskRequest,
-        effective: Option<TaskSpec>,
+        effective: Option<SessionSpec>,
     ) -> StoreResult<TaskReceipt> {
         let payload = canonical(&request)?;
         if let Some(receipt) = self
@@ -481,7 +375,7 @@ impl StoreClient {
         .await
     }
 
-    pub async fn task(&self, id: &str) -> StoreResult<TaskResponse> {
+    pub async fn task(&self, id: &str) -> StoreResult<SessionResponse> {
         let id = id.to_owned();
         self.submit(move |c| task(c, &id)).await
     }
@@ -495,12 +389,12 @@ impl StoreClient {
         batch: Option<&str>,
         after: Option<u64>,
         limit: usize,
-    ) -> StoreResult<Page<TaskResponse>> {
+    ) -> StoreResult<Page<SessionResponse>> {
         let batch = batch.map(str::to_owned);
         let limit = page_limit(limit)?;
         self.submit(move |c| {
             if let Some(id)=&batch { get_batch(c,id)?; }
-            page(c,"SELECT id,created_order FROM tasks WHERE (?1 IS NULL OR batch_id=?1) AND created_order>?2 ORDER BY created_order LIMIT ?3",batch.as_deref(),after,limit,task)
+            page(c,"SELECT id,created_order FROM sessions WHERE (?1 IS NULL OR batch_id=?1) AND created_order>?2 ORDER BY created_order LIMIT ?3",batch.as_deref(),after,limit,task)
         }).await
     }
     pub async fn runs(
@@ -511,7 +405,7 @@ impl StoreClient {
     ) -> StoreResult<Page<RunResponse>> {
         let id = id.to_owned();
         let limit = page_limit(limit)?;
-        self.submit(move |c| {task(c,&id)?;page(c,"SELECT id,attempt FROM runs WHERE task_id=?1 AND attempt>?2 ORDER BY attempt LIMIT ?3",Some(&id),after,limit,run)}).await
+        self.submit(move |c| {task(c,&id)?;page(c,"SELECT id,ordinal FROM turns WHERE session_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3",Some(&id),after,limit,run)}).await
     }
     pub async fn task_events(
         &self,
@@ -524,8 +418,8 @@ impl StoreClient {
         self.submit(move |c| {
             let snapshot=task(c,&id)?;
             if after.unwrap_or(0)>snapshot.last_event_sequence {return Err(StoreError::Invalid);}
-            let mut stmt=c.prepare("SELECT sequence,run_id,kind,status,session_event_sequence FROM task_events WHERE task_id=?1 AND sequence>?2 ORDER BY sequence LIMIT ?3").map_err(|_|StoreError::Database)?;
-            let rows=stmt.query_map(rusqlite::params![id,after.unwrap_or(0).min(i64::MAX as u64) as i64,(limit+1) as i64],|r|Ok(TaskEventResponse{task_id:id.clone(),sequence:r.get::<_,i64>(0)? as u64,run_id:r.get(1)?,kind:r.get(2)?,status:r.get(3)?,session_event_sequence:r.get::<_,Option<i64>>(4)?.map(|s|s as u64)})).map_err(|_|StoreError::Database)?;
+            let mut stmt=c.prepare("SELECT e.sequence,e.turn_id,e.kind,COALESCE(t.status,'ready'),e.sequence FROM session_events e LEFT JOIN turns t ON t.id=e.turn_id WHERE e.session_id=?1 AND e.sequence>?2 ORDER BY e.sequence LIMIT ?3").map_err(|_|StoreError::Database)?;
+            let rows=stmt.query_map(rusqlite::params![id,after.unwrap_or(0).min(i64::MAX as u64) as i64,(limit+1) as i64],|r|Ok(TaskEventResponse{task_id:id.clone(),sequence:r.get::<_,i64>(0)? as u64,run_id:r.get::<_,Option<String>>(1)?.unwrap_or_default(),kind:r.get(2)?,status:r.get(3)?,session_event_sequence:r.get::<_,Option<i64>>(4)?.map(|s|s as u64)})).map_err(|_|StoreError::Database)?;
             let mut items=rows.collect::<Result<Vec<_>,_>>().map_err(|_|StoreError::Database)?;
             let more=items.len()>limit;items.truncate(limit);let next_after=more.then(||items.last().unwrap().sequence);Ok(Page{items,next_after})
         }).await
@@ -535,7 +429,7 @@ impl StoreClient {
         &self,
         id: &str,
         request: RetryRunRequest,
-        effective: Option<TaskSpec>,
+        effective: Option<SessionSpec>,
     ) -> StoreResult<TaskReceipt> {
         let scope = format!("run:{id}:retry");
         let payload = canonical(&request)?;
@@ -689,9 +583,9 @@ impl StoreClient {
     ) -> StoreResult<Page<BatchResultResponse>> {
         let id = id.to_owned();
         let limit = page_limit(limit)?;
-        self.submit(move |c| {get_batch(c,&id)?;page(c,"SELECT id,created_order FROM tasks WHERE batch_id=?1 AND created_order>?2 ORDER BY created_order LIMIT ?3",Some(&id),after,limit,|c,id|{
+        self.submit(move |c| {get_batch(c,&id)?;page(c,"SELECT id,created_order FROM sessions WHERE batch_id=?1 AND created_order>?2 ORDER BY created_order LIMIT ?3",Some(&id),after,limit,|c,id|{
             let task=task(c,id)?;
-            let output=task.latest_run.turn.assistant_message_id.as_deref().map(|id|message(c,id)).transpose()?;
+            let output=task.latest_run.as_ref().and_then(|r|r.turn.assistant_message_id.as_deref()).map(|id|message(c,id)).transpose()?;
             Ok(BatchResultResponse{task,output})
         })}).await
     }
@@ -700,7 +594,7 @@ impl StoreClient {
         &self,
         id: &str,
         request: RetryBatchRequest,
-        effective: Option<Vec<TaskSpec>>,
+        effective: Option<Vec<SessionSpec>>,
     ) -> StoreResult<BatchReceipt> {
         let scope = format!("batch:{id}:retry");
         let payload = canonical(&request)?;
@@ -736,7 +630,7 @@ impl StoreClient {
             for (index, spec) in request.indices.iter().zip(specs) {
                 let task_id: String = tx
                     .query_row(
-                        "SELECT id FROM tasks WHERE batch_id=?1 AND combination_index=?2",
+                        "SELECT id FROM sessions WHERE batch_id=?1 AND combination_index=?2",
                         rusqlite::params![id, index],
                         |r| r.get(0),
                     )
@@ -746,7 +640,7 @@ impl StoreClient {
                 let current = task(&tx, &task_id)?;
                 retry_allowed(
                     &tx,
-                    &current.latest_run,
+                    current.latest_run.as_ref().ok_or(StoreError::Conflict)?,
                     request.acknowledge_unknown_effects,
                 )?;
                 if current.spec != spec || spec.project != project {
@@ -757,7 +651,7 @@ impl StoreClient {
                     &task_id,
                     &spec,
                     resolved.clone(),
-                    Some(&current.latest_run),
+                    current.latest_run.as_ref(),
                     &request.command_id,
                 )?);
             }
@@ -773,12 +667,12 @@ impl StoreClient {
         .await
     }
 
-    pub async fn batch_task(&self, id: &str, index: u32) -> StoreResult<TaskResponse> {
+    pub async fn batch_task(&self, id: &str, index: u32) -> StoreResult<SessionResponse> {
         let id = id.to_owned();
         self.submit(move |c| {
             let task_id: String = c
                 .query_row(
-                    "SELECT id FROM tasks WHERE batch_id=?1 AND combination_index=?2",
+                    "SELECT id FROM sessions WHERE batch_id=?1 AND combination_index=?2",
                     rusqlite::params![id, index],
                     |r| r.get(0),
                 )
@@ -801,7 +695,7 @@ pub(super) fn get_batch(c: &Connection, id: &str) -> StoreResult<BatchResponse> 
         .optional()
         .map_err(|_| StoreError::Database)?
         .ok_or(StoreError::NotFound)?;
-    let mut stmt=c.prepare("SELECT t.status,count(*) FROM tasks k JOIN runs r ON r.task_id=k.id JOIN turns t ON t.id=r.turn_id WHERE k.batch_id=?1 AND r.attempt=(SELECT MAX(attempt) FROM runs WHERE task_id=k.id) GROUP BY t.status").map_err(|_|StoreError::Database)?;
+    let mut stmt=c.prepare("SELECT t.status,count(*) FROM sessions k JOIN turns r ON r.session_id=k.id JOIN turns t ON t.id=r.id WHERE k.batch_id=?1 AND r.ordinal=(SELECT MAX(ordinal) FROM turns WHERE session_id=k.id) GROUP BY t.status").map_err(|_|StoreError::Database)?;
     let statuses = stmt
         .query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))
         .map_err(|_| StoreError::Database)?
@@ -895,8 +789,8 @@ mod tests {
             .await
             .unwrap()
     }
-    fn spec(prompt: &str) -> TaskSpec {
-        TaskSpec {
+    fn spec(prompt: &str) -> SessionSpec {
+        SessionSpec {
             budget: None,
             orchestration: None,
             title: Some("test job".into()),
@@ -1248,7 +1142,7 @@ mod tests {
         assert!(matches!(
             client
                 .retry_run(
-                    &task.latest_run.id,
+                    &task.latest_run.as_ref().unwrap().id,
                     RetryRunRequest {
                         command_id: "closed-retry".into(),
                         acknowledge_unknown_effects: false
@@ -1289,6 +1183,170 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_conversation_queues_steers_and_survives_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = directory.path().join("data");
+        let store = open(data.clone()).await;
+        let client = store.client();
+        let request = CreateSessionRequest {
+            command_id: "conversation".into(),
+            provider: "opencode-go".into(),
+            model: "glm-5.3-flash".into(),
+            prompt: Some("first".into()),
+            budget: Some(OperationBudget {
+                max_model_requests: 4,
+                max_tool_calls: 4,
+            }),
+            ..Default::default()
+        };
+        let receipt = client.create_session(request.clone()).await.unwrap();
+        assert_eq!(
+            client.create_session(request.clone()).await.unwrap(),
+            receipt
+        );
+        let first = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(receipt.turn_id.as_deref(), Some(first.turn_id.as_str()));
+        let queue = SendMessageRequest {
+            command_id: "queue".into(),
+            text: "second".into(),
+            ..Default::default()
+        };
+        let queued = client
+            .send_message(&receipt.session_id, queue.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .send_message(&receipt.session_id, queue)
+                .await
+                .unwrap(),
+            queued
+        );
+        let third = client
+            .send_message(
+                &receipt.session_id,
+                SendMessageRequest {
+                    command_id: "queue-third".into(),
+                    text: "third".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let steered = client
+            .send_message(
+                &receipt.session_id,
+                SendMessageRequest {
+                    command_id: "steer".into(),
+                    text: "keep the interface".into(),
+                    delivery: Some(DeliveryMode::Immediate),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(steered.turn_id.as_deref(), Some(first.turn_id.as_str()));
+        assert!(client.claim_next_turn().await.unwrap().is_none());
+        assert_eq!(
+            client.sessions(None, 50).await.unwrap().items,
+            client.tasks(None, None, 50).await.unwrap().items
+        );
+        assert_eq!(
+            client.run(&first.turn_id).await.unwrap().task_id,
+            receipt.session_id
+        );
+        client.submit(|c| {
+            let old_tables: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN('tasks','runs','task_events'))", [], |r| r.get(0)).map_err(|_| StoreError::Database)?;
+            assert!(!old_tables);
+            Ok(())
+        }).await.unwrap();
+        client
+            .finish_chat_turn(&first.turn_id, outcome(ChatStatus::Completed))
+            .await
+            .unwrap();
+        let steered_work = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(steered_work.turn_id, first.turn_id);
+        assert!(
+            steered_work
+                .messages
+                .iter()
+                .any(|m| m.text == "keep the interface")
+        );
+        client
+            .finish_chat_turn(&first.turn_id, outcome(ChatStatus::Completed))
+            .await
+            .unwrap();
+        let second = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(Some(&second.turn_id), queued.turn_id.as_ref());
+        assert!(second.messages.iter().all(|m| m.text != "third"));
+        store.shutdown().await.unwrap();
+        let store = open(data).await;
+        let client = store.client();
+        assert_eq!(
+            client.turn(&second.turn_id).await.unwrap().status,
+            "interrupted"
+        );
+        let third_work = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(Some(&third_work.turn_id), third.turn_id.as_ref());
+        client
+            .finish_chat_turn(&third_work.turn_id, outcome(ChatStatus::Completed))
+            .await
+            .unwrap();
+        let followup = client
+            .send_message(
+                &receipt.session_id,
+                SendMessageRequest {
+                    command_id: "continue".into(),
+                    text: "fourth".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(followup.session_id, receipt.session_id);
+        let current = client.session(&receipt.session_id).await.unwrap();
+        assert_eq!(current.spec.budget, request.budget);
+        assert_eq!(current.budget_usage.model_requests, 0);
+        let fourth_work = client.claim_next_turn().await.unwrap().unwrap();
+        use slop_runtime::{agent::RequestIntent, chat::ChatRepository};
+        assert!(
+            client
+                .begin_request(
+                    &fourth_work.turn_id,
+                    RequestIntent {
+                        id: "fourth-request".into(),
+                        message_id: "fourth-message".into(),
+                        ordinal: 1,
+                        requested_model: "opencode-go/glm-5.3-flash".into(),
+                        requested_settings: Default::default(),
+                        settings: Default::default(),
+                    }
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            client
+                .session(&receipt.session_id)
+                .await
+                .unwrap()
+                .budget_usage
+                .model_requests,
+            1
+        );
+        assert_eq!(
+            client
+                .runs(&receipt.session_id, None, 50)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            4
+        );
+        store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn job_acceptance_steering_pause_and_resume_share_durable_turn_facts() {
         let directory = tempfile::tempdir().unwrap();
         let store = open(directory.path().join("data")).await;
@@ -1319,7 +1377,7 @@ mod tests {
             ..Default::default()
         };
         let accepted = client
-            .task_instruction(&receipt.task_id, instruction.clone())
+            .send_message(&receipt.task_id, instruction.clone())
             .await
             .unwrap();
         client
@@ -1341,7 +1399,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .task_instruction(&receipt.task_id, instruction.clone())
+                .send_message(&receipt.task_id, instruction.clone())
                 .await
                 .unwrap(),
             accepted
@@ -1364,8 +1422,20 @@ mod tests {
             .await
             .unwrap();
         let current = client.task(&receipt.task_id).await.unwrap();
-        assert_eq!(current.latest_run.turn.status, "completed");
-        assert_eq!(current.latest_run.turn.settings.max_output_tokens, Some(17));
+        assert_eq!(
+            current.latest_run.as_ref().unwrap().turn.status,
+            "completed"
+        );
+        assert_eq!(
+            current
+                .latest_run
+                .as_ref()
+                .unwrap()
+                .turn
+                .settings
+                .max_output_tokens,
+            Some(17)
+        );
         let retry = RetryRunRequest {
             command_id: "retry-success".into(),
             acknowledge_unknown_effects: false,
@@ -1376,26 +1446,37 @@ mod tests {
                 .await,
             Err(StoreError::Conflict)
         ));
-        // Attempts cannot acquire extra primary turns through the chat API.
-        assert!(matches!(
+        let followup = client
+            .send_message(
+                &receipt.session_id,
+                SendMessageRequest {
+                    command_id: "extra-turn".into(),
+                    text: "continue the work".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(followup.session_id, receipt.task_id);
+        assert_eq!(
+            client.task(&receipt.task_id).await.unwrap(),
+            client.session(&receipt.session_id).await.unwrap()
+        );
+        assert_eq!(
             client
-                .send_message(
-                    &receipt.session_id,
-                    SendMessageRequest {
-                        command_id: "extra-turn".into(),
-                        text: "another job".into(),
-                        ..Default::default()
-                    }
-                )
-                .await,
-            Err(StoreError::Conflict)
-        ));
+                .runs(&receipt.task_id, None, 50)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            2
+        );
         let events = client
             .task_events(&receipt.task_id, None, 200)
             .await
             .unwrap();
         for kind in [
-            "task_created",
+            "user_message_accepted",
             "turn_started",
             "steering_instruction_accepted",
             "turn_paused",
@@ -1409,7 +1490,11 @@ mod tests {
         }
         assert_eq!(
             events.items.last().unwrap().sequence,
-            current.last_event_sequence
+            client
+                .session(&receipt.session_id)
+                .await
+                .unwrap()
+                .last_event_sequence
         );
         let first = client.task_events(&receipt.task_id, None, 1).await.unwrap();
         assert_eq!(first.next_after, Some(1));
@@ -1431,7 +1516,10 @@ mod tests {
             .preview_batch(spec.clone(), combinations(&spec).unwrap())
             .await
             .unwrap();
-        assert!(client.tasks(None, None, 50).await.unwrap().items.is_empty());
+        assert_eq!(
+            client.tasks(None, None, 50).await.unwrap().items,
+            client.sessions(None, 50).await.unwrap().items
+        );
         let request = CreateBatchRequest {
             command_id: "matrix".into(),
             spec,
@@ -1525,12 +1613,15 @@ mod tests {
             retried
         );
         let current = client.task(&before.id).await.unwrap();
-        assert_eq!(current.latest_run.attempt, 2);
+        assert_eq!(current.latest_run.as_ref().unwrap().attempt, 2);
         assert_eq!(
-            current.latest_run.retry_of,
-            Some(before.latest_run.id.clone())
+            current.latest_run.as_ref().unwrap().retry_of,
+            Some(before.latest_run.as_ref().unwrap().id.clone())
         );
-        assert_ne!(current.latest_run.session_id, before.latest_run.session_id);
+        assert_eq!(
+            current.latest_run.as_ref().unwrap().session_id,
+            before.latest_run.as_ref().unwrap().session_id
+        );
         assert_eq!(client.task(&success.id).await.unwrap(), success);
         assert_eq!(client.batch(&batch.batch_id).await.unwrap().total, 8);
         let results = client
@@ -1562,9 +1653,18 @@ mod tests {
         let store = open(data.clone()).await;
         let client = store.client();
         let current = client.task(&receipt.task_id).await.unwrap();
-        assert_eq!(current.latest_run.turn.status, "interrupted");
         assert_eq!(
-            current.latest_run.turn.error_code.as_deref(),
+            current.latest_run.as_ref().unwrap().turn.status,
+            "interrupted"
+        );
+        assert_eq!(
+            current
+                .latest_run
+                .as_ref()
+                .unwrap()
+                .turn
+                .error_code
+                .as_deref(),
             Some("daemon_restarted")
         );
         assert!(client.claim_next_turn().await.unwrap().is_none());
@@ -1607,8 +1707,8 @@ mod tests {
         assert!(client.run(&receipt.run_id).await.unwrap().effects_unknown);
         let work = client.claim_next_turn().await.unwrap().unwrap();
         assert_eq!(work.turn_id, retried.turn_id);
-        assert_eq!(work.messages.len(), 1);
-        assert_eq!(work.messages[0].text, "work");
+        assert_eq!(work.messages.len(), 2);
+        assert!(work.messages.iter().all(|m| m.text == "work"));
         assert!(
             work.history
                 .iter()
@@ -1656,7 +1756,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = open(directory.path().join("data")).await;
         let client = store.client();
-        client.submit(|c|c.execute_batch("CREATE TRIGGER reject_job_event BEFORE INSERT ON task_events BEGIN SELECT RAISE(ABORT,'injected'); END;").map_err(|_|StoreError::Database)).await.unwrap();
+        client.submit(|c|c.execute_batch("CREATE TRIGGER reject_job_event BEFORE INSERT ON session_events BEGIN SELECT RAISE(ABORT,'injected'); END;").map_err(|_|StoreError::Database)).await.unwrap();
         let spec = batch_spec();
         let prepared = BatchPreviewResponse {
             combinations: combinations(&spec).unwrap(),
@@ -1675,8 +1775,6 @@ mod tests {
         client
             .submit(|c| {
                 for table in [
-                    "tasks",
-                    "runs",
                     "batches",
                     "sessions",
                     "turns",
@@ -1721,14 +1819,20 @@ mod tests {
         };
         let receipt = client.create_session(request.clone()).await.unwrap();
         let snapshot = client.session(&receipt.session_id).await.unwrap();
-        client.submit(|c|c.execute_batch("DROP TABLE child_waits; DROP TABLE child_links; DROP TABLE admission_groups; DROP TABLE admission_clock; DROP TABLE operation_budgets; DROP TRIGGER readmission_epoch; ALTER TABLE turns DROP COLUMN admission_epoch; ALTER TABLE turns DROP COLUMN budget_exhausted; DROP TABLE task_events; DROP TABLE runs; DROP TABLE tasks; DROP TABLE batches; PRAGMA user_version=5;").map_err(|_|StoreError::Database)).await.unwrap();
+        client
+            .submit(|c| conversations::legacy_fixture(c, 5))
+            .await
+            .unwrap();
         store.shutdown().await.unwrap();
         let store = open(data).await;
         let client = store.client();
         assert_eq!(client.node().await.unwrap(), node);
         assert_eq!(client.session(&receipt.session_id).await.unwrap(), snapshot);
         assert_eq!(client.create_session(request).await.unwrap(), receipt);
-        assert!(client.tasks(None, None, 50).await.unwrap().items.is_empty());
+        assert_eq!(
+            client.tasks(None, None, 50).await.unwrap().items,
+            client.sessions(None, 50).await.unwrap().items
+        );
         create(&client, "new-six", "job after upgrade").await;
         store.shutdown().await.unwrap();
     }

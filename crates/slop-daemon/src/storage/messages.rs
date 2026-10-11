@@ -109,16 +109,6 @@ pub(super) fn send_message_tx(
             return Ok(receipt);
         }
     }
-    if tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=?1)",
-            [session_id],
-            |r| r.get::<_, bool>(0),
-        )
-        .map_err(|_| StoreError::Database)?
-    {
-        return Err(StoreError::Conflict);
-    }
     if let Some((code, message)) = idle_failure {
         return Err(StoreError::Preflight(code, message));
     }
@@ -168,6 +158,21 @@ pub(super) fn send_message_tx(
             canonical(&request.settings.clone().unwrap_or_default())?,
             turn_id
         ],
+    )
+    .map_err(|_| StoreError::Database)?;
+    let mut spec = session.spec;
+    let mut requested = session.requested_spec;
+    if session.latest_run.is_some() || spec.prompt.is_empty() {
+        spec.prompt = request.text.clone();
+        requested.prompt = request.text.clone();
+    }
+    spec.model = requested_model.clone();
+    spec.settings = settings;
+    requested.model = requested_model;
+    requested.settings = request.settings.clone().unwrap_or_default();
+    tx.execute(
+        "UPDATE sessions SET spec=?1,requested_spec=?2 WHERE id=?3",
+        rusqlite::params![canonical(&spec)?, canonical(&requested)?, session_id],
     )
     .map_err(|_| StoreError::Database)?;
     tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'user',?5,'completed')",rusqlite::params![message_id,session_id,turn_id,user_order,request.text]).map_err(|_|StoreError::Database)?;

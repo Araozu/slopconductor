@@ -1,4 +1,4 @@
-use super::TaskSpec;
+use super::SessionSpec;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -7,5 +7,5 @@ pub struct CombinationResponse {
     pub prompt_index: u32,
     pub model_index: u32,
     pub settings_index: u32,
-    pub spec: TaskSpec,
+    pub spec: SessionSpec,
 }

@@ -6,7 +6,7 @@ impl DaemonClient {
         &self,
         request: &CreateTaskRequest,
     ) -> Result<TaskReceipt, ClientError> {
-        self.require_feature("tasks-runs").await?;
+        self.require_feature("persistent-conversations").await?;
         if request.spec.orchestration.is_some() {
             self.require_feature("child-tasks").await?;
         }
@@ -16,7 +16,7 @@ impl DaemonClient {
         self.post_json(self.endpoint.join("/v1/tasks")?, request)
             .await
     }
-    pub async fn task(&self, id: &str) -> Result<TaskResponse, ClientError> {
+    pub async fn task(&self, id: &str) -> Result<SessionResponse, ClientError> {
         self.get_json(id_url(&self.endpoint, "/v1/tasks", id, None)?)
             .await
     }
@@ -28,7 +28,7 @@ impl DaemonClient {
         &self,
         after: Option<u64>,
         limit: Option<u32>,
-    ) -> Result<Page<TaskResponse>, ClientError> {
+    ) -> Result<Page<SessionResponse>, ClientError> {
         let mut url = self.endpoint.join("/v1/tasks")?;
         append_page_query(&mut url, after, limit);
         self.get_json(url).await
@@ -62,7 +62,7 @@ impl DaemonClient {
         if !matches!(action, "pause" | "resume" | "cancel") {
             return Err(ClientError::InvalidIdentifier);
         }
-        self.require_feature("tasks-runs").await?;
+        self.require_feature("persistent-conversations").await?;
         self.post_json(
             id_url(&self.endpoint, "/v1/runs", id, Some(action))?,
             request,
@@ -74,7 +74,7 @@ impl DaemonClient {
         id: &str,
         request: &RetryRunRequest,
     ) -> Result<TaskReceipt, ClientError> {
-        self.require_feature("tasks-runs").await?;
+        self.require_feature("persistent-conversations").await?;
         self.post_json(
             id_url(&self.endpoint, "/v1/runs", id, Some("retry"))?,
             request,
@@ -151,7 +151,7 @@ impl DaemonClient {
         id: &str,
         after: Option<u64>,
         limit: Option<u32>,
-    ) -> Result<Page<TaskResponse>, ClientError> {
+    ) -> Result<Page<SessionResponse>, ClientError> {
         let mut url = id_url(&self.endpoint, "/v1/batches", id, Some("members"))?;
         append_page_query(&mut url, after, limit);
         self.get_json(url).await
@@ -198,7 +198,7 @@ impl DaemonClient {
         id: &str,
         after: Option<u64>,
         limit: Option<u32>,
-    ) -> Result<Page<TaskResponse>, ClientError> {
+    ) -> Result<Page<SessionResponse>, ClientError> {
         let mut url = id_url(&self.endpoint, "/v1/runs", id, Some("children"))?;
         append_page_query(&mut url, after, limit);
         self.get_json(url).await
@@ -224,11 +224,6 @@ impl DaemonClient {
         id: &str,
         request: &SendMessageRequest,
     ) -> Result<CommandReceipt, ClientError> {
-        self.require_feature("tasks-runs").await?;
-        self.post_json(
-            id_url(&self.endpoint, "/v1/tasks", id, Some("instructions"))?,
-            request,
-        )
-        .await
+        self.send_message(id, request).await
     }
 }
