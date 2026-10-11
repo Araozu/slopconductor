@@ -172,8 +172,8 @@ interrupted without reissuing inference, and leaves undispatched queued turns
 eligible for admission. Paused turns remain paused; accepted steering attached
 to a crashed running turn is rejected with a durable event. Unfinished tools receive paired failure records with
 uncertain effects when started; completed steps are preserved and no operation
-is replayed. Task events commit alongside these facts. Explicit retry creates
-a new attempt/session/workspace while retaining prior outcomes. Batch members
+is replayed. Task events commit alongside these facts. Explicit retry adds
+a new turn in the same conversation and workspace while retaining prior outcomes. Batch members
 remain queued until admitted under both global and batch caps. Handoff recovery
 remains planned.
 A future durable outbox for peer replication contains committed

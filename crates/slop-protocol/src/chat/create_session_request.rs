@@ -15,6 +15,9 @@ pub struct CreateSessionRequest {
     pub project: Option<crate::projects::ProjectWorkspaceRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Consume a saved compose draft atomically with session acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<crate::orchestration::OperationBudget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

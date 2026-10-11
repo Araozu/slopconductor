@@ -23,4 +23,6 @@ pub struct SessionResponse {
     pub latest_run: Option<crate::orchestration::RunResponse>,
     pub budget_usage: crate::orchestration::BudgetUsage,
     pub child: Option<crate::orchestration::ChildLink>,
+    #[serde(default)]
+    pub inbox: Option<super::SessionInbox>,
 }

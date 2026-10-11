@@ -33,6 +33,10 @@ pub(super) fn create_session_tx(
             .max_tokens
             .is_some_and(|tokens| tokens == 0 || tokens > 65_536)
         || default_max_tokens.is_some_and(|tokens| tokens == 0 || tokens > 65_536)
+        || request
+            .draft_id
+            .as_ref()
+            .is_some_and(|id| !valid_command_id(id) || request.prompt.is_none())
     {
         return Err(StoreError::Invalid);
     }
@@ -181,6 +185,10 @@ pub(super) fn create_session_tx(
         );
     }
     commit_command(tx, &request.command_id, scope, &payload, &receipt)?;
+    if let Some(id) = request.draft_id {
+        tx.execute("DELETE FROM conversation_drafts WHERE id=?1", [id])
+            .map_err(|_| StoreError::Database)?;
+    }
     Ok(receipt)
 }
 
@@ -205,11 +213,12 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
         latest_run: None,
         budget_usage: Default::default(),
         child: None,
+        inbox: execution::optional_json_column(row, 15)?,
     })
 }
 
 pub(super) fn get_session(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
-    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index FROM sessions WHERE id=?1",[id],session_from_row)
+    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox FROM sessions WHERE id=?1",[id],session_from_row)
         .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
     enrich(connection, session)
 }
@@ -220,7 +229,7 @@ pub(super) fn list_sessions(
     limit: usize,
 ) -> StoreResult<Page<SessionResponse>> {
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
+    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
         .map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![after, (limit + 1) as i64])
@@ -235,7 +244,7 @@ pub(super) fn list_sessions(
             connection,
             session_from_row(row).map_err(|_| StoreError::Database)?,
         )?;
-        next_after = Some(row.get::<_, i64>(15).map_err(|_| StoreError::Database)? as u64);
+        next_after = Some(row.get::<_, i64>(16).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     let has_more = items.len() == limit

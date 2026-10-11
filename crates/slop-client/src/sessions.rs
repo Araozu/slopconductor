@@ -1,6 +1,19 @@
 use super::*;
 
 impl DaemonClient {
+    pub async fn update_session_inbox(
+        &self,
+        session_id: &str,
+        request: &UpdateSessionInboxRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("durable-inbox").await?;
+        self.post_json(
+            session_url(&self.endpoint, session_id, Some("inbox"))?,
+            request,
+        )
+        .await
+    }
+
     pub async fn create_session(
         &self,
         request: &CreateSessionRequest,

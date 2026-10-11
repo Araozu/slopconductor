@@ -1,5 +1,10 @@
 //! Durable text-chat DTOs, split by wire type.
 
+mod inbox;
+pub use inbox::{
+    ConversationDraft, SaveConversationDraftRequest, SessionInbox, UpdateSessionInboxRequest,
+};
+
 mod session_response;
 pub use session_response::SessionResponse;
 mod create_session_request;

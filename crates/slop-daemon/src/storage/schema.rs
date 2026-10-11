@@ -86,6 +86,9 @@ where
         if existing_version < 9 {
             conversations::migrate(&tx)?;
         }
+        if existing_version < 10 {
+            inbox::migrate(&tx)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

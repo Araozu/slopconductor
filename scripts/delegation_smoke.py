@@ -266,7 +266,8 @@ def check_delegation(daemon_binary, cli_binary, root):
         retried = cli("run", "retry", child["latest_run"]["id"], "--command-id", "inspected-child-retry", "--acknowledge-unknown-effects")
         wait_turn(endpoint, token, retried["turn_id"], {"completed"})
         fresh = cli("task", "show", child["id"])["latest_run"]
-        assert fresh["workspace_id"] != child["latest_run"]["workspace_id"]
+        assert fresh["workspace_id"] == child["latest_run"]["workspace_id"]
+        assert fresh["session_id"] == child["latest_run"]["session_id"]
         assert marker.read_text() == "1\n"
         assert cli("batch", "cancel", batch["batch_id"], "--command-id", "cancel-held") == cancelled
     finally:

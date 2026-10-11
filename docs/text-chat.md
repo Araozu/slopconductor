@@ -21,6 +21,23 @@ separate durable command. Each session has one authoritative node and at most
 one admitted turn at a time. Queued turns acquire provider resources only when
 admitted; all sessions share the daemon's Tokio runtime and provider client.
 
+The `durable-inbox` capability adds shared stars, Archive, Trash, and monotonic
+read watermarks to session snapshots. `/v1/sessions/{id}/inbox` accepts a patch
+with a command ID and commits state, an event, and the receipt together. Trash
+is restorable retention, separate from cancellation and permanent deletion.
+Organization events do not make an already-read conversation unread.
+`only_if_unset` imports legacy browser state without replacing existing daemon
+state. Schema 10 adds nullable inbox state and daemon-owned compose drafts while
+preserving conversation history and old command receipts.
+
+`GET /v1/drafts` pages saved drafts; `PUT /v1/drafts/{id}` stores a bounded draft
+and `DELETE` removes it. `only_if_absent` on a draft save preserves a newer
+daemon copy during import. An optional `draft_id` on session creation consumes
+that saved draft in the same transaction that accepts the initial prompt. A
+rejected creation preserves it; retrying the command returns the original
+receipt without creating another conversation. Clearing browser site data
+cannot restore trashed conversations or remove daemon-saved drafts.
+
 SQLite remains in the existing XDG data directory on Linux, or local application
 data on Windows. The same private directory, exclusive lock, bounded database
 worker, WAL mode, FULL synchronization, and startup schema checks apply. There

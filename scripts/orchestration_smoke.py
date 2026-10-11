@@ -188,7 +188,8 @@ def check_orchestration(daemon_binary, cli_binary, root):
         wait_turn(endpoint, token, retried["members"][0]["turn_id"], {"completed"})
         current = cli("task", "show", members[0]["id"])
         assert current["latest_run"]["attempt"] == 2
-        assert current["latest_run"]["workspace_id"] != members[0]["latest_run"]["workspace_id"]
+        assert current["latest_run"]["workspace_id"] == members[0]["latest_run"]["workspace_id"]
+        assert current["latest_run"]["session_id"] == members[0]["latest_run"]["session_id"]
         assert current["latest_run"]["retry_of"] == members[0]["latest_run"]["id"]
         assert len(cli("task", "runs", current["id"])["items"]) == 2
         assert cli("batch", "show", batch_id)["statuses"] == {"completed": 8}
@@ -249,7 +250,7 @@ def check_orchestration(daemon_binary, cli_binary, root):
         wait_turn(endpoint, token, retried_held["turn_id"], {"completed"})
         new_task = cli("task", "show", held["task_id"])
         new_workspace = api(f"/v1/workspaces/{new_task['latest_run']['workspace_id']}")
-        assert Path(new_workspace["path"]) != old_path
+        assert Path(new_workspace["path"]) == old_path
         assert (old_path / "attempt-log.txt").read_text(encoding="utf-8") == "started\n"
         assert (Path(new_workspace["path"]) / "attempt-log.txt").read_text(encoding="utf-8") == "started\n"
         events = cli("task", "events", held["task_id"])["items"]

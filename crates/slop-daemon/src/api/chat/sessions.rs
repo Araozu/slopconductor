@@ -1,5 +1,39 @@
 use super::*;
 
+pub(super) async fn update_session_inbox(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<slop_protocol::chat::UpdateSessionInboxRequest>,
+) -> Response {
+    accepted(state.store.update_session_inbox(&id, request).await)
+}
+
+pub(super) async fn drafts(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PageQuery>,
+) -> Response {
+    let limit = match checked_limit(query.limit) {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    storage_response(state.store.drafts(query.after, limit).await)
+}
+
+pub(super) async fn save_draft(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<slop_protocol::chat::SaveConversationDraftRequest>,
+) -> Response {
+    storage_response(state.store.save_draft(&id, request).await)
+}
+
+pub(super) async fn remove_draft(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    storage_response(state.store.remove_draft(&id).await)
+}
+
 pub(super) async fn sessions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PageQuery>,

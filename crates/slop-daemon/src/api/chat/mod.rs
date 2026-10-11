@@ -41,6 +41,15 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/sessions", get(sessions).post(create_session))
         .route("/v1/sessions/{session_id}", get(session))
         .route(
+            "/v1/sessions/{session_id}/inbox",
+            post(update_session_inbox),
+        )
+        .route("/v1/drafts", get(drafts))
+        .route(
+            "/v1/drafts/{id}",
+            axum::routing::put(save_draft).delete(remove_draft),
+        )
+        .route(
             "/v1/sessions/{session_id}/messages",
             get(messages).post(send_message),
         )

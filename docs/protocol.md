@@ -131,6 +131,9 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/workspaces | Inspect active worktree and exclusive workspace reservations |
 | GET, POST /v1/sessions | Implemented: list/create persistent conversations; optional prompt and policy are accepted atomically |
 | GET /v1/sessions/{id} | Implemented: snapshot with revision and event watermark |
+| POST /v1/sessions/{id}/inbox | Implemented: idempotent durable patch of stars, Archive, Trash, and read watermark; does not cancel or purge work |
+| GET /v1/drafts | Implemented: paginated daemon-owned compose drafts |
+| PUT, DELETE /v1/drafts/{id} | Implemented: save or remove a compose draft; writes commit before acknowledgement |
 | GET /v1/sessions/{id}/messages | Implemented: paginated durable conversation |
 | POST /v1/sessions/{id}/messages | Implemented: accept a message with optional model/settings and `after-turn`, `next-boundary`, or `immediate` delivery |
 | GET /v1/sessions/{id}/instructions | Implemented: query durable steering status/history |

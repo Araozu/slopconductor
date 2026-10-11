@@ -30,6 +30,235 @@ fn create_request(command_id: &str, title: Option<&str>) -> CreateSessionRequest
     }
 }
 
+#[tokio::test]
+async fn inbox_changes_are_durable_idempotent_and_do_not_cancel_work() {
+    use slop_protocol::chat::UpdateSessionInboxRequest;
+    let dir = TempDir::new().unwrap();
+    let store = open_test(&dir, None).await;
+    let client = store.client();
+    let mut create = create_request("inbox-create", Some("Inbox regression"));
+    create.prompt = Some("Queued work must survive trash".into());
+    let created = client.create_session(create).await.unwrap();
+    let id = &created.session_id;
+    let session = client.session(id).await.unwrap();
+    assert!(session.inbox.is_none());
+    let request = UpdateSessionInboxRequest {
+        command_id: "inbox-trash".into(),
+        starred: Some(true),
+        trashed: Some(true),
+        read_sequence: Some(session.last_event_sequence),
+        ..Default::default()
+    };
+    let receipt = client
+        .update_session_inbox(id, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .update_session_inbox(id, request.clone())
+            .await
+            .unwrap(),
+        receipt
+    );
+    let state = client.session(id).await.unwrap();
+    assert!(state.inbox.as_ref().unwrap().trashed);
+    assert_eq!(
+        state.inbox.as_ref().unwrap().read_sequence,
+        state.last_event_sequence
+    );
+    assert_eq!(
+        client
+            .turn(created.turn_id.as_ref().unwrap())
+            .await
+            .unwrap()
+            .status,
+        "queued"
+    );
+    let mut conflict = request;
+    conflict.trashed = Some(false);
+    assert!(matches!(
+        client.update_session_inbox(id, conflict).await,
+        Err(StoreError::Conflict)
+    ));
+    assert!(matches!(
+        client
+            .update_session_inbox(
+                id,
+                UpdateSessionInboxRequest {
+                    command_id: "inbox-future-read".into(),
+                    read_sequence: Some(state.last_event_sequence + 1),
+                    ..Default::default()
+                }
+            )
+            .await,
+        Err(StoreError::Invalid)
+    ));
+    client
+        .update_session_inbox(
+            id,
+            UpdateSessionInboxRequest {
+                command_id: "inbox-stale-import".into(),
+                starred: Some(false),
+                trashed: Some(false),
+                only_if_unset: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(client.session(id).await.unwrap().inbox.unwrap().trashed);
+    store.shutdown().await.unwrap();
+    let reopened = open_test(&dir, None).await;
+    let client = reopened.client();
+    let state = client
+        .sessions(None, 10)
+        .await
+        .unwrap()
+        .items
+        .pop()
+        .unwrap();
+    assert!(state.inbox.unwrap().starred);
+    client
+        .update_session_inbox(
+            id,
+            UpdateSessionInboxRequest {
+                command_id: "inbox-restore".into(),
+                archived: Some(false),
+                trashed: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .update_session_inbox(
+            id,
+            UpdateSessionInboxRequest {
+                command_id: "inbox-archive".into(),
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let state = client.session(id).await.unwrap();
+    let inbox = state.inbox.unwrap();
+    assert!(!inbox.trashed && inbox.archived && inbox.starred);
+    assert_eq!(inbox.read_sequence, state.last_event_sequence);
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn schema_nine_upgrade_preserves_conversations_history_and_receipts() {
+    let dir = TempDir::new().unwrap();
+    let store = open_test(&dir, None).await;
+    let client = store.client();
+    let mut request = create_request("schema-nine-chat", Some("Existing conversation"));
+    request.prompt = Some("Preserved history".into());
+    let receipt = client.create_session(request.clone()).await.unwrap();
+    let before = client.session(&receipt.session_id).await.unwrap();
+    let history = client
+        .messages(&receipt.session_id, None, 10)
+        .await
+        .unwrap();
+    store.shutdown().await.unwrap();
+    let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    connection.execute_batch("ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; PRAGMA user_version=9;").unwrap();
+    drop(connection);
+    let reopened = open_test(&dir, None).await;
+    let client = reopened.client();
+    assert_eq!(client.session(&receipt.session_id).await.unwrap(), before);
+    assert_eq!(
+        client
+            .messages(&receipt.session_id, None, 10)
+            .await
+            .unwrap(),
+        history
+    );
+    assert_eq!(client.create_session(request).await.unwrap(), receipt);
+    assert!(client.drafts(None, 10).await.unwrap().items.is_empty());
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn drafts_survive_restart_and_are_consumed_atomically_with_a_send() {
+    use slop_protocol::chat::{ConversationDraft, SaveConversationDraftRequest};
+    let dir = TempDir::new().unwrap();
+    let store = open_test(&dir, None).await;
+    let client = store.client();
+    let draft = ConversationDraft {
+        id: "draft-one".into(),
+        text: "Saved instructions".into(),
+        ..Default::default()
+    };
+    client
+        .save_draft(
+            &draft.id,
+            SaveConversationDraftRequest {
+                draft: draft.clone(),
+                only_if_absent: false,
+            },
+        )
+        .await
+        .unwrap();
+    let stale = ConversationDraft {
+        text: "Stale browser copy".into(),
+        ..draft.clone()
+    };
+    assert_eq!(
+        client
+            .save_draft(
+                &draft.id,
+                SaveConversationDraftRequest {
+                    draft: stale,
+                    only_if_absent: true
+                }
+            )
+            .await
+            .unwrap(),
+        draft
+    );
+    let invalid = ConversationDraft {
+        text: "x".repeat(MAX_MESSAGE_BYTES + 1),
+        ..draft.clone()
+    };
+    assert!(matches!(
+        client
+            .save_draft(
+                &draft.id,
+                SaveConversationDraftRequest {
+                    draft: invalid,
+                    only_if_absent: false
+                }
+            )
+            .await,
+        Err(StoreError::Invalid)
+    ));
+    store.shutdown().await.unwrap();
+    let reopened = open_test(&dir, None).await;
+    let client = reopened.client();
+    assert_eq!(
+        client.drafts(None, 10).await.unwrap().items,
+        vec![draft.clone()]
+    );
+    let mut create = create_request("draft-send", None);
+    create.draft_id = Some(draft.id.clone());
+    create.prompt = Some("".into());
+    assert!(client.create_session(create.clone()).await.is_err());
+    assert_eq!(
+        client.drafts(None, 10).await.unwrap().items,
+        vec![draft.clone()]
+    );
+    create.prompt = Some(draft.text.clone());
+    let accepted = client.create_session(create.clone()).await.unwrap();
+    assert!(client.drafts(None, 10).await.unwrap().items.is_empty());
+    assert_eq!(client.create_session(create).await.unwrap(), accepted);
+    assert_eq!(client.sessions(None, 10).await.unwrap().items.len(), 1);
+    client.remove_draft(&draft.id).await.unwrap();
+    client.remove_draft(&draft.id).await.unwrap();
+    reopened.shutdown().await.unwrap();
+}
+
 #[test]
 fn provider_defaults_preserve_settings_object_omission_and_subscription_no_cap() {
     let mut go = create_request("go-default", None);
