@@ -36,6 +36,64 @@ matrices with preview, selective retry, and result export are implemented; see
 [tasks and batches](tasks-batches.md). Bounded [native children](child-tasks.md)
 are implemented; peer control remains planned.
 
+## Current source organization
+
+The public crate paths remain stable; the following files separate the main
+domain records and subsystem implementations behind their existing facades:
+
+```text
+crates/slop-core/src/provider/
+  identity_error.rs
+  model_ref.rs
+  provider_id.rs
+
+crates/slop-protocol/src/
+  chat/                 # one wire DTO per file
+  execution/            # one wire DTO per file
+  orchestration/        # one wire DTO per file
+  projects/             # one wire DTO per file
+  providers/            # one wire DTO per file
+
+crates/slop-client/src/
+  error.rs
+  execution.rs
+  orchestration.rs
+  projects.rs
+  providers.rs
+  sessions.rs
+  streams.rs
+  transport.rs
+  turns.rs
+  urls.rs
+
+crates/slop-daemon/src/
+  api/chat/              # chat routes and handlers
+  config/                # config records, environment, and loading
+  credentials/           # credential loading and provider login flows
+  storage/               # schema, lifecycle, and repository operations
+
+crates/slop-runtime/src/
+  agent/                 # request, tool, and completion records
+  chat/                  # repository interface and turn records
+  git/                   # Git records and bounded service
+  providers/chatgpt_auth/
+  providers/codex/        # Codex provider and client
+  providers/inference/    # one inference record per file
+  providers/opencode/     # HTTP, decoding, SSE framing, and stream folding
+  providers/structured_wire/
+  tools/                 # policy, outcomes, arguments, and dispatch
+
+crates/slop-cli/src/args/
+  command.rs
+  chat.rs
+  options.rs
+  *.rs                   # command groups and nested task/run/batch grammar
+```
+
+The crate-root modules and their subsystem `mod.rs` files re-export the prior
+paths. These changes only reorganize implementation files; they do not change
+the public wire contract or daemon/client ownership boundaries.
+
 ## Suggested module growth
 
 Add modules as behavior arrives, rather than empty trees for every hypothetical
@@ -97,8 +155,9 @@ crates/slop-cli/src/      # implemented CLI organization
 ```
 
 The CLI layout above is implemented; the other layouts are proposals, not lists
-of existing files. Introduce a separate store/provider crate when build isolation
-or reuse justifies the boundary.
+of existing files. The current file organization is listed above. Introduce a
+separate store/provider crate when build isolation or reuse justifies the
+boundary.
 
 To add a CLI command group, define its grammar in `args.rs`, add a handler module
 under `commands/`, and register it in `commands/mod.rs`. Handlers use the shared

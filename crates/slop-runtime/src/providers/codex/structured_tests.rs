@@ -1,8 +1,14 @@
+use std::sync::Arc;
+
+use slop_core::provider::ProviderId;
+
 use super::*;
+use crate::providers::{ProviderClient, ProviderError, WireProtocol};
 use crate::providers::{
     chatgpt_auth::fixture_connection,
     inference::{
-        BlockContent, ContentBlock, FinishReason, GenerationSettings, InferenceMessage, MessageRole,
+        BlockContent, ContentBlock, FinishReason, GenerationSettings, InferenceMessage,
+        InferenceRequest, MessageRole, ProviderEvent,
     },
     test_http::{Reply, Server},
 };

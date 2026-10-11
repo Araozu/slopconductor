@@ -1,0 +1,184 @@
+use super::*;
+
+impl slop_runtime::chat::ChatRepository for StoreClient {
+    fn orchestration_tool<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: &'a slop_runtime::agent::ToolIntent,
+    ) -> slop_runtime::chat::RepoFuture<'a, slop_runtime::orchestration::OrchestrationResult> {
+        Box::pin(async move {
+            match self.native_orchestration(turn_id, intent).await {
+                Ok(result) => Ok(result),
+                Err(error) => {
+                    let code = match error {
+                        StoreError::Invalid => "invalid_arguments",
+                        StoreError::NotFound => "child_not_found",
+                        StoreError::Conflict => "child_state_conflict",
+                        StoreError::Limit => "child_limit",
+                        StoreError::Unsupported(_) => "child_not_allowed",
+                        _ => return Err(Box::new(error) as slop_runtime::chat::RepoError),
+                    };
+                    Ok(slop_runtime::orchestration::OrchestrationResult::Completed(
+                        slop_runtime::tools::ToolOutcome::failed(code, false),
+                    ))
+                }
+            }
+        })
+    }
+    fn prepare_workspace<'a>(
+        &'a self,
+        turn_id: &'a str,
+        shutdown: &'a mut tokio::sync::watch::Receiver<bool>,
+    ) -> slop_runtime::chat::RepoFuture<'a, Option<(&'static str, &'static str)>> {
+        Box::pin(async move {
+            self.prepare_workspace(turn_id, shutdown)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn begin_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: slop_runtime::agent::RequestIntent,
+    ) -> slop_runtime::chat::RepoFuture<'a, bool> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            self.submit(move |c| execution::begin_request(c, &turn, intent))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn checkpoint_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        request_id: &'a str,
+        message: slop_runtime::providers::inference::InferenceMessage,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let request = request_id.to_owned();
+            self.submit(move |c| execution::checkpoint_request(c, &turn, &request, message))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn complete_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        completion: slop_runtime::agent::RequestCompletion,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            self.submit(move |c| execution::complete_request(c, &turn, completion))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn fail_request<'a>(
+        &'a self,
+        turn_id: &'a str,
+        request_id: &'a str,
+        code: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let request = request_id.to_owned();
+            let code = code.to_owned();
+            self.submit(move |c| execution::fail_request(c, &turn, &request, &code))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn start_tool<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: &'a slop_runtime::agent::ToolIntent,
+    ) -> slop_runtime::chat::RepoFuture<'a, bool> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let intent = intent.clone();
+            self.submit(move |c| execution::start_tool(c, &turn, &intent))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn finish_tool<'a>(
+        &'a self,
+        turn_id: &'a str,
+        intent: &'a slop_runtime::agent::ToolIntent,
+        outcome: slop_runtime::tools::ToolOutcome,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            let turn = turn_id.to_owned();
+            let intent = intent.clone();
+            self.submit(move |c| execution::finish_tool(c, &turn, &intent, outcome))
+                .await
+                .map_err(|e| Box::new(e) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn claim_next(
+        &self,
+    ) -> slop_runtime::chat::RepoFuture<'_, Option<slop_runtime::chat::TurnWork>> {
+        Box::pin(async move {
+            if !self.shared.workspace_healthy.load(Ordering::Acquire) {
+                return Err(Box::new(StoreError::Unavailable) as slop_runtime::chat::RepoError);
+            }
+            self.claim_next_turn()
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn checkpoint_visible<'a>(
+        &'a self,
+        turn_id: &'a str,
+        text: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            self.checkpoint_visible(turn_id, text)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn finish_turn<'a>(
+        &'a self,
+        turn_id: &'a str,
+        outcome: slop_runtime::chat::ChatOutcome,
+    ) -> slop_runtime::chat::RepoFuture<'a, ()> {
+        Box::pin(async move {
+            self.finish_chat_turn(turn_id, outcome)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn cancellation_requested<'a>(
+        &'a self,
+        turn_id: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, bool> {
+        Box::pin(async move {
+            self.turn_cancellation_requested(turn_id)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+    fn turn_control<'a>(
+        &'a self,
+        turn_id: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, slop_runtime::chat::TurnControl> {
+        Box::pin(async move {
+            self.turn_control(turn_id)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+
+    fn retain_provider_snapshot<'a>(
+        &'a self,
+        turn_id: &'a str,
+    ) -> slop_runtime::chat::RepoFuture<'a, bool> {
+        Box::pin(async move {
+            self.retain_provider_snapshot(turn_id)
+                .await
+                .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
+}

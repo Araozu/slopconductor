@@ -1,12 +1,18 @@
 //! Serialized, daemon-owned inference/tool steps within one accepted user turn.
+mod request_completion;
+mod request_intent;
+mod tool_intent;
+
+pub use request_completion::RequestCompletion;
+pub use request_intent::RequestIntent;
+pub use tool_intent::ToolIntent;
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use slop_core::provider::ProviderModelRef;
 
 use crate::{
@@ -17,34 +23,6 @@ use crate::{
     providers::{ProviderClient, Usage, UsageSource, inference::*},
     tools::{ToolOutcome, ToolService},
 };
-
-#[derive(Debug, Clone)]
-pub struct RequestIntent {
-    pub id: String,
-    pub message_id: String,
-    pub ordinal: u32,
-    pub requested_model: String,
-    pub requested_settings: GenerationSettings,
-    pub settings: GenerationSettings,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolIntent {
-    pub id: String,
-    pub request_id: String,
-    pub result_message_id: String,
-    pub call_id: String,
-    pub provider_call_id: String,
-    pub name: String,
-    pub arguments: Value,
-}
-
-#[derive(Debug, Clone)]
-pub struct RequestCompletion {
-    pub request_id: String,
-    pub response: InferenceResponse,
-    pub tools: Vec<ToolIntent>,
-}
 
 pub fn new_id() -> std::io::Result<String> {
     let mut bytes = [0u8; 16];

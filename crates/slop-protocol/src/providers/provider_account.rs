@@ -1,0 +1,8 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderAccount {
+    pub id: String,
+    pub active: bool,
+    pub authenticated: bool,
+}

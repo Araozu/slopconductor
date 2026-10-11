@@ -11,7 +11,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 
 use super::*;
 use crate::providers::{
-    ChatMessage, opencode_go::OpencodeGoClient, opencode_zen::OpencodeZenClient,
+    ChatMessage, Role, opencode_go::OpencodeGoClient, opencode_zen::OpencodeZenClient,
 };
 
 const KEY: &str = "synthetic-header-secret";

@@ -3,11 +3,26 @@
 //! The supervisor claims durable turns lazily and runs inference on the shared
 //! Tokio runtime. A request connection never owns or waits for execution.
 
+mod chat_delta;
+mod chat_outcome;
+mod chat_status;
+mod context_message;
+mod repository;
+mod role_kind;
+mod turn_control;
+mod turn_work;
+
+pub use chat_delta::ChatDelta;
+pub use chat_outcome::ChatOutcome;
+pub use chat_status::ChatStatus;
+pub use context_message::ContextMessage;
+pub use repository::{ChatRepository, RepoError, RepoFuture};
+pub use role_kind::RoleKind;
+pub use turn_control::TurnControl;
+pub use turn_work::TurnWork;
+
 use std::{
     collections::{HashMap, HashSet},
-    error::Error,
-    future::Future,
-    pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -16,164 +31,12 @@ use std::{
 };
 
 use crate::providers::{ProviderClient, ProviderError, Usage, opencode_go::OpencodeGoClient};
-use crate::{
-    agent::{RequestCompletion, RequestIntent, ToolIntent},
-    providers::inference::{GenerationSettings, InferenceMessage},
-    tools::{ToolOutcome, ToolService, WorkspacePolicy},
-};
+use crate::tools::ToolService;
 
 pub const DEFAULT_MODEL: &str = "opencode-go/glm-5.3-flash";
 pub const DEFAULT_OUTPUT_TOKENS: u32 = 4_096;
 pub const DEFAULT_CONCURRENCY: usize = 4;
 const CLAIM_POLL: Duration = Duration::from_millis(100);
-
-pub type RepoError = Box<dyn Error + Send + Sync>;
-pub type RepoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RepoError>> + Send + 'a>>;
-
-/// Storage boundary for accepted chat turns. Implementations own transaction
-/// semantics and wire-independent persistence; the runtime never sees SQL/DTOs.
-pub trait ChatRepository: Send + Sync + 'static {
-    fn orchestration_tool<'a>(
-        &'a self,
-        _turn_id: &'a str,
-        _intent: &'a ToolIntent,
-    ) -> RepoFuture<'a, crate::orchestration::OrchestrationResult> {
-        Box::pin(async {
-            Ok(crate::orchestration::OrchestrationResult::Completed(
-                ToolOutcome::failed("orchestration_unavailable", false),
-            ))
-        })
-    }
-    /// Prepare a managed workspace only after admission. A committed Git
-    /// failure is a turn outcome; persistence failures stop the supervisor.
-    fn prepare_workspace<'a>(
-        &'a self,
-        _turn_id: &'a str,
-        _shutdown: &'a mut tokio::sync::watch::Receiver<bool>,
-    ) -> RepoFuture<'a, Option<(&'static str, &'static str)>> {
-        Box::pin(async { Ok(None) })
-    }
-    fn begin_request<'a>(&'a self, turn_id: &'a str, intent: RequestIntent)
-    -> RepoFuture<'a, bool>;
-    fn checkpoint_request<'a>(
-        &'a self,
-        turn_id: &'a str,
-        request_id: &'a str,
-        message: InferenceMessage,
-    ) -> RepoFuture<'a, ()>;
-    /// Commit the completed message and every tool intent atomically before dispatch.
-    fn complete_request<'a>(
-        &'a self,
-        turn_id: &'a str,
-        completion: RequestCompletion,
-    ) -> RepoFuture<'a, ()>;
-    fn fail_request<'a>(
-        &'a self,
-        turn_id: &'a str,
-        request_id: &'a str,
-        code: &'a str,
-    ) -> RepoFuture<'a, ()>;
-    fn start_tool<'a>(&'a self, turn_id: &'a str, intent: &'a ToolIntent) -> RepoFuture<'a, bool>;
-    fn finish_tool<'a>(
-        &'a self,
-        turn_id: &'a str,
-        intent: &'a ToolIntent,
-        outcome: ToolOutcome,
-    ) -> RepoFuture<'a, ()>;
-    /// Atomically claim the next eligible turn and mark it running.
-    fn claim_next(&self) -> RepoFuture<'_, Option<TurnWork>>;
-    /// Persist bounded visible assistant text as an incomplete checkpoint.
-    fn checkpoint_visible<'a>(&'a self, turn_id: &'a str, text: &'a str) -> RepoFuture<'a, ()>;
-    /// Atomically record the terminal assistant message, usage, outcome, and
-    /// semantic event before the caller considers the turn complete.
-    fn finish_turn<'a>(&'a self, turn_id: &'a str, outcome: ChatOutcome) -> RepoFuture<'a, ()>;
-    /// Read the durable cancellation bit. Runtime polls it while inference is
-    /// in flight; there is no automatic replay after interruption.
-    fn cancellation_requested<'a>(&'a self, turn_id: &'a str) -> RepoFuture<'a, bool>;
-    /// Read durable boundary controls. A pending instruction never enters
-    /// context until `finish_turn` atomically applies it and queues a replan.
-    fn turn_control<'a>(&'a self, turn_id: &'a str) -> RepoFuture<'a, TurnControl>;
-    /// A queued turn is a same-process continuation only after boundary steering.
-    fn retain_provider_snapshot<'a>(&'a self, turn_id: &'a str) -> RepoFuture<'a, bool>;
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TurnControl {
-    pub cancellation_requested: bool,
-    pub immediate_requested: bool,
-    pub pause_requested: bool,
-    pub steering_pending: bool,
-    pub budget_exhausted: bool,
-    pub waiting_requested: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoleKind {
-    System,
-    Developer,
-    User,
-    Assistant,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextMessage {
-    pub role: RoleKind,
-    pub text: String,
-}
-
-/// Durable input chosen when the repository claims a turn. Later queued user
-/// messages must never be appended to this context after claim.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TurnWork {
-    pub turn_id: String,
-    pub session_id: String,
-    pub requested_model: String,
-    pub max_tokens: Option<u32>,
-    pub messages: Vec<ContextMessage>,
-    pub history: Vec<InferenceMessage>,
-    pub settings: GenerationSettings,
-    pub requested_settings: GenerationSettings,
-    pub execution: Option<WorkspacePolicy>,
-    pub orchestration: Option<crate::orchestration::OrchestrationPolicy>,
-    pub next_request_ordinal: u32,
-    pub max_model_requests: u32,
-    pub tool_calls_used: u32,
-    pub initial_usage: Usage,
-    pub resume_count: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatStatus {
-    Completed,
-    Incomplete,
-    Interrupted,
-    Canceled,
-    Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChatOutcome {
-    pub text: String,
-    pub resolved_model: Option<String>,
-    pub usage: Usage,
-    pub status: ChatStatus,
-    pub error_code: Option<String>,
-    pub error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChatDelta {
-    pub session_id: String,
-    pub turn_id: String,
-    pub text: String,
-    pub message_id: Option<String>,
-    pub block_id: Option<String>,
-    pub request_id: Option<String>,
-    pub invocation_id: Option<String>,
-    pub stream_id: String,
-    pub chunk_index: u64,
-    pub kind: String,
-}
 
 #[derive(Clone)]
 pub struct ChatRuntime {
