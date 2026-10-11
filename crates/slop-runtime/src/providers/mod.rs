@@ -183,12 +183,13 @@ pub fn provider(id: ProviderId) -> Option<&'static dyn Provider> {
 pub type ProviderFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
 
-/// Shared execution interface for the current, text-only one-turn slice.
+/// Shared native execution interface for structured inference and text clients.
 ///
 /// The metadata registry and authenticated clients have separate lifetimes.
 /// This object-safe interface lets execution select a client without matching
-/// its concrete integration. Account discovery, structured blocks, cancellation,
-/// and continuation are still proposed in `docs/provider-interface.md`.
+/// its concrete integration. Structured adapters preserve private continuation;
+/// dropping an inference future aborts local transport. Account discovery beyond
+/// model listing remains a separate credential-management operation.
 pub trait ProviderClient: Send + Sync {
     fn descriptor(&self) -> &dyn Provider;
 

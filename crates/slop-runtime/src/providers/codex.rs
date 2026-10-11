@@ -12,13 +12,28 @@ use std::sync::Arc;
 use super::chatgpt_auth::ChatGptConnection;
 use slop_core::provider::ProviderId;
 
+use super::inference::{InferenceRequest, InferenceResponse, ModelCapabilities, ProviderEvent};
 use super::{
     ChatRequest, ChatResponse, Provider, ProviderClient, ProviderError, ProviderFuture,
     ProviderModel, StreamDelta, WireProtocol, transport, wire,
 };
+use sha2::{Digest, Sha256};
 
 pub const BASE_URL: &str = "https://api.openai.com/v1";
 pub const ENV_KEY_VAR: &str = "OPENAI_API_KEY";
+
+/// Supported Responses settings, checked against the model pages on 2026-10-11.
+pub fn model_capabilities(model: &str) -> ModelCapabilities {
+    let efforts: &[&str] = match model {
+        "gpt-6-sol" | "gpt-6-luna" => &["none", "low", "medium", "high", "xhigh", "max"],
+        "gpt-6.1-sol" | "gpt-6-astra" => &["low", "medium", "high", "xhigh", "max"],
+        _ => &[],
+    };
+    ModelCapabilities {
+        tools: !efforts.is_empty(),
+        reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
+    }
+}
 
 /// Explicit Responses mappings, verified against official docs on 2026-10-08.
 /// This catalog declares adapter support; account entitlement is checked by
@@ -96,6 +111,129 @@ pub struct CodexClient {
 }
 
 impl CodexClient {
+    async fn continuation_scope(&self) -> String {
+        let mut hash = Sha256::new();
+        hash.update(b"slop-codex-responses-v1\0");
+        hash.update(self.base_url.as_bytes());
+        hash.update([0]);
+        match &self.auth {
+            Authentication::ApiKey(key) => {
+                hash.update(b"api-key\0");
+                hash.update(key.as_bytes());
+            }
+            Authentication::ChatGpt(connection) => {
+                hash.update(b"chatgpt\0");
+                hash.update(connection.continuation_identity().await.as_bytes());
+            }
+        }
+        format!("{:x}", hash.finalize())
+    }
+
+    /// One structured inference attempt. The daemon owns tools, context and
+    /// cancellation; this future owns only a bounded HTTP stream.
+    pub async fn infer(
+        &self,
+        request: &InferenceRequest,
+        on_event: &mut (dyn FnMut(ProviderEvent) + Send),
+    ) -> Result<InferenceResponse, ProviderError> {
+        let wire = request.validate(self.descriptor(), &self.capabilities(&request.model))?;
+        if self.is_subscription() {
+            if request.settings.max_output_tokens.is_some() {
+                return Err(ProviderError::UnsupportedCapability {
+                    capability: "max_output_tokens for ChatGPT plan usage",
+                });
+            }
+            if request
+                .messages
+                .iter()
+                .any(|message| message.role == super::inference::MessageRole::System)
+            {
+                return Err(ProviderError::UnsupportedCapability {
+                    capability: "system messages for ChatGPT plan usage",
+                });
+            }
+        }
+        let scope = self.continuation_scope().await;
+        for message in &request.messages {
+            if message
+                .continuation
+                .as_ref()
+                .is_some_and(|c| c.required && c.scope != scope)
+            {
+                return Err(ProviderError::UnsupportedCapability {
+                    capability: "context_incompatible: required account or endpoint continuation",
+                });
+            }
+        }
+        let mut payload = super::structured_wire::encode(request, wire, ProviderId::Codex, &scope)?;
+        payload["prompt_cache_key"] = request.session_id.clone().into();
+        if self.is_subscription()
+            && let Some(tools) = payload
+                .as_object_mut()
+                .and_then(|body| body.remove("tools"))
+        {
+            // Plan usage accepts function tools through additional_tools input
+            // items. Tool results still use the ordinary function-call IDs.
+            payload["input"]
+                .as_array_mut()
+                .expect("encoded input array")
+                .insert(
+                    0,
+                    serde_json::json!({"type":"additional_tools","role":"developer","tools":tools}),
+                );
+        }
+        let mut response = self
+            .http
+            .post(format!("{}/responses", self.base_url))
+            .bearer_auth(self.access_token().await?)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .json(&payload)
+            .send()
+            .await?;
+        transport::check_status(ProviderId::Codex, &response)?;
+        let mut result = if wire::is_event_stream(&response) {
+            let mut framing = super::opencode::SseStream::new();
+            let mut fold = super::structured_wire::StructuredFold::new(wire);
+            while let Some(chunk) = response.chunk().await? {
+                for event in framing
+                    .push(&chunk)
+                    .map_err(|e| e.for_provider(ProviderId::Codex))?
+                {
+                    fold.feed(&event, on_event)
+                        .map_err(|e| e.for_provider(ProviderId::Codex))?;
+                }
+            }
+            for event in framing
+                .finish()
+                .map_err(|e| e.for_provider(ProviderId::Codex))?
+            {
+                fold.feed(&event, on_event)
+                    .map_err(|e| e.for_provider(ProviderId::Codex))?;
+            }
+            fold.finish(request, ProviderId::Codex)
+                .map_err(|e| e.for_provider(ProviderId::Codex))?
+        } else {
+            if self.is_subscription() {
+                return Err(ProviderError::InvalidResponse {
+                    provider: ProviderId::Codex,
+                    detail: "subscription endpoint did not return SSE",
+                });
+            }
+            let body = transport::read_body_limited(ProviderId::Codex, response).await?;
+            let value =
+                serde_json::from_str(&body).map_err(|_| ProviderError::InvalidResponse {
+                    provider: ProviderId::Codex,
+                    detail: "response body is not JSON",
+                })?;
+            super::structured_wire::decode(&value, wire, request, ProviderId::Codex)
+                .map_err(|e| e.for_provider(ProviderId::Codex))?
+        };
+        if let Some(continuation) = &mut result.message.continuation {
+            continuation.scope = scope;
+        }
+        Ok(result)
+    }
+
     pub fn new(api_key: &str) -> Result<Self, ProviderError> {
         if api_key.trim().is_empty() {
             return Err(ProviderError::EmptyApiKey {
@@ -282,6 +420,18 @@ impl CodexClient {
 }
 
 impl ProviderClient for CodexClient {
+    fn capabilities(&self, model: &str) -> ModelCapabilities {
+        model_capabilities(model)
+    }
+
+    fn infer<'a>(
+        &'a self,
+        request: &'a InferenceRequest,
+        on_event: &'a mut (dyn FnMut(ProviderEvent) + Send),
+    ) -> ProviderFuture<'a, InferenceResponse> {
+        Box::pin(Self::infer(self, request, on_event))
+    }
+
     fn descriptor(&self) -> &dyn Provider {
         CodexProvider::instance()
     }
@@ -332,6 +482,9 @@ impl ProviderClient for CodexClient {
         Box::pin(Self::complete_streaming(self, request, on_delta))
     }
 }
+
+#[cfg(test)]
+mod structured_tests;
 
 #[cfg(test)]
 mod tests {

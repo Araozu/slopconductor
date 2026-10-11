@@ -17,15 +17,15 @@ catalogs, authenticated clients, collected/streaming inference, usage reporting)
 Codex adds native ChatGPT registration, signed ID-token validation, protected
 credential storage and serialized renewal; see [Codex connection](codex-connection.md).
 A shared object-safe `ProviderClient` covers all three adapters' text operations
-and adds structured inference for Go/Zen, with terminal validation, safe diagnostics and optional
+and adds structured inference for Go/Zen/Codex, with terminal validation, safe diagnostics and optional
 usage. A bounded daemon-owned supervisor selects Go, Zen, or Codex per turn, serializes
 sessions/workspaces, checkpoints visible output, and commits outcomes. It
-dispatches authorized tools for Go/Zen; Codex turns are text-only.
+dispatches authorized tools for all three providers.
 SQLite stores node identity, sessions, turns, messages, commands, and events.
 Authenticated provider credential routes and CLI commands now support private
 XDG API-key storage, startup restoration, hot provider connection replacement,
 and daemon-owned ChatGPT login. The [credential guide](provider-credentials.md)
-specifies the implemented surface. Structured Go/Zen turns now persist blocks/private continuation, frozen per-turn
+specifies the implemented surface. Structured Go/Zen/Codex turns now persist blocks/private continuation, frozen per-turn
 model/settings, model requests, file/shell invocations, artifacts, and recovery
 results. Its only coding tools are `read`, `write`, `edit`, and `bash`, implemented
 in Rust; workspace chats enable all four unless an explicit allowlist restricts
@@ -185,12 +185,13 @@ a lagging/disconnected client cannot stop unrelated execution.
 ## Step 4: direct provider integrations (implemented)
 
 The [shared provider interface](provider-interface.md) is the adapter and
-public-surface contract. Go and Zen implement structured `ProviderClient::infer`
+public-surface contract. Go, Zen, and Codex implement structured `ProviderClient::infer`
 and supply the daemon's durable chat/tool vertical slice, with blocks, private
-continuation, per-turn model/settings, and artifacts. Codex supports text-only
-turns. See [structured execution](structured-execution.md). Go/Zen also support
-the separately authorized [native child tools](child-tasks.md). Broader account
-discovery remains planned.
+continuation, per-turn model/settings, and artifacts. See
+[structured execution](structured-execution.md). All three support
+the separately authorized [native child tools](child-tasks.md). Explicit live
+catalog probes and Codex account lifecycle are implemented; the complete proposed
+account/quota contract remains planned.
 
 Implement provider capability validation and API-key account references. Add a
 direct streaming request adapter and preserve response/tool-call metadata.

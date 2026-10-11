@@ -1,10 +1,10 @@
 # Structured execution and tools
 
-**Implemented, 2026-10-09.** The daemon selects OpenCode Go, OpenCode Zen, or
-Codex through the common runtime provider interface. Go and Zen run the bounded
-inference/tool loop; Codex runs text-only requests and rejects tools, structured
-history, incompatible required continuation, and unsupported settings before
-acceptance where the existing session context makes that knowable. CLI and SDK
+**Implemented, updated 2026-10-11.** The daemon selects OpenCode Go, OpenCode Zen, or
+Codex through the common runtime provider interface. All three run the bounded
+inference/tool loop and preserve structured history. Incompatible required
+continuation and unsupported settings fail before acceptance where the existing
+session context makes that knowable, otherwise before provider dispatch. CLI and SDK
 consumers use public structured records; neither owns execution.
 
 **Tool set updated, 2026-10-09.** The native runtime exposes only pi's four basic
@@ -68,11 +68,10 @@ provided, a missing token cap falls back to the session cap; absent/null
 `reasoning_effort` means provider default. Legacy `max_tokens` is supported at
 session creation; conflicting legacy/structured caps are rejected.
 
-`reasoning_effort` is part of the contract and CLI (`--effort`). No daemon model
-currently advertises supported effort values: explicit efforts return
-`unsupported_capability` before acceptance and inference. A future adapter can
-advertise model-specific values and encode them without changing turn ownership
-or the wire envelope. There is no arbitrary provider-parameter passthrough.
+`reasoning_effort` is part of the contract and CLI (`--effort`). Codex advertises
+[model-specific effort values](codex-connection.md#reasoning-settings) and encodes
+them in Responses requests. Go/Zen effort settings remain unadvertised. Explicit
+unsupported values return `unsupported_capability` before acceptance and inference. There is no arbitrary provider-parameter passthrough.
 
 Per-turn model selection works with compatible canonical context. A history
 requiring another model's private continuation is rejected explicitly; portable
@@ -251,7 +250,8 @@ including process-tree cancellation. No new live tool call or paid model test
 is claimed.
 
 [Tasks and matrices](tasks-batches.md) now reuse these tools, steering, controls,
-and recovery records through durable run attempts. Child agents, account quotas,
+and recovery records through durable run attempts. [Native child tasks](child-tasks.md)
+are also implemented. Account quotas,
 hosted tools, media attachments, reasoning summaries, remote pairing, and
 graphical clients remain outside this slice. Transport assumptions
 follow the [provider references](provider-interface.md#decoder-references), plus

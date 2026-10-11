@@ -19,8 +19,8 @@ see [Codex connection](codex-connection.md). All three clients share bounded
 wire decoders. Responses preserve terminal outcomes, optional usage/provenance,
 and requested/reported model IDs. The daemon composes all three providers with
 a bounded turn supervisor, durable repository port, session/workspace
-serialization, visible checkpoints, and cancellation. Go and Zen support the
-bounded file/shell tool loop; Codex is text-only. Provider clients are selected
+serialization, visible checkpoints, and cancellation. All three providers support
+the bounded file/shell tool loop. Provider clients are selected
 per turn and snapshotted at admission. See [text chat](text-chat.md) and
 [structured execution](structured-execution.md). [Durable tasks and matrices](tasks-batches.md) share this turn scheduler, with
 per-batch admission caps, persistent fair admission, aggregate operation budgets,
@@ -90,12 +90,13 @@ operations, capability validation, structured content, terminal outcomes,
 and conformance criteria. It also defines the daemon's mapping to a common public
 surface for every client. The registry `Provider` trait implements metadata;
 `ProviderClient::infer` implements structured text/refusal/tool blocks, settings,
-private continuation, and normalized incremental events for Go/Zen; Codex uses
-a text-only bridge with explicit unsupported errors. The public API projects
-canonical messages, provider capabilities, usage, and cancellation; Go/Zen also
-expose tools and artifacts, including separately authorized
+private continuation, and normalized incremental events for Go/Zen/Codex. The
+public API projects canonical messages, provider capabilities, usage, cancellation,
+tools and artifacts, including separately authorized
 [native child tools](child-tasks.md). Private provider events stay internal.
-Account-scoped discovery remains proposed.
+Explicit live catalog probes and Codex account selection/sign-out are implemented;
+see [runtime credentials](provider-credentials.md). The full proposed account
+quota/capability lifecycle remains future work.
 
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.

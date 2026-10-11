@@ -2,8 +2,8 @@
 
 This slice connects the public API, the daemon's native execution supervisor,
 SQLite, and the consumer CLI through the shared `ProviderClient` interface.
-OpenCode Go and Zen provide structured text/tool requests; Codex provides
-text-only requests through Platform keys or saved ChatGPT authorization.
+OpenCode Go, Zen, and Codex provide structured text/tool requests. Codex uses
+Platform keys or saved ChatGPT authorization.
 [Structured execution](structured-execution.md) now extends these
 turns with opt-in workspace tools, artifacts, and per-turn model/settings.
 [Projects/workspaces](projects-workspaces.md) and [tasks/batches](tasks-batches.md)
@@ -135,7 +135,9 @@ agreement, ordered context, session serialization, cancellation, and recovery.
 The real-binary smoke check uses an isolated local HTTP fixture which speaks the
 existing provider wire protocol. It exercises the daemon and CLI without cloud
 credentials or paid calls. The real-binary credential smoke now includes offline
-Zen and Codex text turns and verifies key activation after restart. Live provider tests remain explicit opt-ins with
+Zen and Codex text turns and verifies key activation after restart. A dedicated
+Codex fixture also covers structured tools, private replay, account selection,
+managed worktrees, and child tasks. Live provider tests remain explicit opt-ins with
 request/token budgets.
 
 The crash fixture emits visible text and synthetic reasoning, waits for a

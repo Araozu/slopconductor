@@ -45,8 +45,8 @@ configuration, an exclusive data-directory lock, a bounded SQLite worker, and
 local API credential initialization. A bounded native supervisor executes
 Go, Zen, and Codex turns independently of client lifetime through the shared
 provider interface. [Structured execution](structured-execution.md) adds a
-durable Go/Zen tool loop, explicit workspace leases, artifacts, and frozen
-per-turn model/settings. Codex currently supports text-only turns. General
+durable Go/Zen/Codex tool loop, explicit workspace leases, artifacts, and frozen
+per-turn model/settings. General
 tasks, run attempts, and matrix orchestration are implemented through the same
 turn scheduler; see [tasks and batches](tasks-batches.md). Fair admission,
 aggregate task/tree/batch operation budgets, and durable batch cancellation share

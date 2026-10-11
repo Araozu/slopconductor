@@ -54,7 +54,8 @@ the same cancellation command.
 input through the API to daemon-owned XDG storage. The daemon owns browser login
 and persistence independently of CLI lifetime. Status separates configured
 credentials from daemon execution support; Go, Zen, and Codex models route
-through the same public chat API, with Codex text-only.
+through the same public structured chat/task API. Account selection, key removal,
+sign-out, and explicit live discovery also use typed public API methods.
 
 The CLI entry point only parses arguments, starts the async client, and reports
 exit status. Command handlers are separated from connection/token selection,

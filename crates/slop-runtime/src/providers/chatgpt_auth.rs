@@ -59,10 +59,33 @@ struct Credentials {
     refresh_token: String,
     scopes: Vec<String>,
     expires_at: u64,
+    #[serde(default)]
+    revocation_confirmed: bool,
 }
 
 impl Credentials {
+    fn signed_out(&self) -> bool {
+        self.id_token.is_empty()
+            && self.access_token.is_empty()
+            && self.refresh_token.is_empty()
+            && self.scopes.is_empty()
+            && self.expires_at == 0
+    }
+
+    fn validate_registration(&self) -> Result<(), ProviderError> {
+        if self.issuer != ISSUER
+            || self.subject.is_empty()
+            || self.client_id.is_empty()
+            || self.client_id == "dynamic_agent_client"
+            || self.ext_agent_host_id.is_empty()
+        {
+            return Err(auth_error("credential registration is incomplete"));
+        }
+        Ok(())
+    }
+
     fn validate(&self) -> Result<(), ProviderError> {
+        self.validate_registration()?;
         if self.issuer != ISSUER
             || self.subject.is_empty()
             || self.client_id.is_empty()
@@ -111,6 +134,7 @@ impl TokenResponse {
             .checked_add(self.expires_in)
             .ok_or_else(|| auth_error("invalid token expiration"))?;
         credentials.scopes = self.scope.split_whitespace().map(str::to_owned).collect();
+        credentials.revocation_confirmed = false;
         credentials.validate()
     }
 }
@@ -180,11 +204,25 @@ struct TokenState {
 pub struct ChatGptConnection {
     http: reqwest::Client,
     token_endpoint: String,
+    discovery_endpoint: String,
     path: PathBuf,
     state: Mutex<TokenState>,
 }
 
 impl ChatGptConnection {
+    /// Stable registration identity for private continuation. Token rotation
+    /// must not invalidate context, while another registration must not reuse it.
+    pub(super) async fn continuation_identity(&self) -> String {
+        let state = self.state.lock().await;
+        let c = &state.credentials;
+        let mut hash = Sha256::new();
+        for value in [&c.issuer, &c.subject, &c.client_id, &c.ext_agent_host_id] {
+            hash.update(value.as_bytes());
+            hash.update([0]);
+        }
+        format!("{:x}", hash.finalize())
+    }
+
     /// Restore a credential record created by a validated login in this app.
     pub async fn load(path: impl AsRef<Path>) -> Result<Self, ProviderError> {
         let path = path.as_ref().to_owned();
@@ -203,7 +241,10 @@ impl ChatGptConnection {
         })
         .await
         .map_err(|_| ProviderError::CredentialStorage)??;
-        credentials.validate()?;
+        credentials.validate_registration()?;
+        if !credentials.signed_out() {
+            credentials.validate()?;
+        }
         Ok(Self::from_credentials(
             path,
             credentials,
@@ -216,6 +257,7 @@ impl ChatGptConnection {
             http,
             path,
             token_endpoint: TOKEN_URL.to_owned(),
+            discovery_endpoint: format!("{ISSUER}/.well-known/openid-configuration"),
             state: Mutex::new(TokenState {
                 credentials,
                 refresh_blocked: false,
@@ -255,6 +297,7 @@ impl ChatGptConnection {
 
     pub(super) async fn access_token(&self) -> Result<String, ProviderError> {
         let mut state = self.state.lock().await;
+        state.credentials.validate()?;
         if state.credentials.expires_at > now()?.saturating_add(60) {
             return Ok(state.credentials.access_token.clone());
         }
@@ -282,6 +325,76 @@ impl ChatGptConnection {
         state.credentials = replacement;
         state.refresh_blocked = false;
         Ok(state.credentials.access_token.clone())
+    }
+
+    pub async fn authenticated(&self) -> bool {
+        !self.state.lock().await.credentials.signed_out()
+    }
+
+    /// Attempt documented revocation once, then clear local tokens atomically.
+    /// A false result means revocation was not confirmed. Registration identity
+    /// remains available for returning authorization with the issued client ID.
+    pub async fn sign_out(&self) -> Result<bool, ProviderError> {
+        let mut state = self.state.lock().await;
+        if state.credentials.signed_out() {
+            // A prior write may have failed after tokens were cleared in
+            // memory. Retry only that safe local write, never remote revocation.
+            save(self.path.clone(), state.credentials.clone()).await?;
+            return Ok(state.credentials.revocation_confirmed);
+        }
+        state.refresh_blocked = true;
+        let confirmed = self.revoke(&state.credentials).await.unwrap_or(false);
+        let mut replacement = state.credentials.clone();
+        replacement.id_token.clear();
+        replacement.access_token.clear();
+        replacement.refresh_token.clear();
+        replacement.scopes.clear();
+        replacement.expires_at = 0;
+        replacement.revocation_confirmed = confirmed;
+        // Even a failed disk write must prevent this connection using tokens.
+        state.credentials = replacement.clone();
+        save(self.path.clone(), replacement).await?;
+        Ok(confirmed)
+    }
+
+    async fn revoke(&self, credentials: &Credentials) -> Result<bool, ProviderError> {
+        let response = self
+            .http
+            .get(&self.discovery_endpoint)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?;
+        let body = transport::read_body_limited(super::ProviderId::Codex, response).await?;
+        let discovery: serde_json::Value =
+            serde_json::from_str(&body).map_err(|_| auth_error("invalid OIDC discovery"))?;
+        let endpoint = discovery
+            .get("revocation_endpoint")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| auth_error("OIDC discovery has no revocation endpoint"))?;
+        let endpoint =
+            reqwest::Url::parse(endpoint).map_err(|_| auth_error("invalid revocation endpoint"))?;
+        let discovery_url = reqwest::Url::parse(&self.discovery_endpoint)
+            .map_err(|_| auth_error("invalid discovery endpoint"))?;
+        if endpoint.origin() != discovery_url.origin()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(auth_error("untrusted revocation endpoint"));
+        }
+        let response = self
+            .http
+            .post(endpoint)
+            .timeout(Duration::from_secs(10))
+            .form(&[
+                ("token", credentials.refresh_token.as_str()),
+                ("token_type_hint", "refresh_token"),
+                ("client_id", credentials.client_id.as_str()),
+            ])
+            .send()
+            .await?;
+        Ok(response.status() == reqwest::StatusCode::OK)
     }
 }
 
@@ -437,6 +550,7 @@ impl ChatGptLogin {
             refresh_token: String::new(),
             scopes: Vec::new(),
             expires_at: 0,
+            revocation_confirmed: false,
         };
         token.apply(&mut credentials)?;
         Ok(credentials)
@@ -622,6 +736,7 @@ pub(super) fn fixture_connection(path: PathBuf, expires_at: u64) -> ChatGptConne
         refresh_token: "fixture-refresh-token".to_owned(),
         scopes: SCOPES.split_whitespace().map(str::to_owned).collect(),
         expires_at,
+        revocation_confirmed: false,
     };
     ChatGptConnection::from_credentials(path, credentials, transport::http_client().unwrap())
 }
@@ -630,6 +745,93 @@ pub(super) fn fixture_connection(path: PathBuf, expires_at: u64) -> ChatGptConne
 mod tests {
     use super::super::test_http::{Reply, Server};
     use super::*;
+
+    #[tokio::test]
+    async fn sign_out_clears_tokens_keeps_registration_and_reports_revocation() {
+        for confirmed in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("account.json");
+            let server = Server::new(vec![]).await;
+            server.enqueue(vec![
+                Reply::json(
+                    serde_json::json!({"revocation_endpoint":format!("{}/revoke", server.url)}),
+                ),
+                Reply {
+                    status: if confirmed {
+                        reqwest::StatusCode::OK
+                    } else {
+                        reqwest::StatusCode::SERVICE_UNAVAILABLE
+                    },
+                    content_type: "application/json",
+                    body: String::new(),
+                    location: None,
+                },
+            ]);
+            let mut connection = fixture_connection(path.clone(), u64::MAX);
+            connection.discovery_endpoint = format!("{}/discovery", server.url);
+            let scope = connection.continuation_identity().await;
+            assert_eq!(connection.sign_out().await.unwrap(), confirmed);
+            assert!(!connection.authenticated().await);
+            assert!(connection.access_token().await.is_err());
+            assert_eq!(connection.sign_out().await.unwrap(), confirmed);
+            let saved = std::fs::read_to_string(&path).unwrap();
+            for token in [
+                "fixture-id-token",
+                "fixture-access-token",
+                "fixture-refresh-token",
+            ] {
+                assert!(!saved.contains(token));
+            }
+            let restored = ChatGptConnection::load(&path).await.unwrap();
+            assert_eq!(scope, restored.continuation_identity().await);
+            let login = restored.begin_login().await.unwrap();
+            let url = reqwest::Url::parse(login.authorization_url()).unwrap();
+            assert!(
+                url.query_pairs()
+                    .any(|(key, value)| key == "client_id" && value == "oaiapp_fixture")
+            );
+            server.inspect(|requests| {
+                assert_eq!(requests.len(), 2);
+                assert_eq!(requests[1].path, "/revoke");
+                let values: std::collections::HashMap<_, _> =
+                    reqwest::Url::parse(&format!("http://localhost/?{}", requests[1].body))
+                        .unwrap()
+                        .query_pairs()
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect();
+                assert_eq!(values["token"], "fixture-refresh-token");
+                assert_eq!(values["client_id"], "oaiapp_fixture");
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_out_never_posts_tokens_to_untrusted_discovery_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let server = Server::new(vec![Reply::json(
+            serde_json::json!({"revocation_endpoint":"https://example.com/revoke"}),
+        )])
+        .await;
+        let parent = directory.path().join("missing");
+        let path = parent.join("account.json");
+        let mut connection = fixture_connection(path.clone(), u64::MAX);
+        connection.discovery_endpoint = format!("{}/discovery", server.url);
+        assert!(matches!(
+            connection.sign_out().await,
+            Err(ProviderError::CredentialStorage)
+        ));
+        assert!(!connection.authenticated().await);
+        std::fs::create_dir(&parent).unwrap();
+        assert!(!connection.sign_out().await.unwrap());
+        assert!(
+            !ChatGptConnection::load(path)
+                .await
+                .unwrap()
+                .authenticated()
+                .await
+        );
+        server.inspect(|requests| assert_eq!(requests.len(), 1));
+    }
 
     #[tokio::test]
     async fn login_uses_pkce_host_identity_and_strict_callback_binding() {
@@ -742,9 +944,11 @@ mod tests {
         .await;
         let mut connection = fixture_connection(path.clone(), 0);
         connection.token_endpoint = server.url.clone();
+        let identity = connection.continuation_identity().await;
         let (first, second) = tokio::join!(connection.access_token(), connection.access_token());
         assert_eq!(first.unwrap(), "replacement-access");
         assert_eq!(second.unwrap(), "replacement-access");
+        assert_eq!(connection.continuation_identity().await, identity);
         server.inspect(|requests| {
             assert_eq!(requests.len(), 1);
             let fields: std::collections::HashMap<_, _> =
@@ -758,6 +962,7 @@ mod tests {
             assert_eq!(fields["resource"], RESOURCE);
         });
         let restored = ChatGptConnection::load(&path).await.unwrap();
+        assert_eq!(restored.continuation_identity().await, identity);
         assert_eq!(restored.access_token().await.unwrap(), "replacement-access");
         assert_eq!(
             restored.state.lock().await.credentials.refresh_token,

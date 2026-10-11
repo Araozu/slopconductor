@@ -1,10 +1,10 @@
 # Shared provider interface
 
-**Status: target contract with an implemented structured subset, 2026-10-08.** This document defines
+**Status: target contract with an implemented structured subset, updated 2026-10-11.** This document defines
 the target contract for provider integrations and the common surface the daemon
 will expose to clients. The full `ProviderAdapter` contract and account/capability
-DTOs/endpoints remain proposed; basic [credential endpoints](provider-credentials.md)
-are implemented. [Structured inference and Go tools](structured-execution.md)
+DTOs/endpoints remain proposed; the concrete [credential/account/catalog endpoints](provider-credentials.md)
+are implemented. [Structured inference and Go/Zen/Codex tools](structured-execution.md)
 now implement blocks, continuation, frozen settings, model requests, tool records,
 artifacts, and canonical streaming. The implemented subset is described
 below. The [requirements](requirements.md) and [crate boundaries](architecture.md)
@@ -58,14 +58,16 @@ The repository currently contains:
   total provenance, and separate requested/reported model identifiers.
 
 The structured `ProviderClient::infer` path now accepts blocks, tool definitions,
-and generation settings. Go/Zen implement all three wire shapes; Codex uses an
-explicit text-only bridge. Private completed continuation is stored by the
+and generation settings. Go/Zen implement all three wire shapes; Codex uses
+structured Responses, including model-specific reasoning settings. Private completed continuation is stored by the
 daemon and replayed only within its provider/model/connection scope. The public
-Go/Zen surface includes model capabilities, per-turn selection, structured messages,
-request/tool records, streamed IDs, and artifacts. Codex is selectable for
-text-only turns through Platform keys or ChatGPT authorization. The older text methods retain
-their strict text-only decoders. Account-scoped discovery, media blocks, summaries,
-and the complete target `ProviderAdapter` lifecycle remain proposed.
+Go/Zen/Codex surface includes model capabilities, per-turn selection, structured messages,
+request/tool records, streamed IDs, and artifacts. Codex accepts Platform keys or
+ChatGPT authorization and supports separate registrations, selection, and sign-out.
+Explicit account-scoped catalog probes are implemented. The older text methods
+retain their strict text-only decoders. Media blocks, public reasoning summaries,
+and the complete target `ProviderAdapter` lifecycle remain proposed. Use the
+[provider behavior checklist](provider-checklist.md) for the current delivery gates.
 
 The current decoders require recognized terminal evidence, preserve incomplete
 outcomes, distinguish unknown usage from reported zero, and enforce bounded
@@ -82,7 +84,7 @@ role on Responses/Chat and are rejected for Anthropic Messages. Subscription
 requests reject system messages instead of changing their priority; use an
 explicit developer role. All three clients share the bounded wire decoders.
 The daemon implements anonymous health and authenticated node, shared Go/Zen/
-Codex text-chat selection, and provider credential APIs. Local readiness does
+Codex structured chat/task selection, and provider credential/account/catalog APIs. Local readiness does
 not prove account entitlement or upstream availability.
 
 ### Implemented OpenCode adapters

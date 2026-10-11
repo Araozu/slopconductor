@@ -1,6 +1,6 @@
 # Slop Conductor overview
 
-**Status as of 2026-10-10.** This is the master high-level map. Detailed design
+**Status as of 2026-10-11.** This is the master high-level map. Detailed design
 lives in the documents linked below; this file summarizes what exists today per
 crate so a new developer can get oriented without reading everything first.
 
@@ -11,7 +11,7 @@ accepted work. The daemon calls model providers directly and supervises tools
 itself. Each node owns its data; remote access and mirroring are future tracks.
 
 Implemented local slice: loopback daemon + authenticated API, durable text chat,
-structured Go/Zen tool execution (Codex text-only), registered projects with
+structured Go/Zen/Codex tool execution, registered projects with
 managed Git worktrees, durable tasks/run attempts, deterministic batch matrices,
 fair admission with aggregate budgets, batch cancellation, and bounded native
 child tasks with durable waits. Linux and native Windows offline CI pass; live-
@@ -88,7 +88,8 @@ Key areas:
   `opencode_zen.rs`, `codex.rs`, `chatgpt_auth.rs`, shared OpenCode
   transport/decoder, structured wire translation. Go/Zen do text + structured
   tool turns across Chat Completions, Responses, and Messages. Codex does
-  text-only turns via Platform keys or ChatGPT subscription login.
+  structured Responses turns via Platform keys or ChatGPT subscription login,
+  with reasoning settings and private continuation.
 - `chat.rs` / `agent.rs`: turn supervisor, bounded admission, context assembly,
   streaming checkpoints, cancellation, steering (`after-turn`,
   `next-boundary`, `immediate`), durable pause/resume.
@@ -183,7 +184,7 @@ Read with [clients](clients.md).
 
 ## Providers, tools, and limits (current defaults)
 
-- Providers: `opencode-go`, `opencode-zen` (text + tools), `codex` (text-only).
+- Providers: `opencode-go`, `opencode-zen`, `codex` (text + tools).
   Default model `opencode-go/glm-5.3-flash`. Select with
   `chat --model provider/model`. Keys via `provider set-key`; ChatGPT login via
   `provider login codex`. Saved keys beat stale env vars; active turns keep

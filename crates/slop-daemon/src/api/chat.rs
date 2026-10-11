@@ -213,7 +213,9 @@ async fn models(State(state): State<Arc<AppState>>) -> Response {
         };
         for model in provider.models() {
             let client_caps = client.as_ref().map(|c| c.capabilities(model.id));
-            let tools = *id != slop_core::provider::ProviderId::Codex;
+            let fallback_caps =
+                slop_runtime::providers::inference::capabilities(provider, model.id);
+            let tools = client_caps.as_ref().unwrap_or(&fallback_caps).tools;
             let subscription = client.as_ref().is_some_and(|c| {
                 c.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription
             });
@@ -229,8 +231,7 @@ async fn models(State(state): State<Arc<AppState>>) -> Response {
                 reason: reason.clone(),
                 capabilities: slop_protocol::execution::ModelCapabilities {
                     tools,
-                    reasoning_efforts: client_caps
-                        .map_or_else(Vec::new, |caps| caps.reasoning_efforts),
+                    reasoning_efforts: client_caps.unwrap_or(fallback_caps).reasoning_efforts,
                     incremental_streaming: true,
                     max_output_tokens: if cap_supported { 65_536 } else { 0 },
                     output_token_cap_supported: cap_supported,
@@ -315,19 +316,6 @@ async fn create_session(
                 StatusCode::BAD_REQUEST,
                 "unsupported_capability",
                 "ChatGPT subscription requests do not support an output-token cap.",
-            );
-        }
-        if provider_id == slop_core::provider::ProviderId::Codex
-            && (request.project.is_some()
-                || request
-                    .execution
-                    .as_ref()
-                    .is_some_and(|policy| !policy.allowed_tools.is_empty()))
-        {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "unsupported_capability",
-                "Codex text requests do not support workspace tools.",
             );
         }
     }
@@ -454,17 +442,6 @@ async fn preflight_turn(
             "ChatGPT subscription requests do not support an output-token cap.",
         ));
     }
-    if model_ref.provider() == slop_core::provider::ProviderId::Codex
-        && session
-            .execution
-            .as_ref()
-            .is_some_and(|policy| !policy.allowed_tools.is_empty())
-    {
-        return Err((
-            "unsupported_capability",
-            "Codex text requests do not support workspace tools.",
-        ));
-    }
     let (has_non_text, required) =
         state
             .store
@@ -522,12 +499,9 @@ fn context_incompatibility(
     provider: &str,
     model: &str,
     wire: &str,
-    has_non_text: bool,
+    _has_non_text: bool,
     required: Vec<(String, String, String)>,
 ) -> Option<&'static str> {
-    if provider == "codex" && has_non_text {
-        return Some("context_incompatible");
-    }
     if required
         .into_iter()
         .any(|(saved_provider, saved_model, saved_wire)| {
@@ -882,7 +856,7 @@ mod provider_preflight_tests {
             .is_some()
         );
         assert!(
-            context_incompatibility("codex", "gpt-6.1-sol", "responses", true, vec![]).is_some()
+            context_incompatibility("codex", "gpt-6.1-sol", "responses", true, vec![]).is_none()
         );
         assert!(
             context_incompatibility("opencode-zen", "glm-5.3", "chat_completions", true, vec![])

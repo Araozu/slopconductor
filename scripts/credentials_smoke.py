@@ -239,7 +239,7 @@ def check_credentials(daemon_binary, cli_binary, root, start_daemon, stop_daemon
         assert codex_status["active_auth_mode"] == "chatgpt"
 
         before = len(fixture.requests)
-        for extra in (("--max-output-tokens", "64"), ("--workspace", str(root))):
+        for extra in (("--max-output-tokens", "64"), ("--effort", "invalid-effort")):
             rejected = subprocess.run(
                 cli + ["chat", "--model", "codex/gpt-6.1-sol", "--prompt", "reply", *extra,
                        "--command-id", f"subscription-rejected-{before}"],

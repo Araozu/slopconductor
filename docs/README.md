@@ -4,7 +4,7 @@ These documents capture the application idea, accepted constraints, proposed
 design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
-**Status as of 2026-10-10:** milestone M0 is a repository/bootstrap foundation,
+**Status as of 2026-10-11:** milestone M0 is a repository/bootstrap foundation,
 with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
@@ -12,7 +12,9 @@ shutdown. Durable text chat now adds sessions, idempotent message acceptance,
 paginated history/events, daemon-owned Go/Zen/Codex provider selection,
 cancellation, and a consumer CLI. Runtime provider credential commands persist
 secrets in private XDG storage, replace active provider connections without
-restart, and own ChatGPT authorization in the daemon. Structured Go/Zen execution adds explicit workspace tools, durable
+restart, and own ChatGPT authorization in the daemon. Codex also supports
+separate account registrations, mode selection/sign-out, and explicit live catalog
+probes. Structured Go/Zen/Codex execution adds explicit workspace tools, durable
 request/invocation records, artifacts, block-aware streaming, and per-turn model
 settings. Execution steering supports after-turn, next-boundary, and immediate
 delivery, plus durable pause/resume with explicit re-admission. Same-turn
@@ -53,7 +55,8 @@ today, then read in this order:
 | [Child tasks](child-tasks.md) | Implemented native delegation policy, isolated children, context selection, waits, and recovery |
 | [Projects and workspaces](projects-workspaces.md) | Implemented registration, lazy worktrees, frozen bases, diffs, cleanup, and Git recovery |
 | [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
-| [Codex connection](codex-connection.md) | Implemented headless ChatGPT subscription login and provider usage |
+| [Codex connection](codex-connection.md) | Structured Codex tools/replay, reasoning settings, accounts and subscription restrictions |
+| [Provider checklist](provider-checklist.md) | Required native-provider behavior and explicit offline/live validation gates |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |
 | [Shared provider interface](provider-interface.md) | Proposed adapter contract, common client surface, and conformance criteria |
 | [Storage](storage.md) | Durable local records, events, artifacts, and recovery |

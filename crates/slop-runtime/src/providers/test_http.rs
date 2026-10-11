@@ -59,6 +59,11 @@ pub(super) struct Server {
 
 async fn handle(State(state): State<Arc<Mutex<ServerState>>>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
+    // Development environments may probe listening ports with HEAD /. Such a
+    // probe is not a scripted provider request and must not consume a reply.
+    if parts.method == axum::http::Method::HEAD && parts.uri.path() == "/" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let bytes = to_bytes(body, 1_000_000).await.unwrap();
     let mut state = state.lock().unwrap();
     state.requests.push(Recorded {
@@ -85,6 +90,9 @@ async fn handle(State(state): State<Arc<Mutex<ServerState>>>, request: Request) 
 }
 
 impl Server {
+    pub fn enqueue(&self, replies: Vec<Reply>) {
+        self.state.lock().unwrap().replies.extend(replies);
+    }
     pub async fn new(replies: Vec<Reply>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());

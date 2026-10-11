@@ -1,6 +1,6 @@
 # Runtime provider credentials
 
-**Implemented, 2026-10-09.** Credentials can be configured through the running
+**Implemented, updated 2026-10-11.** Credentials can be configured through the running
 daemon's authenticated public API and native CLI. All secrets are daemon-owned
 files under `<data-dir>/credentials`, separate from SQLite conversations,
 command receipts, events, and logs. Setting a provider key enables new requests
@@ -30,9 +30,10 @@ cargo run --locked -- chat --prompt "Explain Rust ownership."
 
 `provider set-key` supports `opencode-go`, `opencode-zen`, and `codex`. A Codex
 API key uses OpenAI Platform billing. Credential status separately reports
-`api_key_configured`, `chatgpt_configured`, `execution_supported`, and Codex's
-`active_auth_mode`. All three providers support daemon text chat; Go and Zen
-also support structured workspace tools. Readiness describes local credentials,
+`api_key_configured`, `chatgpt_configured` (the selected registration),
+`execution_supported`, and Codex's
+`active_auth_mode`. All three providers support structured daemon text/tool chat
+and separately authorized native child tools. Readiness describes local credentials,
 not upstream entitlement or availability.
 
 Authorize a ChatGPT subscription with:
@@ -50,7 +51,36 @@ host. Ctrl-C detaches the CLI while the bounded daemon login continues. The
 daemon's durable node ID supplies the stable host identity. Returning login
 reuses the same registration and validates the returned account. This command
 enables Codex subscription chat after authorization succeeds; see
-[Codex connection](codex-connection.md) for text-only restrictions.
+[Codex connection](codex-connection.md) for subscription request restrictions.
+
+
+Select or inspect configured accounts without resupplying credentials:
+
+```sh
+slop provider accounts
+slop provider login codex --account work --command-id login-work
+slop provider select chatgpt --account work
+slop provider select api_key
+slop provider discover codex
+slop provider logout work
+slop provider remove-key codex
+```
+
+At most sixteen separate subscription registrations are retained. Local labels
+contain 1–64 ASCII letters, digits, hyphens, or underscores and are stored in
+lowercase; label selection is case-insensitive. Omitting `--account`
+uses the selected registration or `default`; a new label creates its own issued
+client/host identity, while an existing label reauthorizes that registration.
+Selection and key removal never silently choose another billing path. Key removal
+suppresses stale environment import across restart; explicit `set-key` configures
+it again. It does not revoke a Platform key remotely.
+
+`provider discover` performs one live catalog request on the selected connection,
+with at most 512 models. Unmapped advertised models remain unavailable. Its
+`source: live` and observation timestamp describe catalog evidence, not inference
+entitlement. The ordinary `models` command stays offline and reports local
+execution support/readiness. Account `authenticated` likewise describes locally
+retained tokens rather than a live account verification.
 
 ## Location, privacy, and restart
 
@@ -63,7 +93,12 @@ daemon data. Windows overrides must remain beneath canonical `LOCALAPPDATA`.
 There is no source-checkout or top-level home credential directory.
 
 Files are `opencode-go-api-key`, `opencode-zen-api-key`, `codex-api-key`,
-`codex-chatgpt.json`, and the non-secret `codex-auth-mode`. Linux directories are owner-only `0700`, and files are
+`codex-chatgpt.json` (the `default` registration), named
+`codex-chatgpt-<account>.json` registrations, and a non-secret `codex-auth-mode`
+JSON selection record. Mode and account are replaced atomically together; legacy
+single-mode records remain readable. Earlier daemon versions cannot read the new
+selection JSON; this is a forward migration. Key-removal markers are
+`<provider>-api-key-disabled`. Linux directories are owner-only `0700`, and files are
 `0600`; Windows uses the protected profile directory's inherited ACLs. Reads
 reject symlinks and insecure files. API-key replacements use synchronized,
 same-directory temporary files and atomic replacement; directory metadata is
@@ -72,33 +107,43 @@ atomic storage. The data-directory lock keeps one daemon authoritative.
 
 Saved records load before readiness. For compatibility, `OPENCODE_GO_API_KEY`,
 `OPENCODE_ZEN_API_KEY`, and `OPENAI_API_KEY` are imported on startup only when
-their respective saved record is absent. Saved runtime updates take precedence
+their respective saved record and key-removal marker are absent. Saved runtime updates take precedence
 over stale environment values on restart. Invalid/insecure saved records fail
 startup instead of silently falling back to another credential.
 
 Keys are bounded to 16 KiB after trimming and contain printable ASCII without
 internal whitespace. Credential HTTP bodies are capped at 32 KiB. Updates are
 serialized; the daemon persists before activation/acknowledgment and owns both
-steps even if the caller disconnects. A failed write leaves the active connection
-unchanged. Credential status is local configuration, not a live authentication
-check. Account management, credential deletion, and remote revocation remain
-planned.
+steps even if the caller disconnects. A failed key/selection write leaves the
+active connection unchanged. Sign-out stops local token use even if its disk
+write fails; a repeated sign-out retries the safe local write without replaying
+remote revocation. Credential status is local configuration, not a live authentication
+check. Sign-out first disables new subscription admissions, attempts remote
+revocation once, and clears local tokens while retaining registration identity.
+Its result reports whether revocation was confirmed. Already dispatched inference
+has no confirmed upstream cancellation guarantee.
 
 ## Public API
 
 Every route requires the same local bearer authentication as chat. Health
-advertises `provider-credentials`; the listener remains loopback-only.
+advertises `provider-credentials`, `provider-accounts`, and `provider-discovery`;
+the listener remains loopback-only.
 
 | Method and route | Request / response |
 | --- | --- |
 | `GET /v1/providers` | Safe credential status for the three supported adapters |
 | `PUT /v1/providers/{provider}/api-key` | `{"api_key":"..."}`; `200` with safe provider status after persistence and activation |
-| `POST /v1/providers/codex/login` | `{"command_id":"my-login-1"}`; `202` with `login_id` and ephemeral `authorization_url` |
+| `DELETE /v1/providers/{provider}/api-key` | Remove a saved key and suppress stale environment import; return safe provider status |
+| `GET /v1/providers/{provider}/models` | Explicit bounded live catalog probe with provider/auth/account scope, timestamp, and locally executable capabilities |
+| `GET /v1/providers/codex/accounts` | Local labels, selection, and token-presence status; no upstream identity or secrets |
+| `PUT /v1/providers/codex/auth` | `{"auth_mode":"chatgpt","account_id":"work"}` or `{"auth_mode":"api_key"}`; persist selection and activate new admissions |
+| `POST /v1/providers/codex/accounts/{account}/logout` | Clear local tokens, retain registration, and report `remote_revocation_confirmed` |
+| `POST /v1/providers/codex/login` | `{"command_id":"my-login-1","account_id":"work"}` (account optional); `202` with `login_id` and ephemeral `authorization_url` |
 | `GET /v1/providers/codex/login/{login_id}` | `pending`, `succeeded`, or `failed`, with a safe optional error code |
 
 PUT is an idempotent credential replacement. There is no endpoint to retrieve
 stored secrets. Login startup reuses the current attempt for the same command
-ID and rejects a different ID while pending. Only the latest login attempt is
+ID and account, and rejects a conflicting attempt while pending. Only the latest login attempt is
 retained in memory; a later attempt replaces the completed status. Pending
 authorization is canceled on daemon shutdown, with any started credential write
 drained before directory ownership is released. After restart, old login IDs
@@ -114,5 +159,9 @@ restart precedence, credential isolation from transcripts/logs, callback denial,
 duplicate/conflicting login IDs, stable host identity, and pending-login shutdown.
 It also runs real daemon/CLI text turns through offline Zen Chat Completions and
 Codex Responses fixtures, including saved-key activation after restart.
-Existing native auth fixtures cover signed ID tokens and token rotation/storage.
+The dedicated Codex fixture covers account selection, explicit catalog probes,
+key removal/restart, structured coding tools, managed worktrees, native children,
+private replay, and local cancellation. Native auth fixtures cover signed ID
+tokens, token rotation/storage, retained returning registrations, and confirmed
+or unconfirmed remote revocation.
 No live ChatGPT login or inference is established by these checks.

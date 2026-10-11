@@ -14,8 +14,9 @@ maximum child count, and remaining delegation depth. The root allows at most
 attempts; depth is 1–4. Each delegating node also enforces its direct-child limit.
 Allowed models are unique, supported model IDs, with at most eight entries.
 Allowed tools are a subset of the parent's project tools. A text-only parent
-uses an empty coding-tool list. Codex remains text-only and cannot be a
-delegating parent.
+uses an empty coding-tool list. Go, Zen, and Codex can be delegating parents
+when explicitly authorized. Codex subscription children omit output caps; an
+explicit cap is rejected, and there is no inherited Platform billing fallback.
 
 Children choose their prompt and model explicitly. Omitted Go/Zen output caps
 use the parent's frozen cap; requested inputs remain separately recorded. No

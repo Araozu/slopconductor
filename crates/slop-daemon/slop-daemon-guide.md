@@ -163,7 +163,7 @@ Only `/v1/health` is anonymous. The node endpoint and product routes use a local
 
 Credentials live in `<data-dir>/credentials`, separate from messages and events. On Linux, credential directories/files are checked for owner-only permissions; on Windows, they must be under the protected local application data directory. The API never returns stored keys. A Go key replacement is persisted before new admissions use it; in-flight requests keep their existing provider connection.
 
-Provider status reports configuration, active Codex auth mode, and implemented execution support; it does not prove entitlement or a successful model call. Use `--model opencode-zen/model` or `--model codex/model` to select those providers. Zen supports the same structured tools as Go. Codex accepts text-only turns; ChatGPT subscription requests omit output caps, and an explicitly supplied cap is rejected.
+Provider status reports configuration, active Codex auth mode, and implemented execution support; it does not prove entitlement or a successful model call. Use `--model opencode-zen/model` or `--model codex/model` to select those providers. Zen and Codex support the same structured coding and authorized child tools as Go. Codex advertises model-specific reasoning effort; ChatGPT subscription requests omit output caps, and an explicitly supplied cap is rejected.
 
 ## Try the same flow
 

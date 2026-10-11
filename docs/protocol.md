@@ -117,7 +117,12 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/models | Implemented: known Go/Zen/Codex models, capabilities, and local credential readiness; account entitlement is not probed |
 | GET /v1/providers | Implemented: safe credential presence and daemon execution support |
 | PUT /v1/providers/{provider}/api-key | Implemented: persist an API key and activate new supported requests without restart |
-| POST /v1/providers/codex/login | Implemented: start/reuse the current ChatGPT authorization attempt |
+| GET /v1/providers/{provider}/models | Implemented: explicit live catalog probe with auth/account scope and timestamp; unmapped models remain unavailable |
+| DELETE /v1/providers/{provider}/api-key | Implemented: remove a key, suppress stale environment import, and disable new admissions on that billing path |
+| GET /v1/providers/codex/accounts | Implemented: safe local registration labels and selection/token status |
+| PUT /v1/providers/codex/auth | Implemented: select an existing API key or subscription account without resupplying credentials |
+| POST /v1/providers/codex/accounts/{account}/logout | Implemented: clear tokens, retain registration, report confirmed/unconfirmed revocation |
+| POST /v1/providers/codex/login | Implemented: start/reuse the current ChatGPT authorization attempt, optionally for a named account |
 | GET /v1/providers/codex/login/{id} | Implemented: inspect the latest daemon-owned login attempt |
 | GET, POST /v1/projects | Implemented: register/list repositories and local mappings |
 | GET /v1/projects/{id}/workspaces | Implemented: paginated managed workspaces |

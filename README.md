@@ -135,7 +135,8 @@ Windows); native builds do not require it.
 
 Use `provider login codex` to authorize a ChatGPT subscription through the
 daemon, or configure a Codex Platform API key with `provider set-key codex`.
-Zen and Codex support text turns; Go and Zen support structured tool turns.
+Go, Zen, and Codex support structured text and tool turns. Codex also supports
+model-specific `--effort`, account selection, and explicit `provider discover`.
 Select a model with `chat --model provider/model`. See
 [runtime credentials](docs/provider-credentials.md).
 

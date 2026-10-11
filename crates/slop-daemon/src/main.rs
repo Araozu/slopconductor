@@ -225,6 +225,8 @@ async fn health() -> Json<HealthResponse> {
             "sessions".to_owned(),
             "text-chat".to_owned(),
             "provider-credentials".to_owned(),
+            "provider-discovery".to_owned(),
+            "provider-accounts".to_owned(),
             "structured-messages".to_owned(),
             "tools".to_owned(),
             "per-turn-settings".to_owned(),

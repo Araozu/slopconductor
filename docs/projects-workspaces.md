@@ -36,7 +36,7 @@ and the execution policy's absolute root. Continue that workspace through
 explicit directory. Both are creation-time choices. `--base` requires
 `--project`; omission selects the registered checkout's HEAD. `--tool` restricts
 the default `read`, `write`, `edit`, `bash` allowlist with either workspace choice.
-Codex remains text-only and rejects project tool sessions before acceptance.
+Go, Zen, and Codex support these project tool sessions through the same runtime.
 
 ## Identity and admission
 

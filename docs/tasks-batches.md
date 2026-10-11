@@ -16,7 +16,7 @@ Each attempt owns a fresh session with one primary turn. That turn can perform
 multiple model requests and coding-tool calls under the existing execution
 bounds. A project selection reserves a separate worktree, freezes its exact base
 commit, and allocates the directory only after admission. A text task without a
-project needs no Git checkout. Codex tasks remain text-only.
+project needs no Git checkout. Go, Zen, and Codex tasks share this tool loop.
 
 This chooses fresh attempts for reproducibility. Reusing a conversation for
 successive tasks remains a future extension. Ordinary chat sessions retain their

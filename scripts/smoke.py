@@ -17,6 +17,7 @@ import urllib.request
 
 from chat_smoke import check_chat_lifecycle
 from credentials_smoke import check_credentials
+from codex_smoke import check_codex
 from tools_smoke import check_tools
 from projects_smoke import check_projects
 from orchestration_smoke import check_orchestration
@@ -398,6 +399,7 @@ def main():
         check_orchestration(daemon_binary, cli_binary, root / "orchestration")
         check_delegation(daemon_binary, cli_binary, root / "delegation")
         check_credentials(daemon_binary, cli_binary, root / "credentials", start_daemon, stop_daemon, isolated_env)
+        check_codex(daemon_binary, cli_binary, root / "codex")
 
     print("Smoke check passed: bootstrap ownership/authentication, runtime credentials/login, chat durability/replay, "
           "after-turn/next-boundary/immediate steering, provider snapshot rotation, pause/resume recovery, "

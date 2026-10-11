@@ -34,7 +34,6 @@ pub(crate) fn validate_policy(spec: &TaskSpec) -> StoreResult<()> {
         serde_json::from_str(&canonical(policy)?).map_err(|_| StoreError::Invalid)?;
     if !slop_runtime::orchestration::validate(&runtime)
         || spec.budget.is_none()
-        || spec.model.starts_with("codex/")
         || policy.allowed_tools.iter().any(|tool| {
             spec.project
                 .as_ref()

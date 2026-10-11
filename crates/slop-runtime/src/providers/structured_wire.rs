@@ -529,7 +529,9 @@ pub(super) fn encode(
         }
         WireProtocol::OpenAiResponses => {
             body["input"] = messages.into();
-            body["max_output_tokens"] = request.settings.max_output_tokens.into();
+            if let Some(limit) = request.settings.max_output_tokens {
+                body["max_output_tokens"] = limit.into();
+            }
             body["store"] = false.into();
             body["include"] = json!(["reasoning.encrypted_content"]);
         }
@@ -694,6 +696,17 @@ pub(super) fn decode(
             for (index, item) in output.iter().enumerate() {
                 match string(item, "type")? {
                     "message" => {
+                        if item.get("role").is_some_and(|role| role != "assistant")
+                            || status == "completed"
+                                && item.get("status").is_some_and(|s| s != "completed")
+                        {
+                            return Err(invalid("invalid completed assistant item"));
+                        }
+                        // Preserve assistant phase and output identity when
+                        // manually replaying Responses history.
+                        if item.get("phase").is_some_and(|phase| !phase.is_null()) {
+                            private = true;
+                        }
                         for (part_index, part) in array(item, "content")?.iter().enumerate() {
                             if part_index >= MAX_BLOCKS {
                                 return Err(invalid("too many content parts"));
@@ -702,9 +715,14 @@ pub(super) fn decode(
                                 "output_text" => BlockContent::Text {
                                     text: string(part, "text")?.to_owned(),
                                 },
-                                "refusal" => BlockContent::Refusal {
-                                    text: string(part, "refusal")?.to_owned(),
-                                },
+                                "refusal" => {
+                                    // Replay the original output item so a
+                                    // refusal does not become ordinary text.
+                                    private = true;
+                                    BlockContent::Refusal {
+                                        text: string(part, "refusal")?.to_owned(),
+                                    }
+                                }
                                 _ => return Err(unsupported()),
                             };
                             blocks.push(block(request, index * MAX_BLOCKS + part_index, content));
@@ -885,6 +903,7 @@ pub(super) struct StructuredFold {
     calls: BTreeMap<usize, CallParts>,
     anthropic: BTreeMap<usize, Value>,
     argument_parts: BTreeMap<usize, String>,
+    response_parts: BTreeMap<(usize, usize), (String, String)>,
     closed: std::collections::HashSet<usize>,
     terminal: Option<Value>,
     stop_reason: Option<String>,
@@ -902,6 +921,7 @@ impl StructuredFold {
             calls: BTreeMap::new(),
             anthropic: BTreeMap::new(),
             argument_parts: BTreeMap::new(),
+            response_parts: BTreeMap::new(),
             closed: std::collections::HashSet::new(),
             terminal: None,
             stop_reason: None,
@@ -1121,8 +1141,22 @@ impl StructuredFold {
             return Err(invalid("excessive content index"));
         }
         match kind {
-            "response.output_text.delta" => {
-                self.text_delta(index * MAX_BLOCKS + part, string(value, "delta")?, on_event)
+            "response.output_text.delta" | "response.refusal.delta" => {
+                let content_type = if kind == "response.refusal.delta" {
+                    "refusal"
+                } else {
+                    "output_text"
+                };
+                let delta = string(value, "delta")?;
+                let entry = self
+                    .response_parts
+                    .entry((index, part))
+                    .or_insert_with(|| (content_type.to_owned(), String::new()));
+                if entry.0 != content_type {
+                    return Err(invalid("contradictory content part"));
+                }
+                append(&mut entry.1, delta, super::opencode::MAX_STREAM_TEXT_BYTES)?;
+                self.text_delta(index * MAX_BLOCKS + part, delta, on_event)
             }
             "response.function_call_arguments.delta" => {
                 if self.argument_parts.len() >= MAX_TOOL_CALLS
@@ -1153,6 +1187,39 @@ impl StructuredFold {
                 if string(response, "status")? != expected {
                     return Err(invalid("contradictory response outcome"));
                 }
+                // Deltas are provisional, but a completed snapshot must agree
+                // with them before any proposal can reach the tool runtime.
+                if expected == "completed" {
+                    let output = array(response, "output")?;
+                    for ((item_index, part_index), (content_type, text)) in &self.response_parts {
+                        let part = output
+                            .get(*item_index)
+                            .and_then(|item| item.get("content"))
+                            .and_then(Value::as_array)
+                            .and_then(|parts| parts.get(*part_index))
+                            .ok_or_else(|| invalid("streamed content missing from terminal"))?;
+                        let field = if content_type == "refusal" {
+                            "refusal"
+                        } else {
+                            "text"
+                        };
+                        if string(part, "type")? != content_type || string(part, field)? != text {
+                            return Err(invalid("contradictory completed content"));
+                        }
+                    }
+                    for (item_index, arguments) in &self.argument_parts {
+                        let item = output
+                            .get(*item_index)
+                            .ok_or_else(|| invalid("streamed call missing from terminal"))?;
+                        let streamed: Value = serde_json::from_str(arguments)
+                            .map_err(|_| invalid("invalid completed streamed arguments"))?;
+                        let completed: Value = serde_json::from_str(string(item, "arguments")?)
+                            .map_err(|_| invalid("invalid completed tool arguments"))?;
+                        if string(item, "type")? != "function_call" || streamed != completed {
+                            return Err(invalid("contradictory completed tool arguments"));
+                        }
+                    }
+                }
                 self.usage.merge(usage(response));
                 self.terminal = Some(response.clone());
                 Ok(())
@@ -1172,7 +1239,6 @@ impl StructuredFold {
             | "response.reasoning_summary_text.done"
             | "response.reasoning_text.delta"
             | "response.reasoning_text.done"
-            | "response.refusal.delta"
             | "response.refusal.done" => {
                 if self.terminal.is_some() {
                     return Err(invalid("semantic event after terminal"));

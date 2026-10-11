@@ -357,6 +357,14 @@ impl ChatRuntime {
         });
     }
 
+    /// Explicit credential removal disables new admissions. Existing turns keep
+    /// their connection snapshot; subscription sign-out also disables its tokens.
+    pub fn remove_provider(&self, provider: &str) {
+        self.inner.providers.send_modify(|providers| {
+            providers.remove(provider);
+        });
+    }
+
     #[must_use]
     pub fn provider_client(&self, provider: &str) -> Option<Arc<dyn ProviderClient>> {
         self.inner.providers.borrow().get(provider).cloned()

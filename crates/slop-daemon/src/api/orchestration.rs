@@ -78,16 +78,6 @@ fn preflight(
             "ChatGPT subscription requests do not support an output-token cap.",
         ));
     }
-    if model.provider() == slop_core::provider::ProviderId::Codex
-        && spec
-            .project
-            .as_ref()
-            .is_some_and(|p| !p.allowed_tools.is_empty())
-    {
-        return Err(StoreError::Unsupported(
-            "Codex text requests do not support workspace tools.",
-        ));
-    }
     let caps = client.as_ref().map_or_else(
         || slop_runtime::providers::inference::capabilities(provider, model.model()),
         |c| c.capabilities(model.model()),

@@ -143,9 +143,6 @@ pub(crate) fn validate_spec(spec: &TaskSpec) -> StoreResult<()> {
         return Err(StoreError::Invalid);
     }
     if let Some(project) = &spec.project {
-        if spec.model.starts_with("codex/") && !project.allowed_tools.is_empty() {
-            return Err(StoreError::Unsupported("model.tools"));
-        }
         let mut names = std::collections::BTreeSet::new();
         if project.project_id.len() > 128
             || project.allowed_tools.is_empty()

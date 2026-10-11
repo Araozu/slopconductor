@@ -170,10 +170,12 @@ Implement native child-task creation with explicit context/tool/budget selection
 bounded fan-out/depth, fair scheduling, and parent/child links. Waiting parents
 release scarce execution slots.
 
-Add account-specific model catalog/capability validation on top of the implemented
-Go/Zen/Codex slice. Provider-supported ChatGPT subscription login is implemented
-for Codex after verifying the documented flow's eligibility, quotas, and
-direct-runtime integration. API-key execution remains independently usable.
+Explicit live account-scoped catalog probes and Codex registration selection,
+sign-out, reasoning controls, and structured tool execution are now implemented.
+Credentialed upstream login/inference validation and account quota enforcement
+remain outstanding; a catalog response alone does not prove entitlement.
+API-key execution remains independently usable. See the
+[provider checklist](provider-checklist.md).
 
 Acceptance scenarios:
 
