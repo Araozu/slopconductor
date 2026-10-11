@@ -64,6 +64,11 @@ pub(super) fn create_session_tx(
     let managed = request
         .project
         .as_ref()
+        .filter(|_| {
+            resolved
+                .as_ref()
+                .is_some_and(|r| !r.project.git_common_dir.is_empty())
+        })
         .map(|project| {
             projects::reserve(
                 tx,
@@ -75,6 +80,16 @@ pub(super) fn create_session_tx(
         .transpose()?;
     let policy = if let Some((_, policy)) = &managed {
         Some(policy.clone())
+    } else if let (Some(selection), Some(resolved)) = (&request.project, &resolved) {
+        let policy = slop_runtime::tools::WorkspacePolicy {
+            root: resolved.project.path.clone(),
+            allowed_tools: selection.allowed_tools.clone(),
+            shell_timeout_ms: 30_000,
+            max_output_bytes: 1024 * 1024,
+            max_tool_calls: 32,
+            max_model_requests: 16,
+        };
+        Some(policy.canonicalize().map_err(|_| StoreError::Invalid)?)
     } else {
         execution::workspace(&request)?
     };

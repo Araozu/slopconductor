@@ -40,7 +40,14 @@ fn project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectResponse> {
         id: row.get(0)?,
         owner_node_id: row.get(1)?,
         path: row.get(2)?,
-        git_common_dir: row.get(3)?,
+        git_common_dir: {
+            let key: String = row.get(3)?;
+            if key.starts_with("folder:") {
+                String::new()
+            } else {
+                key
+            }
+        },
     })
 }
 fn workspace_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceResponse> {
@@ -282,11 +289,96 @@ impl StoreClient {
     ) -> StoreResult<()> {
         let id = id.to_owned();
         self.submit(move |c| {
-            project(c,&id)?;
+            if project(c,&id)?.git_common_dir.is_empty() { return Ok(()); }
             let (global,local):(i64,i64)=c.query_row("SELECT count(*),count(CASE WHEN project_id=?1 THEN 1 END) FROM managed_workspaces WHERE status!='removed'",[id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|StoreError::Database)?;
             if global+needed as i64>MAX_WORKSPACES || local+needed as i64>MAX_PROJECT_WORKSPACES {Err(StoreError::Limit)} else {Ok(())}
         }).await
     }
+    pub(super) async fn canonical_project_folder(&self, path: &str) -> StoreResult<String> {
+        if !Path::new(path).is_absolute() {
+            return Err(StoreError::Invalid);
+        }
+        let canonical = tokio::fs::canonicalize(path)
+            .await
+            .map_err(|_| StoreError::Invalid)?;
+        if !canonical.is_dir() {
+            return Err(StoreError::Invalid);
+        }
+        canonical
+            .to_str()
+            .map(str::to_owned)
+            .ok_or(StoreError::Invalid)
+    }
+
+    pub(super) async fn resolve_folder_project(
+        &self,
+        project: &ProjectResponse,
+        base: Option<&str>,
+    ) -> StoreResult<()> {
+        if base.is_some() {
+            return Err(StoreError::Invalid);
+        }
+        if self.canonical_project_folder(&project.path).await? != project.path {
+            return Err(StoreError::Conflict);
+        }
+        Ok(())
+    }
+
+    pub async fn create_project(
+        &self,
+        request: slop_protocol::filesystem::CreateProjectRequest,
+    ) -> StoreResult<ProjectResponse> {
+        if !valid_command_id(&request.command_id) {
+            return Err(StoreError::Invalid);
+        }
+        let command = request.command_id.clone();
+        self.submit(move |connection| {
+            let used: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM commands WHERE command_id=?1)",
+                    [command],
+                    |row| row.get(0),
+                )
+                .map_err(|_| StoreError::Database)?;
+            if used {
+                Err(StoreError::Conflict)
+            } else {
+                Ok(())
+            }
+        })
+        .await?;
+        let path = if request.git {
+            self.shared
+                .git
+                .create_repository(&request.parent, &request.name)
+                .await?
+        } else {
+            let parent = Path::new(&request.parent);
+            let mut components = Path::new(&request.name).components();
+            if !parent.is_absolute()
+                || request.name.is_empty()
+                || request.name.contains(['/', '\\'])
+                || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+                || components.next().is_some()
+            {
+                return Err(StoreError::Invalid);
+            }
+            let parent = tokio::fs::canonicalize(parent)
+                .await
+                .map_err(|_| StoreError::Invalid)?;
+            let path = parent.join(&request.name);
+            tokio::fs::create_dir(&path)
+                .await
+                .map_err(|_| StoreError::Conflict)?;
+            path.to_string_lossy().into_owned()
+        };
+        self.register_project(RegisterProjectRequest {
+            command_id: request.command_id,
+            path,
+        })
+        .await
+    }
+
     pub async fn register_project(
         &self,
         request: RegisterProjectRequest,
@@ -302,7 +394,15 @@ impl StoreClient {
         {
             return Ok(prior);
         }
-        let repo = self.shared.git.inspect(&request.path).await?;
+        let path = self.canonical_project_folder(&request.path).await?;
+        let repo = if Path::new(&path).join(".git").exists() {
+            self.shared.git.inspect(&path).await?
+        } else {
+            Repository {
+                path: path.clone(),
+                common_dir: format!("folder:{path}"),
+            }
+        };
         self.submit(move |connection| {
             let tx = connection.unchecked_transaction().map_err(|_| StoreError::Database)?;
             if let Some(prior) = prior(&tx, &request.command_id, "register_project", &payload)? { return Ok(prior); }
@@ -312,8 +412,8 @@ impl StoreClient {
                 None => {
                     let count: i64 = tx.query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0)).map_err(|_| StoreError::Database)?;
                     if count >= MAX_PROJECTS { return Err(StoreError::Limit); }
-                    let project = ProjectResponse { id: opaque_id()?, owner_node_id: query_node(&tx)?.node_id, path: repo.path, git_common_dir: repo.common_dir };
-                    tx.execute("INSERT INTO projects(id,owner_node_id,path,git_common_dir) VALUES(?1,?2,?3,?4)", rusqlite::params![project.id, project.owner_node_id, project.path, project.git_common_dir]).map_err(|_| StoreError::Database)?;
+                    let project = ProjectResponse { id: opaque_id()?, owner_node_id: query_node(&tx)?.node_id, path: repo.path, git_common_dir: if repo.common_dir.starts_with("folder:") { String::new() } else { repo.common_dir.clone() } };
+                    tx.execute("INSERT INTO projects(id,owner_node_id,path,git_common_dir) VALUES(?1,?2,?3,?4)", rusqlite::params![project.id, project.owner_node_id, project.path, repo.common_dir]).map_err(|_| StoreError::Database)?;
                     event(&tx, &project.id, None, "project_registered")?;
                     project
                 }
@@ -393,6 +493,15 @@ impl StoreClient {
             return Ok(None);
         }
         let project = self.project(&selection.project_id).await?;
+        if project.git_common_dir.is_empty() {
+            self.resolve_folder_project(&project, selection.base_ref.as_deref())
+                .await?;
+            return Ok(Some(ResolvedWorkspace {
+                project,
+                base_commit: String::new(),
+                data_dir: self.shared.data_dir.clone(),
+            }));
+        }
         let base_commit = self
             .shared
             .git

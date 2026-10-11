@@ -38,6 +38,49 @@ impl GitService {
         }
     }
 
+    /// Initialize only a newly created directory; never adopt existing contents.
+    pub async fn create_repository(&self, parent: &str, name: &str) -> Result<String, GitError> {
+        use std::path::Component;
+        let mut components = Path::new(name).components();
+        if name.is_empty()
+            || name.contains(['/', '\\'])
+            || !matches!(components.next(), Some(Component::Normal(_)))
+            || components.next().is_some()
+            || !Path::new(parent).is_absolute()
+        {
+            return Err(GitError::known("workspace_path_denied"));
+        }
+        let parent = tokio::fs::canonicalize(parent)
+            .await
+            .map_err(|_| GitError::known("workspace_path_denied"))?;
+        let path = parent.join(name);
+        tokio::fs::create_dir(&path)
+            .await
+            .map_err(|_| GitError::known("workspace_path_denied"))?;
+        let (_sender, mut cancel) = watch::channel(false);
+        self.run(&path, &["init", "--initial-branch=main"], true, &mut cancel)
+            .await?;
+        self.run(
+            &path,
+            &[
+                "-c",
+                "user.name=Hive",
+                "-c",
+                "user.email=hive@localhost",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Initialize project",
+            ],
+            true,
+            &mut cancel,
+        )
+        .await?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
     async fn run(
         &self,
         cwd: &Path,

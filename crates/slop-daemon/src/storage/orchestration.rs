@@ -418,6 +418,15 @@ impl StoreClient {
             return Ok(None);
         };
         let project = self.project(&selection.project_id).await?;
+        if project.git_common_dir.is_empty() {
+            self.resolve_folder_project(&project, selection.base_ref.as_deref())
+                .await?;
+            return Ok(Some(projects::ResolvedWorkspace {
+                project,
+                base_commit: String::new(),
+                data_dir: self.shared.data_dir.clone(),
+            }));
+        }
         let base_commit = self
             .shared
             .git

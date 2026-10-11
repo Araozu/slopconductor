@@ -20,6 +20,7 @@ from credentials_smoke import check_credentials
 from codex_smoke import check_codex
 from tools_smoke import check_tools
 from projects_smoke import check_projects
+from filesystem_smoke import check_filesystem
 from orchestration_smoke import check_orchestration
 from delegation_smoke import check_delegation
 
@@ -396,6 +397,7 @@ def main():
         check_chat_lifecycle(daemon_binary, cli_binary, root / "durable-chat")
         check_tools(daemon_binary, cli_binary, root / "structured-tools")
         check_projects(daemon_binary, cli_binary, root / "projects")
+        check_filesystem(daemon_binary, root / "filesystem")
         check_orchestration(daemon_binary, cli_binary, root / "orchestration")
         check_delegation(daemon_binary, cli_binary, root / "delegation")
         check_credentials(daemon_binary, cli_binary, root / "credentials", start_daemon, stop_daemon, isolated_env)

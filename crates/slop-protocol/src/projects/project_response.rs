@@ -5,6 +5,6 @@ pub struct ProjectResponse {
     pub id: String,
     pub owner_node_id: String,
     pub path: String,
-    /// Canonical Git common directory; separate clones are separate projects.
+    /// Canonical Git common directory, or an empty string for a plain folder project.
     pub git_common_dir: String,
 }

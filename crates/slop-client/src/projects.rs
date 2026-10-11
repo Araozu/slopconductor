@@ -1,6 +1,47 @@
 use super::*;
 
 impl DaemonClient {
+    pub async fn create_project(
+        &self,
+        request: &slop_protocol::filesystem::CreateProjectRequest,
+    ) -> Result<slop_protocol::projects::ProjectResponse, ClientError> {
+        self.require_feature("filesystem-navigation").await?;
+        self.post_json(self.endpoint.join("/v1/projects/create")?, request)
+            .await
+    }
+
+    pub async fn browse_directory(
+        &self,
+        path: Option<&str>,
+        after: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<slop_protocol::filesystem::DirectoryResponse, ClientError> {
+        self.require_feature("filesystem-navigation").await?;
+        let mut url = self.endpoint.join("/v1/filesystem")?;
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(path) = path {
+                query.append_pair("path", path);
+            }
+            if let Some(after) = after {
+                query.append_pair("after", after);
+            }
+            if let Some(limit) = limit {
+                query.append_pair("limit", &limit.to_string());
+            }
+        }
+        self.get_json(url).await
+    }
+
+    pub async fn create_directory(
+        &self,
+        request: &slop_protocol::filesystem::CreateDirectoryRequest,
+    ) -> Result<slop_protocol::filesystem::DirectoryResponse, ClientError> {
+        self.require_feature("filesystem-navigation").await?;
+        self.post_json(self.endpoint.join("/v1/filesystem/directories")?, request)
+            .await
+    }
+
     pub async fn register_project(
         &self,
         request: &slop_protocol::projects::RegisterProjectRequest,

@@ -181,3 +181,39 @@ Windows. Live-provider checks remain a separate validation gate.
 Git behavior follows upstream [worktree](https://git-scm.com/docs/git-worktree),
 [revision resolution](https://git-scm.com/docs/git-rev-parse), and
 [diff](https://git-scm.com/docs/git-diff) contracts.
+
+## Folder projects and filesystem navigation
+
+Projects may be ordinary folders; Git is optional. Registration via
+`POST /v1/projects` canonicalizes an existing absolute directory. A checkout
+with a `.git` entry retains the existing managed Git behavior; other directories
+are folder projects. Their public `git_common_dir` is empty. Folder identity is
+persisted by canonical path using a `folder:` key in the existing registry.
+Session, task, batch, retry, and child project selections support folder projects.
+They run directly in the registered directory under the existing canonical-root
+lease, without a managed worktree, frozen commit, or Git dependency. A base
+reference is rejected for folder projects. Sessions share folder contents;
+cleanup never removes a registered folder.
+
+Health advertises `filesystem-navigation`. These local bearer-authenticated
+routes are also available in `slop-client`:
+
+- `GET /v1/filesystem?path=/absolute/folder&limit=200&after=NAME` lists real
+  directory entries with name, absolute path, and `directory`, `file`, or
+  `symlink` kind. Omit path to start at the daemon user's home. The response
+  includes canonical path, parent, and a name cursor. Ordering is by name;
+  listings are live rather than snapshots, so external changes may affect paging.
+- `POST /v1/filesystem/directories` with `{ "parent": "/absolute/folder", "name": "new-folder" }`
+  creates a single child folder and returns its listing.
+- `POST /v1/projects/create` with `{ "command_id": "new-project", "parent": "/absolute/folder", "name": "project" }`
+  creates and registers a folder project. Optional `git: true` initializes Git
+  with an empty initial commit through the bounded native Git supervisor.
+
+Creation exclusively creates a new path and refuses existing paths. It does not
+replay or adopt partial results. A failed or lost response requires inspecting
+that path; register a successfully created folder with `POST /v1/projects`.
+Creation is not an atomic filesystem/database transaction, and partial folders
+are preserved on failure or restart. Project creation continues independently
+of an HTTP disconnect. Folder creation is a single filesystem operation.
+These routes expose the authenticated daemon user's filesystem, not the web
+server's filesystem; browser access stays behind the existing loopback bridge.

@@ -13,7 +13,13 @@ use std::sync::{Arc, atomic::Ordering};
 
 pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
     Router::new()
+        .route("/v1/filesystem", get(super::filesystem::browse))
+        .route(
+            "/v1/filesystem/directories",
+            post(super::filesystem::create),
+        )
         .route("/v1/projects", get(projects).post(register))
+        .route("/v1/projects/create", post(create))
         .route("/v1/projects/{id}", get(project))
         .route("/v1/projects/{id}/workspaces", get(workspaces))
         .route("/v1/projects/{id}/events", get(events))
@@ -88,4 +94,26 @@ async fn remove(
         );
     }
     accepted(state.store.remove_workspace(&id, request).await)
+}
+
+async fn create(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<slop_protocol::filesystem::CreateProjectRequest>,
+) -> Response {
+    if !state.accepting.load(Ordering::Acquire) {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "The daemon is shutting down.",
+        );
+    }
+    // A detached service task owns creation even if the HTTP client disconnects.
+    match tokio::spawn(async move { state.store.create_project(request).await }).await {
+        Ok(result) => accepted(result),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "project_creation_failed",
+            "Inspect the target directory before retrying.",
+        ),
+    }
 }
