@@ -139,7 +139,9 @@ struct StartupGuard(Option<(Arc<AtomicBool>, Arc<Mutex<Gate>>)>);
 
 mod lifecycle;
 #[cfg(test)]
-use lifecycle::{open_and_initialize, open_lock};
+use lifecycle::open_and_initialize;
+#[cfg(all(test, unix))]
+use lifecycle::open_lock;
 mod messages;
 mod repository;
 mod schema;
