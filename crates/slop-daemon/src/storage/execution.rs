@@ -973,7 +973,7 @@ pub(super) fn claim_next_turn(
             Ok((optional_json_column::<slop_runtime::providers::Usage>(r,0)?, json_column::<slop_runtime::agent::context::RequestContext>(r,1)?))
         }
     ).optional().map_err(|_| StoreError::Database)?.and_then(|(usage,context)| {
-        usage?.input_tokens.filter(|_| context.input_bytes > 0).map(|input_tokens| slop_runtime::agent::context::ContextUsage { input_tokens, input_bytes: context.input_bytes })
+        let usage = usage?; usage.input_tokens.filter(|_| context.input_bytes > 0).map(|input_tokens| slop_runtime::agent::context::ContextUsage { input_tokens, output_tokens:usage.output_tokens, input_bytes: context.input_bytes })
     });
     let compactions_seen = tx.query_row("SELECT count(*) FROM model_requests WHERE turn_id=?1 AND json_extract(context,'$.compaction')=1", [&turn_id], |r| r.get(0)).map_err(|_| StoreError::Database)?;
     tx.execute(

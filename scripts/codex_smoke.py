@@ -111,14 +111,16 @@ class CodexFixture:
                         output.insert(0, {"type": "reasoning", "id": "reason-1", "encrypted_content": "private-codex-fixture",
                                           "summary": [{"type": "summary_text", "text": "private-summary-fixture"}]})
                         output.extend(calls)
-                    index = 1 if calls else 0
+                    if prompt == "reported-output":
+                        output.insert(0, {"type":"reasoning","id":"hidden-reasoning","encrypted_content":"private-hidden-reasoning-fixture","summary":[]})
+                    index = 1 if calls or prompt == "reported-output" else 0
                     emit({"type": "response.refusal.delta" if prompt == "refuse" else "response.output_text.delta",
                           "output_index": index, "content_index": 0, "delta": text})
                     if calls:
                         for index, proposal in enumerate(calls, 2):
                             emit({"type": "response.function_call_arguments.delta", "output_index": index, "delta": proposal["arguments"]})
                     response = {"status": status, "model": payload["model"], "output": output,
-                                "usage": {"input_tokens": 29000 if prompt == "reported-usage" else 7, "output_tokens": 3}}
+                                "usage": {"input_tokens": 29000 if prompt == "reported-usage" else 7, "output_tokens": 29000 if prompt == "reported-output" else 3}}
                     if status == "incomplete":
                         response["incomplete_details"] = {"reason": "max_output_tokens"}
                     emit({"type": "response." + status, "response": response})
@@ -233,10 +235,12 @@ def check_codex(daemon_binary, cli_binary, root):
         assert len(catalog["models"]) == 2 and catalog["models"][0]["ready"] and not catalog["models"][1]["ready"]
         assert catalog["models"][0]["capabilities"]["tools"]
         assert catalog["models"][0]["capabilities"]["reasoning_efforts"] == ["low", "medium", "high", "xhigh", "max"]
-        context = chat("reported-usage", "codex-context-start")
-        continued = chat("continue context", "codex-context-continue", "--session", context["session_id"])
-        context_requests = api(f"/v1/turns/{continued['turn_id']}/requests")["items"]
-        assert any(r["compaction"] and r["effective_settings"]["max_output_tokens"] is None for r in context_requests)
+        for marker in ["reported-usage", "reported-output"]:
+            context = chat(marker, "codex-context-start-" + marker)
+            continued = chat("continue context", "codex-context-continue-" + marker, "--session", context["session_id"])
+            context_requests = api(f"/v1/turns/{continued['turn_id']}/requests")["items"]
+            assert any(r["compaction"] and r["effective_settings"]["max_output_tokens"] is None for r in context_requests)
+            assert "private-hidden-reasoning-fixture" not in json.dumps(fixture.snapshot()[-1][1])
         receipt = chat("workflow", "codex-workflow", "--workspace", str(workspace), "--effort", "high")
         state = api(f"/v1/turns/{receipt['turn_id']}")
         assert state["status"] == "completed" and state["usage"]["total_tokens"] == 20

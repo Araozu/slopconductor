@@ -17,7 +17,15 @@ pub struct RequestContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextUsage {
     pub input_tokens: u64,
+    pub output_tokens: Option<u64>,
     pub input_bytes: u64,
+}
+
+impl ContextUsage {
+    pub fn tokens(self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens.unwrap_or(0))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +53,7 @@ pub fn estimated_tokens(bytes: u64, reported: Option<ContextUsage>) -> u64 {
     reported.map_or(fallback, |usage| {
         fallback.max(
             usage
-                .input_tokens
+                .tokens()
                 .saturating_add(bytes.saturating_sub(usage.input_bytes).div_ceil(3)),
         )
     })

@@ -259,7 +259,13 @@ pub(crate) async fn execute<R: ChatRepository>(
                 &messages,
                 context_budget,
                 work.context_overflow,
-                force_compaction,
+                force_compaction
+                    || context_usage.is_some_and(|usage| {
+                        usage.tokens()
+                            > context::input_bytes(&messages, &definitions)
+                                .div_ceil(3)
+                                .saturating_mul(2)
+                    }),
             )
         } else {
             None
@@ -615,6 +621,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             .input_tokens
             .map(|input_tokens| context::ContextUsage {
                 input_tokens,
+                output_tokens: response.usage.output_tokens,
                 input_bytes: context::input_bytes(&request.messages, &request.tools),
             });
         context_frontier = None;

@@ -85,10 +85,12 @@ older daemon, so an older server cannot silently ignore those selections.
 
 ## Automatic context compaction
 
-The daemon uses the latest completed request's provider-reported **input** tokens
-and its recorded input size, then budgets newly appended messages, tool schemas,
+The daemon uses the latest completed request's provider-reported input and output
+tokens and recorded input size, then budgets newly appended messages, tool schemas,
 and private continuation. Billing totals summed across requests are not context
-measurements. Anthropic cache reads and writes are included in input usage;
+measurements. Reported output also covers reasoning that occupies more tokens
+than its encrypted representation suggests; dense history is summarized rather
+than retaining that older reasoning in the recent tail. Anthropic cache reads and writes are included in input usage;
 OpenAI cached-token details are already included and are not added twice.
 Missing usage uses a conservative estimate of one token per three serialized
 bytes. Estimates remain distinct from provider-reported public usage.
