@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 
 from chat_smoke import isolated_env, request, run, start_daemon, stop_daemon, wait_turn
+from tools_smoke import ToolFixture
 
 
 class CodexFixture:
@@ -151,10 +152,12 @@ class CodexFixture:
 
 def check_codex(daemon_binary, cli_binary, root):
     fixture = CodexFixture()
+    go_fixture = ToolFixture()
     daemon = log = None
     try:
         env = isolated_env(root, fixture)
         env["SLOP_CODEX_BASE_URL"] = fixture.base_url
+        env["SLOP_PROVIDER_BASE_URL"] = go_fixture.base_url
         env["OPENAI_API_KEY"] = "platform-fixture"
         data = root / "data"
         workspace = root / "workspace"
@@ -235,6 +238,34 @@ def check_codex(daemon_binary, cli_binary, root):
         assert len(catalog["models"]) == 2 and catalog["models"][0]["ready"] and not catalog["models"][1]["ready"]
         assert catalog["models"][0]["capabilities"]["tools"]
         assert catalog["models"][0]["capabilities"]["reasoning_efforts"] == ["low", "medium", "high", "xhigh", "max"]
+        # A Go conversation can switch to subscription Codex's Responses wire
+        # after tool execution, without inheriting Go's unsupported output cap.
+        switch_workspace = root / "switch-workspace"
+        switch_workspace.mkdir()
+        (switch_workspace / "file.txt").write_text("header\nbefore\nfooter", encoding="utf-8")
+        frames = [json.loads(line) for line in cli("chat", "--model", "opencode-go/glm-5.3-flash", "--prompt", "workflow", "--workspace", str(switch_workspace), "--command-id", "switch-from-go").splitlines()]
+        go_receipt = next(frame["receipt"] for frame in frames if frame["type"] == "receipt")
+        go_history = api(f"/v1/sessions/{go_receipt['session_id']}/messages")["items"]
+        assert all((m["provider"], m["model"]) == ("opencode-go", "glm-5.3-flash") for m in go_history)
+        api(f"/v1/sessions/{go_receipt['session_id']}/messages", {
+            "command_id": "switch-explicit-cap", "text": "reject explicit cap",
+            "model": "codex/gpt-6.1-sol", "settings": {"max_output_tokens": 64},
+        }, 400)
+        (switch_workspace / "file.txt").write_text("before", encoding="utf-8")
+        switched = chat("workflow", "switch-to-codex", "--session", go_receipt["session_id"])
+        assert api(f"/v1/turns/{switched['turn_id']}")["settings"]["max_output_tokens"] is None
+        wire = fixture.snapshot()[-1][1]
+        assert len([item for item in wire["input"] if item.get("type") == "function_call_output"]) == 9
+        assert "private synthetic continuation" not in json.dumps(wire)
+        mixed = api(f"/v1/sessions/{go_receipt['session_id']}/messages")["items"]
+        assert mixed[:len(go_history)] == go_history
+        assert all((m["provider"], m["model"]) == ("codex", "gpt-6.1-sol") for m in mixed[len(go_history):])
+        cli("session", "send", go_receipt["session_id"], "--text", "return to Go", "--model", "opencode-go/glm-5.3-flash", "--command-id", "switch-codex-to-go")
+        returned = api(f"/v1/sessions/{go_receipt['session_id']}/messages")["items"]
+        assert returned[:len(mixed)] == mixed
+        assert all((m["provider"], m["model"]) == ("opencode-go", "glm-5.3-flash") for m in returned[len(mixed):])
+        assert "private-codex-fixture" not in json.dumps(go_fixture.snapshot()[-1])
+        assert len([message for message in go_fixture.snapshot()[-1]["messages"] if message["role"] == "tool"]) == 9
         for marker in ["reported-usage", "reported-output"]:
             context = chat(marker, "codex-context-start-" + marker)
             continued = chat("continue context", "codex-context-continue-" + marker, "--session", context["session_id"])
@@ -333,3 +364,4 @@ def check_codex(daemon_binary, cli_binary, root):
         if daemon is not None:
             stop_daemon(daemon, log)
         fixture.close()
+        go_fixture.close()

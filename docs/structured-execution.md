@@ -1,10 +1,10 @@
 # Structured execution and tools
 
-**Implemented, updated 2026-10-11.** The daemon selects OpenCode Go, OpenCode Zen, or
+**Implemented, updated 2026-10-13.** The daemon selects OpenCode Go, OpenCode Zen, or
 Codex through the common runtime provider interface. All three run the bounded
 inference/tool loop and preserve structured history. Incompatible required
-continuation and unsupported settings fail before acceptance where the existing
-session context makes that knowable, otherwise before provider dispatch. CLI and SDK
+continuation within a turn and unsupported settings fail before provider
+dispatch; known unsupported settings fail before acceptance. CLI and SDK
 consumers use public structured records; neither owns execution.
 
 **Tool set updated, 2026-10-09.** The native runtime exposes only pi's four basic
@@ -23,7 +23,11 @@ A provider call ID remains private and is scoped to its request; it is never
 used as a globally unique invocation ID. Content blocks have stable IDs and
 preserve text, refusals, tool proposals, arguments, result errors, artifact
 references, and uncertainty about effects. `MessageResponse.text` remains a
-visible-text projection for existing clients.
+visible-text projection for existing clients. Each message also exposes its
+persisted `provider` and `model`: selected for user messages, reported when
+available for assistant messages, and inherited from the proposing request for
+tool results. One turn may have several reported model IDs; each message retains
+its own identity.
 
 `ProviderClient::infer` accepts provider-neutral messages, generation settings,
 and tool definitions. Gateway adapters translate Chat Completions, Responses,
@@ -37,8 +41,12 @@ Completed provider reasoning/signatures/encrypted continuation stay in a
 private database column. They are excluded from public history, event frames,
 CLI output, and debug formatting. Compatible continuation is replayed to the
 same provider, requested model, endpoint, and credential scope. The scope is a
-fingerprint, not a stored API key. Required incompatible continuation fails
-with `context_incompatible` instead of being silently discarded. Incomplete
+fingerprint, not a stored API key. On a new turn selecting another provider or
+model, the daemon reconstructs the inference view from canonical blocks and
+paired tool results without that incompatible private material. Durable private
+records remain intact. Within a turn, or for the same model under a changed
+credential/endpoint scope, required incompatible continuation still fails with
+`context_incompatible` before dispatch. Incomplete
 continuation is discarded. Database file permissions protect this material;
 the database is not encrypted.
 
@@ -70,15 +78,19 @@ When settings are omitted, session settings apply. When a settings object is
 provided, a missing token cap falls back to the session cap; absent/null
 `reasoning_effort` means provider default. Legacy `max_tokens` is supported at
 session creation; conflicting legacy/structured caps are rejected.
+When changing from another provider to Codex subscription mode, an inherited
+session output cap is omitted because that mode does not support it. A cap
+explicitly supplied for the new turn still fails validation before acceptance.
 
 `reasoning_effort` is part of the contract and CLI (`--effort`). Codex advertises
 [model-specific effort values](codex-connection.md#reasoning-settings) and encodes
 them in Responses requests. Go/Zen effort settings remain unadvertised. Explicit
 unsupported values return `unsupported_capability` before acceptance and inference. There is no arbitrary provider-parameter passthrough.
 
-Per-turn model selection works with compatible canonical context. A history
-requiring another model's private continuation is rejected explicitly; portable
-general context conversion/reset is future work; automatic compaction summarizes
+Per-turn model selection can change providers in the same conversation,
+including after completed structured tool exchanges. The new inference view
+retains canonical history and excludes private continuation belonging to another
+provider/model/wire; automatic compaction summarizes
 older visible content and retains compatible structured tool exchanges. New native clients check advertised
 capabilities before delivering tool policies or model/settings overrides to an
 older daemon, so an older server cannot silently ignore those selections.

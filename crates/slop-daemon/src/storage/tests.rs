@@ -163,7 +163,7 @@ async fn schema_nine_upgrade_preserves_conversations_history_and_receipts() {
         .unwrap();
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
-    connection.execute_batch("ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; PRAGMA user_version=9;").unwrap();
+    connection.execute_batch("ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=9;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
     let client = reopened.client();
@@ -322,6 +322,12 @@ fn schema_two_migration_preserves_history_settings_and_command_payloads() {
         ["user 1", "assistant 1", "user 2", "assistant 2"]
     );
     assert!(history.items.iter().all(|m| m.blocks.len() == 1));
+    assert!(
+        history
+            .items
+            .iter()
+            .all(|m| m.provider == "opencode-go" && m.model == "glm-5.3-flash")
+    );
     assert_eq!(
         get_session(&connection, "session")
             .unwrap()
@@ -965,9 +971,9 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
         .collect();
     client.complete_request(&turn, RequestCompletion {
                 compaction: None, request_id: "request".into(),
-            response: InferenceResponse { resolved_model: None, usage: Usage::default(), finish_reason: FinishReason::ToolCalls,
+            response: InferenceResponse { resolved_model: Some("vendor/resolved-tool-model".into()), usage: Usage::default(), finish_reason: FinishReason::ToolCalls,
                 message: InferenceMessage { role: MessageRole::Assistant, blocks, continuation: Some(Continuation {
-                    scope:"scope".into(), provider:"opencode-go".into(), model:"glm-5.3-flash".into(), wire:"chat_completions".into(), required:true,
+                    scope:"scope".into(), provider:"opencode-go".into(), model:"glm-5.3-flash".into(), wire:"openai-chat-completions".into(), required:true,
                     items:vec![serde_json::json!({"reasoning_content":"private test continuation"})],
                 }) },
             }, tools: intents.clone(),
@@ -999,6 +1005,9 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
         .unwrap(); // receipt retry, never execution
     client.start_tool(&turn, &intents[1]).await.unwrap();
     store.shutdown().await.unwrap();
+    let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    connection.execute_batch("ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap();
+    drop(connection);
     let store = open_test(&dir, None).await;
     let client = store.client();
     let tools = client
@@ -1022,7 +1031,7 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
         vec![(
             "opencode-go".into(),
             "glm-5.3-flash".into(),
-            "chat_completions".into(),
+            "openai-chat-completions".into(),
         )]
     );
     let history = client
@@ -1030,6 +1039,13 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
         .await
         .unwrap();
     assert_eq!(history.items.len(), 5); // user, assistant, three paired results
+    assert_eq!(history.items[0].provider, "opencode-go");
+    assert_eq!(history.items[0].model, "glm-5.3-flash");
+    for message in &history.items[1..] {
+        assert_eq!(message.provider, "opencode-go");
+        assert_eq!(message.model, "vendor/resolved-tool-model");
+        assert_eq!(client.message(&message.id).await.unwrap(), *message);
+    }
     let public = serde_json::to_string(&history).unwrap();
     assert!(!public.contains("private test continuation"));
     assert!(!public.contains("provider-0"));
@@ -1294,8 +1310,8 @@ async fn completed_request_usage_is_durable_before_the_turn_finishes() {
                 message_id: "usage-checkpoint-message".into(),
                 ordinal: 1,
                 requested_model: work.requested_model.clone(),
-                requested_settings: work.requested_settings,
-                settings: work.settings,
+                requested_settings: work.requested_settings.clone(),
+                settings: work.settings.clone(),
                 context: slop_runtime::agent::context::RequestContext {
                     input_bytes: 1024,
                     compaction: false,
@@ -1312,7 +1328,7 @@ async fn completed_request_usage_is_durable_before_the_turn_finishes() {
                 tools: Vec::new(),
                 compaction: None,
                 response: InferenceResponse {
-                    resolved_model: None,
+                    resolved_model: Some("reported-model-build".into()),
                     usage: Usage::from_reported(Some(30000), Some(10), Some(30010)),
                     finish_reason: FinishReason::Stop,
                     message: InferenceMessage::text(
@@ -1335,11 +1351,185 @@ async fn completed_request_usage_is_durable_before_the_turn_finishes() {
             .total_tokens,
         Some(30010)
     );
+    let reply = client.message("usage-checkpoint-message").await.unwrap();
+    assert_eq!(reply.provider, "opencode-go");
+    assert_eq!(reply.model, "reported-model-build");
+    client
+        .begin_request(
+            &turn,
+            RequestIntent {
+                id: "second-checkpoint-request".into(),
+                message_id: "second-checkpoint-message".into(),
+                ordinal: 2,
+                requested_model: work.requested_model,
+                requested_settings: work.requested_settings,
+                settings: work.settings,
+                context: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .complete_request(
+            &turn,
+            RequestCompletion {
+                request_id: "second-checkpoint-request".into(),
+                tools: Vec::new(),
+                compaction: None,
+                response: InferenceResponse {
+                    resolved_model: Some("second-reported-build".into()),
+                    usage: Usage::from_reported(Some(5), Some(2), Some(7)),
+                    finish_reason: FinishReason::Stop,
+                    message: InferenceMessage::text(
+                        MessageRole::Assistant,
+                        "second-usage-block".into(),
+                        "second completed step".into(),
+                    ),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let second_reply = client.message("second-checkpoint-message").await.unwrap();
+    assert_eq!(second_reply.model, "second-reported-build");
+    assert_eq!(client.message(&reply.id).await.unwrap(), reply);
     store.shutdown().await.unwrap();
+    let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    connection.execute_batch("ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap();
+    drop(connection);
     let reopened = open_test(&dir, None).await;
     let recovered = reopened.client().turn(&turn).await.unwrap();
     assert_eq!(recovered.status, "interrupted");
-    assert_eq!(recovered.usage.unwrap().total_tokens, Some(30010));
+    assert_eq!(recovered.usage.unwrap().total_tokens, Some(30017));
+    assert_eq!(reopened.client().message(&reply.id).await.unwrap(), reply);
+    assert_eq!(
+        reopened.client().message(&second_reply.id).await.unwrap(),
+        second_reply
+    );
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn messages_keep_turn_models_across_provider_switches_and_migration() {
+    use slop_runtime::{
+        chat::{ChatOutcome, ChatStatus},
+        providers::Usage,
+    };
+    let dir = TempDir::new().unwrap();
+    let store = open_test(&dir, None).await;
+    let client = store.client();
+    let session = client
+        .create_session(create_request("message-models-create", None))
+        .await
+        .unwrap()
+        .session_id;
+    let selections = [
+        (
+            None,
+            "opencode-go",
+            "glm-5.3-flash",
+            Some("go-reported-build"),
+        ),
+        (
+            Some("opencode-zen/glm-5.3"),
+            "opencode-zen",
+            "glm-5.3",
+            Some("vendor/zen-reported-build"),
+        ),
+        (Some("codex/gpt-6.1-sol"), "codex", "gpt-6.1-sol", None),
+        (None, "opencode-go", "glm-5.3-flash", None),
+    ];
+    for (index, (selection, provider, model, reported)) in selections.iter().enumerate() {
+        let request = SendMessageRequest {
+            command_id: format!("message-models-{index}"),
+            text: format!("question {index}"),
+            model: selection.map(str::to_owned),
+            ..Default::default()
+        };
+        let receipt = client
+            .send_message(&session, request.clone())
+            .await
+            .unwrap();
+        let work = client.claim_next_turn().await.unwrap().unwrap();
+        assert_eq!(work.requested_model, format!("{provider}/{model}"));
+        let user = client
+            .message(receipt.message_id.as_ref().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(user.provider, *provider);
+        assert_eq!(user.model, *model);
+        client
+            .checkpoint_visible(&work.turn_id, "partial reply")
+            .await
+            .unwrap();
+        let partial = client
+            .message(
+                client
+                    .turn(&work.turn_id)
+                    .await
+                    .unwrap()
+                    .assistant_message_id
+                    .as_ref()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(partial.provider, *provider);
+        assert_eq!(partial.model, *model);
+        client
+            .finish_chat_turn(
+                &work.turn_id,
+                ChatOutcome {
+                    status: ChatStatus::Completed,
+                    text: format!("answer {index}"),
+                    resolved_model: reported.map(str::to_owned),
+                    usage: Usage::default(),
+                    error_code: None,
+                    error_message: None,
+                },
+            )
+            .await
+            .unwrap();
+        let reply = client.message(&partial.id).await.unwrap();
+        assert_eq!(reply.provider, *provider);
+        assert_eq!(reply.model, reported.unwrap_or(model));
+        assert_eq!(
+            client.send_message(&session, request).await.unwrap(),
+            receipt
+        );
+        assert_eq!(client.message(&user.id).await.unwrap(), user);
+    }
+    let history = client.messages(&session, None, 20).await.unwrap();
+    assert_eq!(history.items.len(), 8);
+    let mut cursor = None;
+    let mut paged = Vec::new();
+    loop {
+        let page = client.messages(&session, cursor, 1).await.unwrap();
+        paged.extend(page.items);
+        cursor = page.next_after;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(paged, history.items);
+    store.shutdown().await.unwrap();
+    // Exercise the previous schema's backfill using each turn's frozen model,
+    // including resolved aliases and turns that override the session provider.
+    let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    connection.execute_batch("ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap();
+    drop(connection);
+    let reopened = open_test(&dir, None).await;
+    assert_eq!(
+        reopened
+            .client()
+            .messages(&session, None, 20)
+            .await
+            .unwrap(),
+        history
+    );
+    for item in &history.items {
+        assert_eq!(reopened.client().message(&item.id).await.unwrap(), *item);
+    }
     reopened.shutdown().await.unwrap();
 }
 

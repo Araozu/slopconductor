@@ -127,8 +127,9 @@ impl Drop for Store {
 }
 
 impl StoreClient {
-    /// Inspect at most the bounded chat context needed for provider preflight.
+    /// Inspect the private continuation requirements in bounded durable history.
     /// Private continuation items remain inside the storage/runtime boundary.
+    #[cfg(test)]
     pub async fn context_requirements(
         &self,
         session_id: &str,

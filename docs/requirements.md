@@ -150,6 +150,10 @@ the public API and CLI. The daemon persists secrets in its private application
 data directory (XDG on Linux), outside conversations and logs. New supported
 requests use updates without a daemon restart.
 
+I09: Every conversation message persists its selected or originating provider
+and model. A new turn can select another provider/model in the same conversation
+while retaining canonical history and the original metadata of earlier messages.
+
 ## Exclusions from the first useful release
 
 The first useful local CLI release does not include browser tools, graphical

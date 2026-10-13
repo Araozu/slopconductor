@@ -360,6 +360,12 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
         canonical = next((message for message in page["items"] if message["role"] == "assistant"), None)
         if history_status != 200 or canonical is None or canonical["text"] != REPLY:
             raise RuntimeError(f"canonical assistant history missing after reconnect: {page}")
+        if any((message.get("provider"), message.get("model")) != (PROVIDER, MODEL) for message in page["items"]):
+            raise RuntimeError(f"history is missing per-message provider/model: {page}")
+        history_before_restart = page["items"]
+        status, individual = request(endpoint, token, path=f"/v1/messages/{canonical['id']}")
+        if status != 200 or individual != canonical:
+            raise RuntimeError(f"individual message differs from history: {individual}")
 
         check_cli_commands(cli_binary, endpoint, token_path, env, root,
                            session_receipt, message_receipt, REPLY)
@@ -386,7 +392,7 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
         daemon, endpoint, log = start_daemon(daemon_binary, root / "run-2", data_dir, env)
         token = token_path.read_text(encoding="ascii").strip()
         status, page = request(endpoint, token, path=f"/v1/sessions/{session_id}/messages?limit=200")
-        if status != 200 or not any(message["text"] == REPLY for message in page["items"]):
+        if status != 200 or page["items"] != history_before_restart:
             raise RuntimeError("durable conversation history did not survive daemon restart")
 
         status, created = request(endpoint, token, "POST", {

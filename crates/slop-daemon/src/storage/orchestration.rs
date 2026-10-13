@@ -761,22 +761,7 @@ pub(super) fn page<T: serde::Serialize>(
 }
 
 pub(super) fn message(c: &Connection, id: &str) -> StoreResult<MessageResponse> {
-    let mut statement=c.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id FROM messages WHERE id=?1").map_err(|_|StoreError::Database)?;
-    let mut rows = statement.query([id]).map_err(|_| StoreError::Database)?;
-    let row = rows
-        .next()
-        .map_err(|_| StoreError::Database)?
-        .ok_or(StoreError::NotFound)?;
-    Ok(MessageResponse {
-        id: row.get(0).map_err(|_| StoreError::Database)?,
-        session_id: row.get(1).map_err(|_| StoreError::Database)?,
-        turn_id: row.get(2).map_err(|_| StoreError::Database)?,
-        role: row.get(3).map_err(|_| StoreError::Database)?,
-        text: row.get(4).map_err(|_| StoreError::Database)?,
-        status: row.get(5).map_err(|_| StoreError::Database)?,
-        blocks: execution::public_blocks_from_row(row, 6, 0, 4)?,
-        request_id: row.get(7).map_err(|_| StoreError::Database)?,
-    })
+    messages::get_message(c, id)
 }
 
 #[cfg(test)]

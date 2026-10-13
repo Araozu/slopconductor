@@ -60,8 +60,12 @@ The repository currently contains:
 The structured `ProviderClient::infer` path now accepts blocks, tool definitions,
 and generation settings. Go/Zen implement all three wire shapes; Codex uses
 structured Responses, including model-specific reasoning settings. Private completed continuation is stored by the
-daemon and replayed only within its provider/model/connection scope. The public
-Go/Zen/Codex surface includes model capabilities, per-turn selection, structured messages,
+daemon and replayed only within its provider/model/connection scope. A new turn
+can change provider/model by reconstructing its inference view from canonical
+blocks and paired tool results, retaining the original private records.
+Same-model required continuation under a changed connection scope remains blocked
+before dispatch. The public Go/Zen/Codex surface includes model capabilities,
+per-turn selection, structured messages,
 request/tool records, streamed IDs, and artifacts. Codex accepts Platform keys or
 ChatGPT authorization and supports separate registrations, selection, and sign-out.
 Explicit account-scoped catalog probes are implemented. The older text methods
@@ -469,7 +473,9 @@ continuation is optional/required, and a proposed switch is compatible, requires
 context reconstruction, or is blocked. Keep canonical conversation/artifacts
 locally for supported reconstruction. Provider/account/model changes and exports
 validate these requirements; opaque data is never passed to a different provider
-or dropped silently to make a switch appear portable.
+or deleted to make a switch appear portable. The implemented new-turn
+provider/model switch reconstructs the inference view from canonical records;
+it retains opaque material durably while excluding it from incompatible requests.
 
 ## Public surface for every client
 
@@ -520,7 +526,7 @@ rejection, not by claiming simulated parity.
 | C09 | Cancellation semantics match advertising. | Tests distinguish local abort, confirmed remote cancellation, completion race, timeout and client detach. |
 | C10 | Retry policy is centralized and observable. | Fault injection proves no SDK retry, separate request IDs/usage for retries, bounded attempts, and no replay of unknown tools. |
 | C11 | Unknown usage stays unknown. | Missing/partial/cumulative/final/subset-counter fixtures do not invent zeros or double-count; unknown retry usage remains visible. |
-| C12 | Diagnostics and continuation are safe. | Synthetic secrets in headers/error bodies never reach public DTOs/logs; incompatible continuation is blocked and required fields survive restart. |
+| C12 | Diagnostics and continuation are safe. | Synthetic secrets in headers/error bodies never reach public DTOs/logs; incompatible opaque replay is blocked, new-turn provider/model switches use canonical history, and required private fields survive restart. |
 | C13 | Replay reconstructs the same view. | Snapshot + durable events reconcile streamed blocks by ID without duplicate text or new inference; a slow/disconnected client does not stall the run. |
 | C14 | Clients use one semantic surface. | The same transcript/config/error fixtures drive a CLI projection and a second minimal protocol consumer with no provider-specific parsing. No full graphical client is required. |
 | C15 | Advertised capabilities have implementation evidence. | Adapter fixtures cover each claimed feature; separately budgeted live checks establish supported real-provider behavior when credentials are available. |

@@ -1,5 +1,67 @@
 use super::*;
 
+pub(super) fn migrate_message_models(tx: &Transaction<'_>) -> StoreResult<()> {
+    tx.execute_batch(
+        "ALTER TABLE messages ADD COLUMN provider TEXT NOT NULL DEFAULT '';
+         ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT '';
+         UPDATE messages SET
+            provider=(SELECT substr(COALESCE(r.requested_model,t.requested_model),1,
+                instr(COALESCE(r.requested_model,t.requested_model),'/')-1)
+                FROM turns t LEFT JOIN model_requests r ON r.id=messages.request_id
+                WHERE t.id=messages.turn_id),
+            model=(SELECT CASE WHEN messages.role='user'
+                THEN substr(t.requested_model,instr(t.requested_model,'/')+1)
+                WHEN r.id IS NOT NULL THEN COALESCE(r.resolved_model,
+                    substr(r.requested_model,instr(r.requested_model,'/')+1))
+                ELSE COALESCE(t.resolved_model,
+                    substr(t.requested_model,instr(t.requested_model,'/')+1)) END
+                FROM turns t LEFT JOIN model_requests r ON r.id=messages.request_id
+                WHERE t.id=messages.turn_id);",
+    )
+    .map_err(|_| StoreError::Database)
+}
+
+pub(super) fn turn_model(
+    connection: &Connection,
+    turn_id: &str,
+) -> StoreResult<slop_core::provider::ProviderModelRef> {
+    let requested: String = connection
+        .query_row(
+            "SELECT requested_model FROM turns WHERE id=?1",
+            [turn_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    requested.parse().map_err(|_| StoreError::Database)
+}
+
+pub(super) fn from_row(row: &rusqlite::Row<'_>) -> StoreResult<MessageResponse> {
+    Ok(MessageResponse {
+        id: row.get(0).map_err(|_| StoreError::Database)?,
+        session_id: row.get(1).map_err(|_| StoreError::Database)?,
+        turn_id: row.get(2).map_err(|_| StoreError::Database)?,
+        role: row.get(3).map_err(|_| StoreError::Database)?,
+        text: row.get(4).map_err(|_| StoreError::Database)?,
+        status: row.get(5).map_err(|_| StoreError::Database)?,
+        blocks: execution::public_blocks_from_row(row, 6, 0, 4)?,
+        request_id: row.get(7).map_err(|_| StoreError::Database)?,
+        provider: row.get(8).map_err(|_| StoreError::Database)?,
+        model: row.get(9).map_err(|_| StoreError::Database)?,
+    })
+}
+
+pub(super) fn get_message(connection: &Connection, id: &str) -> StoreResult<MessageResponse> {
+    let mut statement = connection
+        .prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id,provider,model FROM messages WHERE id=?1")
+        .map_err(|_| StoreError::Database)?;
+    let mut rows = statement.query([id]).map_err(|_| StoreError::Database)?;
+    from_row(
+        rows.next()
+            .map_err(|_| StoreError::Database)?
+            .ok_or(StoreError::NotFound)?,
+    )
+}
+
 pub(super) fn send_message(
     connection: &Connection,
     session_id: &str,
@@ -143,6 +205,9 @@ pub(super) fn send_message_tx(
         .model
         .clone()
         .unwrap_or_else(|| format!("{}/{}", session.provider, session.model));
+    let model_ref = requested_model
+        .parse::<slop_core::provider::ProviderModelRef>()
+        .map_err(|_| StoreError::Invalid)?;
     let settings = match effective_settings {
         Some(settings) => {
             execution::validate_settings(&requested_model, &settings)?;
@@ -175,7 +240,7 @@ pub(super) fn send_message_tx(
         rusqlite::params![canonical(&spec)?, canonical(&requested)?, session_id],
     )
     .map_err(|_| StoreError::Database)?;
-    tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'user',?5,'completed')",rusqlite::params![message_id,session_id,turn_id,user_order,request.text]).map_err(|_|StoreError::Database)?;
+    tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,provider,model) VALUES(?1,?2,?3,?4,'user',?5,'completed',?6,?7)",rusqlite::params![message_id,session_id,turn_id,user_order,request.text,model_ref.provider().as_str(),model_ref.model()]).map_err(|_|StoreError::Database)?;
     let (revision, event_sequence) = append_event(
         tx,
         session_id,
@@ -203,7 +268,7 @@ pub(super) fn list_messages(
 ) -> StoreResult<Page<MessageResponse>> {
     let _ = get_session(connection, session_id)?;
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id,ordinal FROM messages WHERE session_id=?1 AND ordinal>?2 AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=messages.request_id AND json_extract(r.context,'$.compaction')=1) ORDER BY ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
+    let mut statement=connection.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id,provider,model,ordinal FROM messages WHERE session_id=?1 AND ordinal>?2 AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=messages.request_id AND json_extract(r.context,'$.compaction')=1) ORDER BY ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![session_id, after, (limit + 1) as i64])
         .map_err(|_| StoreError::Database)?;
@@ -216,16 +281,7 @@ pub(super) fn list_messages(
             has_more = true;
             break;
         }
-        let item = MessageResponse {
-            id: row.get(0).map_err(|_| StoreError::Database)?,
-            session_id: row.get(1).map_err(|_| StoreError::Database)?,
-            turn_id: row.get(2).map_err(|_| StoreError::Database)?,
-            role: row.get(3).map_err(|_| StoreError::Database)?,
-            text: row.get(4).map_err(|_| StoreError::Database)?,
-            status: row.get(5).map_err(|_| StoreError::Database)?,
-            blocks: execution::public_blocks_from_row(row, 6, 0, 4)?,
-            request_id: row.get(7).map_err(|_| StoreError::Database)?,
-        };
+        let item = from_row(row)?;
         let item_bytes = serde_json::to_vec(&item)
             .map_err(|_| StoreError::Database)?
             .len();
@@ -237,7 +293,7 @@ pub(super) fn list_messages(
             break;
         }
         encoded_bytes += item_bytes + usize::from(!items.is_empty());
-        next_after = Some(row.get::<_, i64>(8).map_err(|_| StoreError::Database)? as u64);
+        next_after = Some(row.get::<_, i64>(10).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     if has_more {

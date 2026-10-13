@@ -25,6 +25,11 @@ completed wait result commits before readmission. See [child tasks](child-tasks.
 Schema 11 adds per-request context size/purpose and an atomic session inference
 checkpoint containing the summary, retained messages, and historical cursor.
 Compaction changes the inference view without deleting public history.
+Schema 12 adds `provider` and `model` to every message. Backfill uses the
+originating model request where available, then the message's frozen turn, with
+reported model IDs preserved. User messages retain the selected model; paired
+tool results inherit their originating assistant request's reported/selected
+model. Later provider changes cannot relabel earlier messages.
 Schema 9 unifies all work in `sessions` and all execution in `turns`.
 Conversation rows hold policy, requested/effective inputs, batch membership, and
 lineage; turn rows hold retry links. It removes the separate `tasks`, `runs`, and

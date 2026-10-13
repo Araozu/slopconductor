@@ -86,8 +86,6 @@ pub struct EventQuery {
 
 mod events;
 mod execution;
-#[cfg(test)]
-mod provider_preflight_tests;
 mod sessions;
 mod support;
 mod turns;

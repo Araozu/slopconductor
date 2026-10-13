@@ -145,6 +145,22 @@ bounded buffering and can reconnect using the last durable sequence. Losing
 provisional deltas does not lose committed messages or stop execution. Clients
 reconcile display against canonical message records when a turn ends.
 
+Every message stores and exposes `provider` and `model`. User messages, including
+applied steering, record the turn's selected provider/model. Assistant messages
+record their own request's reported model when supplied, otherwise its selected
+model; tool results inherit that originating request's identity. These fields
+survive restart and later provider/model changes. Schema 12 backfills existing
+messages from their request or turn records, rather than current session defaults.
+
+A new turn may change provider in the same session by specifying a qualified
+`model`, such as `opencode-zen/glm-5.3`. The daemon carries forward canonical
+text and paired tool exchanges, and uses private continuation only with its
+original provider/model/wire. The stored transcript and private records are
+preserved. Model/settings remain frozen within an active turn; switching applies
+to a new turn and does not change the session's defaults.
+Switching from another provider to Codex subscription mode omits an inherited
+output-token cap; explicitly requesting one still returns `unsupported_capability`.
+
 There are at most 128 event subscribers. Transient frames carry at most 16 KiB
 of visible text; heartbeats occur every five seconds. History cursors describe
 conversation order, while event cursors describe committed changes. A running

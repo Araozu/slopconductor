@@ -194,12 +194,10 @@ pub(crate) async fn send_message(
     };
     let fallback = preflight_turn(
         &state,
-        &session_id,
         &session,
         request.model.as_deref(),
         request.settings.as_ref(),
-    )
-    .await;
+    );
     let (fallback_settings, fallback_error) = match fallback {
         Ok(settings) => (settings, None),
         Err((code, message)) => (session.settings.clone(), Some((code, message))),
@@ -217,9 +215,8 @@ pub(crate) async fn send_message(
     )
 }
 
-pub(super) async fn preflight_turn(
+pub(super) fn preflight_turn(
     state: &AppState,
-    session_id: &str,
     session: &slop_protocol::chat::SessionResponse,
     selected_model: Option<&str>,
     requested_settings: Option<&slop_protocol::execution::GenerationSettings>,
@@ -251,40 +248,20 @@ pub(super) async fn preflight_turn(
         && subscription
         && effective.max_output_tokens.is_some()
     {
-        return Err((
-            "unsupported_capability",
-            "ChatGPT subscription requests do not support an output-token cap.",
-        ));
-    }
-    let (has_non_text, required) =
-        state
-            .store
-            .context_requirements(session_id)
-            .await
-            .map_err(|_| {
-                (
-                    "storage_unavailable",
-                    "Stored context could not be checked.",
-                )
-            })?;
-    let wire = provider
-        .wire_protocol(model_ref.model())
-        .ok()
-        .map(|value| value.as_str().to_owned())
-        .unwrap_or_default();
-    if context_incompatibility(
-        model_ref.provider().as_str(),
-        model_ref.model(),
-        &wire,
-        has_non_text,
-        required,
-    )
-    .is_some()
-    {
-        return Err((
-            "context_incompatible",
-            "The selected model cannot replay the stored structured context or required provider continuation.",
-        ));
+        if model_ref.provider().as_str() != session.provider
+            && requested_settings
+                .and_then(|settings| settings.max_output_tokens)
+                .is_none()
+        {
+            // A different provider's default cap is not an explicit request
+            // for an unsupported subscription setting on this new turn.
+            effective.max_output_tokens = None;
+        } else {
+            return Err((
+                "unsupported_capability",
+                "ChatGPT subscription requests do not support an output-token cap.",
+            ));
+        }
     }
     if effective.max_output_tokens.is_none() && !subscription {
         effective.max_output_tokens = Some(state.runtime.max_tokens());
@@ -307,22 +284,4 @@ pub(super) async fn preflight_turn(
         ));
     }
     Ok(effective)
-}
-
-pub(super) fn context_incompatibility(
-    provider: &str,
-    model: &str,
-    wire: &str,
-    _has_non_text: bool,
-    required: Vec<(String, String, String)>,
-) -> Option<&'static str> {
-    if required
-        .into_iter()
-        .any(|(saved_provider, saved_model, saved_wire)| {
-            saved_provider != provider || saved_model != model || saved_wire != wire
-        })
-    {
-        return Some("context_incompatible");
-    }
-    None
 }

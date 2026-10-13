@@ -92,6 +92,9 @@ where
         if existing_version < 11 {
             context::migrate(&tx)?;
         }
+        if existing_version < 12 {
+            messages::migrate_message_models(&tx)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

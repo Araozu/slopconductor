@@ -286,11 +286,12 @@ pub(super) fn apply_steering_tx(tx: &Transaction<'_>, turn_id: &str) -> StoreRes
         .collect::<rusqlite::Result<_>>()
         .map_err(|_| StoreError::Database)?;
     drop(statement);
+    let model_ref = messages::turn_model(tx, turn_id)?;
     for (id, text) in &instructions {
         let ordinal = execution::next_message_ordinal(tx, turn_id)?;
         tx.execute(
-            "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'user',?5,'completed')",
-            rusqlite::params![id, session_id, turn_id, ordinal, text],
+            "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,provider,model) VALUES(?1,?2,?3,?4,'user',?5,'completed',?6,?7)",
+            rusqlite::params![id, session_id, turn_id, ordinal, text,model_ref.provider().as_str(),model_ref.model()],
         )
         .map_err(|_| StoreError::Database)?;
         tx.execute(
@@ -397,7 +398,8 @@ pub(super) fn checkpoint_turn(
     } else {
         let id = opaque_id()?;
         let ordinal = execution::next_message_ordinal(&tx, turn_id)?;
-        tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'assistant',?5,'checkpoint')",rusqlite::params![id,session_id,turn_id,ordinal,text]).map_err(|_|StoreError::Database)?;
+        let model_ref = messages::turn_model(&tx, turn_id)?;
+        tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,provider,model) VALUES(?1,?2,?3,?4,'assistant',?5,'checkpoint',?6,?7)",rusqlite::params![id,session_id,turn_id,ordinal,text,model_ref.provider().as_str(),model_ref.model()]).map_err(|_|StoreError::Database)?;
         tx.execute(
             "UPDATE turns SET assistant_message_id=?1 WHERE id=?2",
             rusqlite::params![id, turn_id],
@@ -600,9 +602,16 @@ pub(super) fn finish_turn(
         } else {
             let id = opaque_id()?;
             let ordinal = execution::next_message_ordinal(&tx, turn_id)?;
-            tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'assistant',?5,?6)",rusqlite::params![id,session_id,turn_id,ordinal,outcome.text,message_status]).map_err(|_|StoreError::Database)?;
+            let model_ref = messages::turn_model(&tx, turn_id)?;
+            tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,provider,model) VALUES(?1,?2,?3,?4,'assistant',?5,?6,?7,?8)",rusqlite::params![id,session_id,turn_id,ordinal,outcome.text,message_status,model_ref.provider().as_str(),outcome.resolved_model.as_deref().unwrap_or(model_ref.model())]).map_err(|_|StoreError::Database)?;
             id
         };
+        // Structured messages retain their own request's resolved identity.
+        tx.execute(
+            "UPDATE messages SET model=COALESCE(?1,model) WHERE id=?2 AND request_id IS NULL",
+            rusqlite::params![outcome.resolved_model, id],
+        )
+        .map_err(|_| StoreError::Database)?;
         if outcome.text.is_empty() && outcome.status != ChatStatus::Completed {
             tx.execute(
                 "UPDATE messages SET status=?1 WHERE id=?2",

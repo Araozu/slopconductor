@@ -17,16 +17,18 @@ class ToolFixture:
     def __init__(self):
         self.lock = threading.Lock()
         self.requests = []
+        self.authorizations = []
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
-                if self.path != "/v1/chat/completions" or self.headers.get("Authorization") != "Bearer offline-test-key":
+                if self.path != "/v1/chat/completions" or self.headers.get("Authorization") not in {"Bearer offline-test-key", "Bearer zen-switch-key"}:
                     self.send_error(401)
                     return
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 with fixture.lock:
                     fixture.requests.append(payload)
+                    fixture.authorizations.append(self.headers.get("Authorization"))
                 prompt = next(m["content"] for m in reversed(payload["messages"]) if m["role"] == "user")
                 current = payload["messages"][next(i for i in reversed(range(len(payload["messages"]))) if payload["messages"][i]["role"] == "user") + 1:]
                 completed_tools = any(m["role"] == "tool" for m in current)
@@ -113,6 +115,8 @@ def check_tools(daemon_binary, cli_binary, root):
     daemon = log = None
     try:
         env = isolated_env(root, fixture)
+        env["OPENCODE_ZEN_API_KEY"] = "zen-switch-key"
+        env["SLOP_OPENCODE_ZEN_BASE_URL"] = fixture.base_url
         data = root / "data"
         workspace = root / "workspace"
         workspace.mkdir(parents=True)
@@ -165,6 +169,7 @@ def check_tools(daemon_binary, cli_binary, root):
         assert any(f["type"] == "delta" and f["kind"] == "tool_arguments" and f["block_id"] and f["request_id"] for f in frames)
         history = get(f"/v1/sessions/{session}/messages")["items"]
         assert [m["role"] for m in history] == ["user", "assistant", *(["tool"] * 5), "assistant"]
+        assert all((m["provider"], m["model"]) == ("opencode-go", "glm-5.3-flash") for m in history)
         public = json.dumps(history) + result.stdout + json.dumps(tools)
         assert "private synthetic continuation" not in public
         wire = fixture.snapshot()[1]
@@ -233,6 +238,26 @@ def check_tools(daemon_binary, cli_binary, root):
         assert records[0]["effective_settings"]["max_output_tokens"] == 512
         assert fixture.snapshot()[-1]["max_tokens"] == 512
 
+        # Switch providers after a structured tool turn with required private
+        # reasoning, retaining the public history and completed tool exchanges.
+        original = get(f"/v1/sessions/{session}/messages")["items"]
+        receipt, _ = send(session, "continue with Zen", "tools-provider-switch", model="opencode-zen/glm-5.3")
+        selected = wait_turn(endpoint, token, receipt["turn_id"], {"completed"})
+        assert selected["requested_model"] == "opencode-zen/glm-5.3"
+        assert fixture.authorizations[-1] == "Bearer zen-switch-key"
+        wire = fixture.snapshot()[-1]
+        assert wire["model"] == "glm-5.3"
+        assert len([m for m in wire["messages"] if m["role"] == "tool"]) == 5
+        assert "private synthetic continuation" not in json.dumps(wire)
+        mixed = get(f"/v1/sessions/{session}/messages")["items"]
+        assert mixed[:len(original)] == original
+        assert all((m["provider"], m["model"]) == ("opencode-zen", "glm-5.3") for m in mixed[len(original):])
+        cli("session", "send", session, "--text", "return to Go", "--model", "opencode-go/glm-5.3-flash", "--command-id", "tools-provider-return")
+        assert fixture.authorizations[-1] == "Bearer offline-test-key"
+        returned = get(f"/v1/sessions/{session}/messages")["items"]
+        assert returned[:len(mixed)] == mixed
+        assert all((m["provider"], m["model"]) == ("opencode-go", "glm-5.3-flash") for m in returned[len(mixed):])
+
         def running_shell(prompt):
             session = create(f"create-{prompt}")
             receipt, _ = send(session, prompt, f"send-{prompt}")
@@ -269,7 +294,7 @@ def check_tools(daemon_binary, cli_binary, root):
         assert tool["error_code"] == "daemon_restarted" and tool["effects_unknown"]
         assert len(fixture.snapshot()) == count
         assert get(f"/v1/artifacts/{artifact}") == metadata
-        assert len(get(f"/v1/sessions/{session}/messages")["items"]) == 8
+        assert get(f"/v1/sessions/{session}/messages")["items"] == returned
         receipt, _ = send(crashed_session, "inspect recovery", "inspect-recovery")
         wait_turn(endpoint, token, receipt["turn_id"], {"completed"})
         assert any(m["role"] == "tool" and json.loads(m["content"])["effects_unknown"] for m in fixture.snapshot()[-1]["messages"])
