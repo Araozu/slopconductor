@@ -16,9 +16,9 @@ def check_history(daemon_binary, cli_binary, root):
     daemon = None
     try:
         env = isolated_env(root, fixture)
+        # Keep Git for Windows' worktree metadata paths short, as in the
+        # project smoke fixture. This remains below the private temp root.
         data = root / "data"
-        if os.name == "nt":
-            data = root / "slopconductor" / "data"
         daemon, endpoint, log = start_daemon(daemon_binary, root / "run", data, env)
         token_path = data / "credentials" / "local-api-token"
         token = token_path.read_text(encoding="ascii").strip()
@@ -35,6 +35,14 @@ def check_history(daemon_binary, cli_binary, root):
                 "--json", *args,
             ], env=env, capture_output=True, text=True, timeout=20, check=True)
             return [json.loads(line) for line in result.stdout.splitlines()]
+
+        def wait_managed(receipt):
+            turn = wait_turn(endpoint, token, receipt["turn_id"],
+                             {"completed", "failed", "cancelled", "interrupted", "incomplete"})
+            if turn["status"] != "completed":
+                session = api(path=f"/v1/sessions/{receipt['session_id']}")
+                workspace = api(path=f"/v1/workspaces/{session['managed_workspace_id']}")
+                raise RuntimeError(f"managed history turn failed: {turn}; workspace: {workspace}")
 
         source = api("POST", {"command_id": "history-source", "provider": "opencode-go",
                               "model": "glm-5.3-flash"}, "/v1/sessions", 202)["session_id"]
@@ -135,7 +143,7 @@ def check_history(daemon_binary, cli_binary, root):
                                "model": "glm-5.3-flash", "prompt": "managed initial prompt",
                                "project": {"project_id": project["id"], "allowed_tools": ["read"]}},
                       "/v1/sessions", 202)
-        wait_turn(endpoint, token, managed["turn_id"], {"completed"})
+        wait_managed(managed)
         source_snapshot = api(path=f"/v1/sessions/{managed['session_id']}")
         source_workspace = api(path=f"/v1/workspaces/{source_snapshot['managed_workspace_id']}")
         managed_history = api(path=f"/v1/sessions/{managed['session_id']}/messages")["items"]
@@ -149,7 +157,7 @@ def check_history(daemon_binary, cli_binary, root):
             raise RuntimeError("Git-backed fork did not reserve an independent frozen-base worktree")
         continued = api("POST", {"command_id": "managed-fork-follow", "text": "continue managed fork"},
                         f"/v1/sessions/{managed_fork['session_id']}/messages", 202)
-        wait_turn(endpoint, token, continued["turn_id"], {"completed"})
+        wait_managed(continued)
         fork_workspace = api(path=f"/v1/workspaces/{fork_snapshot['managed_workspace_id']}")
         if fork_workspace["status"] != "ready":
             raise RuntimeError("managed fork could not allocate its worktree and continue")
