@@ -43,7 +43,7 @@ pub struct CompactionPlan {
 }
 
 pub fn input_bytes(messages: &[InferenceMessage], tools: &[ToolDefinition]) -> u64 {
-    serde_json::to_vec(&(messages, tools)).map_or(u64::MAX, |v| v.len() as u64)
+    crate::json::encoded_len(&(messages, tools)).map_or(u64::MAX, |bytes| bytes as u64)
 }
 
 pub fn estimated_tokens(bytes: u64, reported: Option<ContextUsage>) -> u64 {
@@ -141,7 +141,7 @@ pub fn plan(
     let mut boundaries = vec![true];
     let mut pending = std::collections::HashSet::new();
     for (index, message) in messages.iter().enumerate() {
-        let bytes = serde_json::to_vec(message).ok()?.len() as u64;
+        let bytes = crate::json::encoded_len(message).ok()? as u64;
         sizes.push(sizes[index].saturating_add(bytes).saturating_add(1));
         for block in &message.blocks {
             match &block.content {

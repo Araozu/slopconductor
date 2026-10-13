@@ -48,12 +48,14 @@ impl OpencodeClient {
                 .header("anthropic-version", ANTHROPIC_VERSION),
             _ => req.bearer_auth(&self.api_key),
         };
-        let mut response = req
+        let req = req
             .header(SESSION_HEADER, &request.session_id)
             .header("Accept", "text/event-stream")
-            .json(&payload)
-            .send()
-            .await?;
+            .json(&payload);
+        // The request builder owns the encoded body; the intermediate JSON
+        // tree must not stay alive throughout inference and response streaming.
+        drop(payload);
+        let mut response = req.send().await?;
         super::super::transport::check_status(self.provider.id(), &mut response).await?;
         if !is_event_stream(&response) {
             let body = self.read_body_limited(response).await?;

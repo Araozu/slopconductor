@@ -9,11 +9,7 @@ pub use request_completion::RequestCompletion;
 pub use request_intent::RequestIntent;
 pub use tool_intent::ToolIntent;
 
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 use slop_core::provider::ProviderModelRef;
 
@@ -42,49 +38,54 @@ async fn stop<R: ChatRepository>(
     finish_with_retry(repository, turn, outcome).await
 }
 
+#[derive(Default)]
+struct VisibleOutput {
+    blocks: BTreeMap<usize, String>,
+    bytes: usize,
+}
+
 fn snapshot(
-    request: &InferenceRequest,
-    visible: &Mutex<BTreeMap<usize, String>>,
-) -> InferenceMessage {
-    let blocks = visible
-        .lock()
-        .map(|v| {
-            v.iter()
-                .map(|(index, text)| ContentBlock {
-                    id: format!("{}:block:{index}", request.request_id),
-                    content: BlockContent::Text { text: text.clone() },
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    InferenceMessage {
-        role: MessageRole::Assistant,
-        blocks,
-        continuation: None,
+    request_id: &str,
+    visible: &Mutex<VisibleOutput>,
+    checkpoint_bytes: usize,
+) -> Option<(InferenceMessage, usize)> {
+    let visible = visible.lock().ok()?;
+    if visible.bytes == checkpoint_bytes {
+        return None;
     }
+    let blocks = visible
+        .blocks
+        .iter()
+        .map(|(index, text)| ContentBlock {
+            id: format!("{request_id}:block:{index}"),
+            content: BlockContent::Text { text: text.clone() },
+        })
+        .collect();
+    Some((
+        InferenceMessage {
+            role: MessageRole::Assistant,
+            blocks,
+            continuation: None,
+        },
+        visible.bytes,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute<R: ChatRepository>(
-    repository: Arc<R>,
-    providers: std::collections::HashMap<String, Arc<dyn ProviderClient>>,
-    deltas: tokio::sync::broadcast::Sender<ChatDelta>,
-    work: TurnWork,
+    repository: &R,
+    provider: Option<&dyn ProviderClient>,
+    deltas: &tokio::sync::broadcast::Sender<ChatDelta>,
+    mut work: TurnWork,
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
-    tools: Arc<ToolService>,
+    tools: &ToolService,
 ) -> bool {
     let mut total = work.initial_usage;
     if *shutdown.borrow() {
-        return stop(
-            repository.as_ref(),
-            &work.turn_id,
-            interrupted_shutdown(),
-            total,
-        )
-        .await;
+        return stop(repository, &work.turn_id, interrupted_shutdown(), total).await;
     }
     match repository.cancellation_requested(&work.turn_id).await {
-        Ok(true) => return stop(repository.as_ref(), &work.turn_id, canceled(), total).await,
+        Ok(true) => return stop(repository, &work.turn_id, canceled(), total).await,
         Ok(false) => {}
         Err(_) => return false,
     }
@@ -92,7 +93,7 @@ pub(crate) async fn execute<R: ChatRepository>(
         Ok(model) => model,
         _ => {
             return stop(
-                repository.as_ref(),
+                repository,
                 &work.turn_id,
                 failed("unsupported_model", "The requested model is not supported."),
                 total,
@@ -100,9 +101,9 @@ pub(crate) async fn execute<R: ChatRepository>(
             .await;
         }
     };
-    let Some(provider) = providers.get(model.provider().as_str()).cloned() else {
+    let Some(provider) = provider else {
         return stop(
-            repository.as_ref(),
+            repository,
             &work.turn_id,
             failed(
                 "provider_auth_required",
@@ -114,20 +115,14 @@ pub(crate) async fn execute<R: ChatRepository>(
     };
     match repository.prepare_workspace(&work.turn_id, shutdown).await {
         Ok(Some((code, message))) => {
-            return stop(
-                repository.as_ref(),
-                &work.turn_id,
-                failed(code, message),
-                total,
-            )
-            .await;
+            return stop(repository, &work.turn_id, failed(code, message), total).await;
         }
         Ok(None) => {}
         Err(_) => return false,
     }
     let mut messages = if work.history.is_empty() {
-        work.messages
-            .iter()
+        std::mem::take(&mut work.messages)
+            .into_iter()
             .enumerate()
             .map(|(index, message)| {
                 InferenceMessage::text(
@@ -138,12 +133,13 @@ pub(crate) async fn execute<R: ChatRepository>(
                         RoleKind::Assistant => MessageRole::Assistant,
                     },
                     format!("{}:context:{index}", work.turn_id),
-                    message.text.clone(),
+                    message.text,
                 )
             })
             .collect()
     } else {
-        work.history.clone()
+        work.messages.clear();
+        std::mem::take(&mut work.history)
     };
     let settings = work.settings.clone();
     let mut definitions: Vec<ToolDefinition> = work
@@ -173,11 +169,11 @@ pub(crate) async fn execute<R: ChatRepository>(
     let mut context_usage = work.context_usage;
     let Some(mut context_budget) = context::token_budget(
         work.context_token_budget,
-        &work.settings,
+        &settings,
         &provider.capabilities(model.model()),
     ) else {
         return stop(
-            repository.as_ref(),
+            repository,
             &work.turn_id,
             failed(
                 "unsupported_capability",
@@ -196,24 +192,18 @@ pub(crate) async fn execute<R: ChatRepository>(
     cancel_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     while ordinal <= max_requests {
         if *shutdown.borrow() {
-            return stop(
-                repository.as_ref(),
-                &work.turn_id,
-                interrupted_shutdown(),
-                total,
-            )
-            .await;
+            return stop(repository, &work.turn_id, interrupted_shutdown(), total).await;
         }
         let control = match repository.turn_control(&work.turn_id).await {
             Ok(control) => control,
             Err(_) => return false,
         };
         if control.cancellation_requested {
-            return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+            return stop(repository, &work.turn_id, canceled(), total).await;
         }
         if control.pause_requested {
             return stop(
-                repository.as_ref(),
+                repository,
                 &work.turn_id,
                 steering_yield("pause_turn", total),
                 total,
@@ -222,7 +212,7 @@ pub(crate) async fn execute<R: ChatRepository>(
         }
         if control.waiting_requested {
             return stop(
-                repository.as_ref(),
+                repository,
                 &work.turn_id,
                 steering_yield("awaiting_children", total),
                 total,
@@ -231,7 +221,7 @@ pub(crate) async fn execute<R: ChatRepository>(
         }
         if control.steering_pending {
             return stop(
-                repository.as_ref(),
+                repository,
                 &work.turn_id,
                 steering_yield("steering_resume", total),
                 total,
@@ -242,7 +232,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             Ok(id) => id,
             Err(_) => {
                 return stop(
-                    repository.as_ref(),
+                    repository,
                     &work.turn_id,
                     failed(
                         "entropy_unavailable",
@@ -265,7 +255,8 @@ pub(crate) async fn execute<R: ChatRepository>(
                 context_budget,
                 settings.max_output_tokens,
             );
-        let compaction_plan = if compact && compactions_seen < context::MAX_COMPACTIONS_PER_TURN {
+        let mut compaction_plan = if compact && compactions_seen < context::MAX_COMPACTIONS_PER_TURN
+        {
             context::plan(
                 &messages,
                 context_budget,
@@ -282,12 +273,12 @@ pub(crate) async fn execute<R: ChatRepository>(
             None
         };
         if force_compaction && compaction_plan.is_none() {
-            return stop(repository.as_ref(), &work.turn_id,
+            return stop(repository, &work.turn_id,
                 failed("context_limit", "The context cannot be reduced further within the compaction budget. Shorten the latest input or increase context_token_budget."), total).await;
         }
         let is_compaction = compaction_plan.is_some();
         if is_compaction && ordinal == max_requests {
-            return stop(repository.as_ref(), &work.turn_id,
+            return stop(repository, &work.turn_id,
                 failed("model_budget_exhausted", "Context compaction needs a summary request and a continuation, but this turn has no remaining model-request budget."), total).await;
         }
         let request = InferenceRequest {
@@ -301,13 +292,14 @@ pub(crate) async fn execute<R: ChatRepository>(
             } else {
                 settings.clone()
             },
-            messages: compaction_plan
-                .as_ref()
-                .map_or_else(|| messages.clone(), |plan| plan.prompt.clone()),
+            messages: compaction_plan.as_mut().map_or_else(
+                || std::mem::take(&mut messages),
+                |plan| std::mem::take(&mut plan.prompt),
+            ),
             tools: if is_compaction {
                 Vec::new()
             } else {
-                definitions.clone()
+                std::mem::take(&mut definitions)
             },
         };
         if let Err(error) = request.validate(
@@ -332,8 +324,9 @@ pub(crate) async fn execute<R: ChatRepository>(
                 }
                 error => provider_failure(error),
             };
-            return stop(repository.as_ref(), &work.turn_id, outcome, total).await;
+            return stop(repository, &work.turn_id, outcome, total).await;
         }
+        let request_input_bytes = context::input_bytes(&request.messages, &request.tools);
         let intent = RequestIntent {
             id: request_id.clone(),
             message_id: message_id.clone(),
@@ -342,7 +335,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             requested_settings: work.requested_settings.clone(),
             settings: request.settings.clone(),
             context: context::RequestContext {
-                input_bytes: context::input_bytes(&request.messages, &request.tools),
+                input_bytes: request_input_bytes,
                 compaction: is_compaction,
             },
         };
@@ -356,11 +349,11 @@ pub(crate) async fn execute<R: ChatRepository>(
                 Err(_) => return false,
             };
             if control.cancellation_requested {
-                return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+                return stop(repository, &work.turn_id, canceled(), total).await;
             }
             if control.waiting_requested {
                 return stop(
-                    repository.as_ref(),
+                    repository,
                     &work.turn_id,
                     steering_yield("awaiting_children", total),
                     total,
@@ -369,7 +362,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             }
             if control.budget_exhausted {
                 return stop(
-                    repository.as_ref(),
+                    repository,
                     &work.turn_id,
                     failed(
                         "operation_budget_exhausted",
@@ -385,7 +378,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                 "steering_resume"
             };
             return stop(
-                repository.as_ref(),
+                repository,
                 &work.turn_id,
                 steering_yield(code, total),
                 total,
@@ -396,13 +389,15 @@ pub(crate) async fn execute<R: ChatRepository>(
         if is_compaction {
             compactions_seen = compactions_seen.saturating_add(1);
         }
-        let visible = Arc::new(Mutex::new(BTreeMap::<usize, String>::new()));
-        let stream_visible = Arc::clone(&visible);
-        let stream_deltas = deltas.clone();
-        let turn_id = work.turn_id.clone();
-        let session_id = work.session_id.clone();
-        let delta_request = request_id.clone();
-        let delta_message = message_id.clone();
+        // Inference borrows the callback. Checkpoint polling shares its output
+        // within this supervisor; neither needs independently owned Arc state.
+        let visible = Mutex::new(VisibleOutput::default());
+        let stream_visible = &visible;
+        let stream_deltas = deltas;
+        let turn_id = work.turn_id.as_str();
+        let session_id = work.session_id.as_str();
+        let delta_request = request_id.as_str();
+        let delta_message = message_id.as_str();
         let mut chunk_index = 0u64;
         let mut on_event = move |event: ProviderEvent| {
             if is_compaction {
@@ -411,7 +406,8 @@ pub(crate) async fn execute<R: ChatRepository>(
             let (index, text, kind) = match event {
                 ProviderEvent::TextDelta { block_index, text } => {
                     if let Ok(mut v) = stream_visible.lock() {
-                        v.entry(block_index).or_default().push_str(&text);
+                        v.blocks.entry(block_index).or_default().push_str(&text);
+                        v.bytes += text.len();
                     }
                     (block_index, text, "text")
                 }
@@ -428,12 +424,12 @@ pub(crate) async fn execute<R: ChatRepository>(
                     end -= 1;
                 }
                 let _ = stream_deltas.send(ChatDelta {
-                    session_id: session_id.clone(),
-                    turn_id: turn_id.clone(),
+                    session_id: session_id.to_owned(),
+                    turn_id: turn_id.to_owned(),
                     text: text[offset..end].to_owned(),
-                    message_id: Some(delta_message.clone()),
+                    message_id: Some(delta_message.to_owned()),
                     block_id: Some(format!("{delta_request}:block:{index}")),
-                    request_id: Some(delta_request.clone()),
+                    request_id: Some(delta_request.to_owned()),
                     invocation_id: None,
                     stream_id: format!("{delta_request}:{index}:{kind}"),
                     chunk_index,
@@ -443,42 +439,51 @@ pub(crate) async fn execute<R: ChatRepository>(
                 offset = end;
             }
         };
-        let mut inference = Box::pin(provider.infer(&request, &mut on_event));
+        let mut inference = provider.infer(&request, &mut on_event);
         let mut checkpoint = tokio::time::interval(Duration::from_millis(250));
         checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         checkpoint.tick().await;
-        let mut last_snapshot = String::new();
+        let mut checkpoint_bytes = 0;
         let result = loop {
             tokio::select! {
                 result=&mut inference=>break result,
-                _=shutdown.changed()=>{drop(inference);let _=repository.fail_request(&work.turn_id,&request_id,"daemon_shutdown").await;return stop(repository.as_ref(),&work.turn_id,interrupted_shutdown(),total).await;},
+                _=shutdown.changed()=>{drop(inference);let _=repository.fail_request(&work.turn_id,&request_id,"daemon_shutdown").await;return stop(repository,&work.turn_id,interrupted_shutdown(),total).await;},
                 _=cancel_tick.tick()=>match repository.turn_control(&work.turn_id).await{
                     Ok(control) if control.cancellation_requested=>{
                         drop(inference);
                         let _=repository.fail_request(&work.turn_id,&request_id,"cancelled").await;
-                        return stop(repository.as_ref(),&work.turn_id,canceled(),total).await;
+                        return stop(repository,&work.turn_id,canceled(),total).await;
                     },
                     Ok(control) if control.immediate_requested=>{
                         drop(inference);
                         let _=repository.fail_request(&work.turn_id,&request_id,"steering_interrupted").await;
-                        return stop(repository.as_ref(),&work.turn_id,steering_yield("steering_resume_unknown",Usage::default()),Usage::default()).await;
+                        return stop(repository,&work.turn_id,steering_yield("steering_resume_unknown",Usage::default()),Usage::default()).await;
                     },
                     Ok(_)=>{},Err(_)=>{drop(inference);return false;}
                 },
                 _=checkpoint.tick()=>{
-                    let partial=snapshot(&request,&visible);let text=partial.visible_text();
-                    if text!=last_snapshot && !text.is_empty(){
+                    if let Some((partial, bytes)) = snapshot(&request_id, &visible, checkpoint_bytes) {
                         if repository.checkpoint_request(&work.turn_id,&request_id,partial).await.is_err(){
                             drop(inference);let cancelled=repository.cancellation_requested(&work.turn_id).await.unwrap_or(false);
                             let _=repository.fail_request(&work.turn_id,&request_id,if cancelled{"cancelled"}else{"storage_unavailable"}).await;
-                            return stop(repository.as_ref(),&work.turn_id,if cancelled{canceled()}else{failed("storage_unavailable","A visible checkpoint could not be persisted.")},total).await;
+                            return stop(repository,&work.turn_id,if cancelled{canceled()}else{failed("storage_unavailable","A visible checkpoint could not be persisted.")},total).await;
                         }
-                        last_snapshot=text;
+                        checkpoint_bytes=bytes;
                     }
                 },
             }
         };
         drop(inference);
+        drop(visible);
+        // Return ownership after the borrowed inference future finishes. Error
+        // recovery, tool steps, and output continuations reuse these same buffers.
+        if !is_compaction {
+            messages = request.messages;
+            definitions = request.tools;
+        } else {
+            drop(request.messages);
+            drop(request.tools);
+        }
         let mut response = match result {
             Ok(response) => response,
             Err(error) => {
@@ -532,17 +537,17 @@ pub(crate) async fn execute<R: ChatRepository>(
                     loop {
                         tokio::select! {
                             _ = tokio::time::sleep_until(deadline) => break,
-                            _ = shutdown.changed() => return stop(repository.as_ref(), &work.turn_id, interrupted_shutdown(), total).await,
+                            _ = shutdown.changed() => return stop(repository, &work.turn_id, interrupted_shutdown(), total).await,
                             _ = cancel_tick.tick() => match repository.turn_control(&work.turn_id).await {
-                                Ok(control) if control.cancellation_requested => return stop(repository.as_ref(), &work.turn_id, canceled(), total).await,
-                                Ok(control) if control.pause_requested || control.steering_pending => return stop(repository.as_ref(), &work.turn_id, steering_yield(if control.pause_requested { "pause_turn" } else { "steering_resume" }, total), total).await,
+                                Ok(control) if control.cancellation_requested => return stop(repository, &work.turn_id, canceled(), total).await,
+                                Ok(control) if control.pause_requested || control.steering_pending => return stop(repository, &work.turn_id, steering_yield(if control.pause_requested { "pause_turn" } else { "steering_resume" }, total), total).await,
                                 Ok(_) => {}, Err(_) => return false,
                             }
                         }
                     }
                     continue;
                 }
-                return stop(repository.as_ref(), &work.turn_id, outcome, total).await;
+                return stop(repository, &work.turn_id, outcome, total).await;
             }
         };
         // Only a completed tool proposal can launch a side effect. Keep visible
@@ -594,7 +599,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                     &work.turn_id,
                     RequestCompletion {
                         request_id: request_id.clone(),
-                        response: response.clone(),
+                        response,
                         tools: Vec::new(),
                         compaction: compacted
                             .clone()
@@ -610,7 +615,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                 return false;
             }
             let Some(compacted) = compacted else {
-                return stop(repository.as_ref(), &work.turn_id,
+                return stop(repository, &work.turn_id,
                     failed("context_compaction_failed", "The provider did not produce a complete, smaller context summary. The original history was preserved."), total).await;
             };
             messages = compacted;
@@ -618,7 +623,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             force_compaction = false;
             if work.context_overflow {
                 return stop(
-                    repository.as_ref(),
+                    repository,
                     &work.turn_id,
                     steering_yield("context_compaction_resume", total),
                     total,
@@ -633,7 +638,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             .map(|input_tokens| context::ContextUsage {
                 input_tokens,
                 output_tokens: response.usage.output_tokens,
-                input_bytes: context::input_bytes(&request.messages, &request.tools),
+                input_bytes: request_input_bytes,
             });
         context_frontier = None;
         transient_retries = 0;
@@ -678,7 +683,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                 .await
                 .unwrap_or(false)
             {
-                return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+                return stop(repository, &work.turn_id, canceled(), total).await;
             }
             return false;
         }
@@ -690,7 +695,12 @@ pub(crate) async fn execute<R: ChatRepository>(
                 .rev()
                 .find(|message| message.role == MessageRole::Assistant)
                 .is_some_and(|previous| previous.visible_text().trim() == text.trim());
-        messages.push(response.message.clone());
+        let refused = response
+            .message
+            .blocks
+            .iter()
+            .any(|block| matches!(block.content, BlockContent::Refusal { .. }));
+        messages.push(response.message);
         if finish == FinishReason::ContextLimit && ordinal <= max_requests {
             messages.push(output_limit::context_continuation_prompt(&request_id));
             context_budget = (context_budget / 2).max(8192);
@@ -699,11 +709,6 @@ pub(crate) async fn execute<R: ChatRepository>(
         }
         if finish == FinishReason::OutputLimit {
             output_limits_seen = output_limits_seen.saturating_add(1);
-            let refused = response
-                .message
-                .blocks
-                .iter()
-                .any(|block| matches!(block.content, BlockContent::Refusal { .. }));
             if !no_progress
                 && !refused
                 && output_limits_seen <= output_limit::MAX_CONTINUATIONS
@@ -740,10 +745,10 @@ pub(crate) async fn execute<R: ChatRepository>(
                 _ => None,
             };
             return stop(
-                repository.as_ref(),
+                repository,
                 &work.turn_id,
                 ChatOutcome {
-                    text: response.message.visible_text(),
+                    text,
                     resolved_model: response.resolved_model,
                     usage: total,
                     status: if incomplete {
@@ -765,16 +770,14 @@ pub(crate) async fn execute<R: ChatRepository>(
         let exhausted = tool_count + invocations.len() as u32 > max_tools;
         for invocation in invocations {
             tool_count += 1;
-            let policy = work.execution.clone();
+            let policy = work.execution.as_ref();
             let orchestration = crate::orchestration::NAMES.contains(&invocation.name.as_str());
             let outcome = if exhausted {
                 ToolOutcome::failed("tool_budget_exhausted", false)
             } else if if orchestration {
                 work.orchestration.is_none()
             } else {
-                policy
-                    .as_ref()
-                    .is_none_or(|p| !p.allowed_tools.contains(&invocation.name))
+                policy.is_none_or(|p| !p.allowed_tools.contains(&invocation.name))
             } {
                 ToolOutcome::failed("tool_not_allowed", false)
             } else if !(if orchestration {
@@ -785,20 +788,14 @@ pub(crate) async fn execute<R: ChatRepository>(
                 ToolOutcome::failed("invalid_arguments", false)
             } else {
                 if *shutdown.borrow() {
-                    return stop(
-                        repository.as_ref(),
-                        &work.turn_id,
-                        interrupted_shutdown(),
-                        total,
-                    )
-                    .await;
+                    return stop(repository, &work.turn_id, interrupted_shutdown(), total).await;
                 }
                 if repository
                     .cancellation_requested(&work.turn_id)
                     .await
                     .unwrap_or(true)
                 {
-                    return stop(repository.as_ref(), &work.turn_id, canceled(), total).await;
+                    return stop(repository, &work.turn_id, canceled(), total).await;
                 }
                 match repository.start_tool(&work.turn_id, &invocation).await {
                     Ok(true) => {}
@@ -808,12 +805,11 @@ pub(crate) async fn execute<R: ChatRepository>(
                             Err(_) => return false,
                         };
                         if control.cancellation_requested {
-                            return stop(repository.as_ref(), &work.turn_id, canceled(), total)
-                                .await;
+                            return stop(repository, &work.turn_id, canceled(), total).await;
                         }
                         if control.waiting_requested {
                             return stop(
-                                repository.as_ref(),
+                                repository,
                                 &work.turn_id,
                                 steering_yield("awaiting_children", total),
                                 total,
@@ -822,7 +818,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                         }
                         if control.budget_exhausted {
                             return stop(
-                                repository.as_ref(),
+                                repository,
                                 &work.turn_id,
                                 failed(
                                     "operation_budget_exhausted",
@@ -838,7 +834,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                             "steering_resume"
                         };
                         return stop(
-                            repository.as_ref(),
+                            repository,
                             &work.turn_id,
                             steering_yield(code, total),
                             total,
@@ -857,7 +853,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                         }
                         Ok(crate::orchestration::OrchestrationResult::Waiting) => {
                             return stop(
-                                repository.as_ref(),
+                                repository,
                                 &work.turn_id,
                                 steering_yield("awaiting_children", total),
                                 total,
@@ -890,7 +886,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                         chunk_index = chunk_index.saturating_add(1);
                     };
                     let mut execution = Box::pin(tools.run(
-                        policy.expect("checked policy"),
+                        policy.expect("checked policy").clone(),
                         &invocation.name,
                         invocation.arguments.clone(),
                         cancel_rx,
@@ -943,7 +939,7 @@ pub(crate) async fn execute<R: ChatRepository>(
         }
         if exhausted {
             return stop(
-                repository.as_ref(),
+                repository,
                 &work.turn_id,
                 failed(
                     "tool_budget_exhausted",
@@ -955,7 +951,7 @@ pub(crate) async fn execute<R: ChatRepository>(
         }
     }
     stop(
-        repository.as_ref(),
+        repository,
         &work.turn_id,
         failed(
             "model_request_budget_exhausted",

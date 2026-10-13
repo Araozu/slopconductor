@@ -282,9 +282,8 @@ pub(super) fn list_messages(
             break;
         }
         let item = from_row(row)?;
-        let item_bytes = serde_json::to_vec(&item)
-            .map_err(|_| StoreError::Database)?
-            .len();
+        let item_bytes =
+            slop_runtime::json::encoded_len(&item).map_err(|_| StoreError::Database)?;
         if encoded_bytes.saturating_add(item_bytes).saturating_add(1) > MAX_MESSAGE_PAGE_BYTES {
             if items.is_empty() {
                 return Err(StoreError::Limit);

@@ -76,7 +76,8 @@ pub(in crate::providers) fn call(
         || provider_call_id.len() > 256
         || !valid_name(name)
         || !arguments.is_object()
-        || arguments.to_string().len() > MAX_ARGUMENT_BYTES
+        || crate::json::encoded_len(&arguments).map_err(|_| invalid("invalid tool arguments"))?
+            > MAX_ARGUMENT_BYTES
     {
         return Err(invalid("invalid completed tool proposal"));
     }

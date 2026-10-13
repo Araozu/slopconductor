@@ -17,6 +17,8 @@ pub struct TurnWork {
     pub session_id: String,
     pub requested_model: String,
     pub max_tokens: Option<u32>,
+    /// Legacy text-only repository input. Structured repositories populate
+    /// `history` alone rather than retaining another copy of visible text.
     pub messages: Vec<ContextMessage>,
     pub history: Vec<InferenceMessage>,
     pub settings: GenerationSettings,

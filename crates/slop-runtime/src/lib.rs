@@ -10,6 +10,7 @@ pub mod chat;
 #[cfg(test)]
 mod chat_tests;
 pub mod git;
+pub mod json;
 pub mod orchestration;
 pub mod providers;
 pub mod tools;

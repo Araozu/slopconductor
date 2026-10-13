@@ -42,11 +42,9 @@ pub(super) async fn events(
     };
     let body = Body::from_stream(stream::unfold(feed, |mut feed| async move {
         let frame = feed.next_frame().await?;
-        let bytes = serde_json::to_vec(&frame).ok()?;
-        Some((
-            Ok::<Bytes, Infallible>(Bytes::from([bytes, vec![b'\n']].concat())),
-            feed,
-        ))
+        let mut bytes = serde_json::to_vec(&frame).ok()?;
+        bytes.push(b'\n');
+        Some((Ok::<Bytes, Infallible>(Bytes::from(bytes)), feed))
     }));
     Response::builder()
         .status(StatusCode::OK)

@@ -99,14 +99,14 @@ impl CodexClient {
                     serde_json::json!({"type":"additional_tools","role":"developer","tools":tools}),
                 );
         }
-        let mut response = self
+        let req = self
             .http
             .post(format!("{}/responses", self.base_url))
             .bearer_auth(self.access_token().await?)
             .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&payload)
-            .send()
-            .await?;
+            .json(&payload);
+        drop(payload);
+        let mut response = req.send().await?;
         transport::check_status(ProviderId::Codex, &mut response).await?;
         let mut result = if wire::is_event_stream(&response) {
             let mut framing = super::super::opencode::SseStream::new();

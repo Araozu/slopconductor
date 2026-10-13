@@ -17,6 +17,7 @@ struct CallParts {
 pub(in crate::providers) struct StructuredFold {
     wire: WireProtocol,
     text: String,
+    visible_bytes: usize,
     reasoning: String,
     refusal: String,
     calls: BTreeMap<usize, CallParts>,
@@ -35,6 +36,7 @@ impl StructuredFold {
         Self {
             wire,
             text: String::new(),
+            visible_bytes: 0,
             reasoning: String::new(),
             refusal: String::new(),
             calls: BTreeMap::new(),
@@ -67,7 +69,7 @@ impl StructuredFold {
                 Err(invalid("end marker before terminal evidence"))
             };
         }
-        let value: Value =
+        let mut value: Value =
             serde_json::from_str(&payload).map_err(|_| invalid("invalid stream JSON"))?;
         if super::super::transport::is_context_error(&value) {
             return Err(DecodeError::ContextLengthExceeded);
@@ -86,7 +88,7 @@ impl StructuredFold {
         self.usage.merge(usage(&value));
         match self.wire {
             WireProtocol::OpenAiChatCompletions => self.chat(&value, on_event)?,
-            WireProtocol::OpenAiResponses => self.responses(&value, on_event)?,
+            WireProtocol::OpenAiResponses => self.responses(&mut value, on_event)?,
             WireProtocol::AnthropicMessages => self.messages(&value, on_event)?,
         }
         if value.get("usage").is_some() {
@@ -104,11 +106,18 @@ impl StructuredFold {
         if self.terminal.is_some() {
             return Err(invalid("content after terminal outcome"));
         }
-        append(
-            &mut self.text,
-            text,
-            super::super::opencode::MAX_STREAM_TEXT_BYTES,
-        )?;
+        let bytes = self.visible_bytes.saturating_add(text.len());
+        if bytes > super::super::opencode::MAX_STREAM_TEXT_BYTES {
+            return Err(DecodeError::LimitExceeded {
+                detail: "structured stream exceeds byte bound",
+            });
+        }
+        self.visible_bytes = bytes;
+        // Responses and Messages already retain text by content block. Chat
+        // Completions alone needs this aggregate buffer for its final message.
+        if self.wire == WireProtocol::OpenAiChatCompletions {
+            self.text.push_str(text);
+        }
         if !text.is_empty() {
             on_event(ProviderEvent::TextDelta {
                 block_index: index,
@@ -248,7 +257,7 @@ impl StructuredFold {
 
     fn responses(
         &mut self,
-        value: &Value,
+        value: &mut Value,
         on_event: &mut (dyn FnMut(ProviderEvent) + Send),
     ) -> Result<()> {
         let kind = string(value, "type")?;
@@ -351,7 +360,7 @@ impl StructuredFold {
                     }
                 }
                 self.usage.merge(usage(response));
-                self.terminal = Some(response.clone());
+                self.terminal = Some(std::mem::take(&mut value["response"]));
                 Ok(())
             }
             "response.created"
@@ -464,17 +473,15 @@ impl StructuredFold {
                     )?;
                     self.arguments_delta(index, text, on_event)?;
                 } else {
-                    let mut current = block
-                        .get(field)
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    append(
-                        &mut current,
-                        text,
-                        super::super::opencode::MAX_STREAM_TEXT_BYTES,
-                    )?;
-                    block[field] = current.into();
+                    let current = block
+                        .as_object_mut()
+                        .ok_or_else(|| invalid("invalid content block"))?
+                        .entry(field)
+                        .or_insert_with(|| Value::String(String::new()));
+                    let Value::String(current) = current else {
+                        return Err(invalid("invalid content field"));
+                    };
+                    append(current, text, super::super::opencode::MAX_STREAM_TEXT_BYTES)?;
                     if field == "text" {
                         self.text_delta(index, text, on_event)?;
                     }

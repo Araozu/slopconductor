@@ -268,9 +268,7 @@ pub(in crate::providers) fn decode(
         return Err(invalid("tool finish reason without a proposal"));
     }
     if blocks.len() > MAX_BLOCKS
-        || serde_json::to_vec(&blocks)
-            .map_err(|_| invalid("invalid blocks"))?
-            .len()
+        || crate::json::encoded_len(&blocks).map_err(|_| invalid("invalid blocks"))?
             > super::super::opencode::MAX_BODY_BYTES
     {
         return Err(invalid("structured output exceeds bounds"));

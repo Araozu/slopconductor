@@ -356,3 +356,75 @@ fn responses_and_messages_streams_assemble_completed_calls() {
     assert_eq!(response.finish_reason, FinishReason::ToolCalls);
     assert_eq!(response.usage.total_tokens, Some(10));
 }
+
+#[test]
+fn messages_streams_append_long_text_and_preserve_signed_reasoning() {
+    let input = request(WireProtocol::AnthropicMessages);
+    let mut fold = StructuredFold::new(WireProtocol::AnthropicMessages);
+    let mut visible = String::new();
+    let mut callback = |event| {
+        if let ProviderEvent::TextDelta { text, .. } = event {
+            visible.push_str(&text);
+        }
+    };
+    for value in [
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"private ","signature":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reasoning"}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":"prefix "}}),
+    ] {
+        fold.feed(&format!("data: {value}\n\n"), &mut callback)
+            .unwrap();
+    }
+    let fragment = "☃\n".repeat(256);
+    for _ in 0..300 {
+        let value = json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":fragment}});
+        fold.feed(&format!("data: {value}\n\n"), &mut callback)
+            .unwrap();
+    }
+    for value in [
+        json!({"type":"content_block_stop","index":1}),
+        json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"provider-call","name":"read","input":{}}}),
+        json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"Cargo.toml\"}"}}),
+        json!({"type":"content_block_stop","index":2}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+        json!({"type":"message_stop"}),
+    ] {
+        fold.feed(&format!("data: {value}\n\n"), &mut callback)
+            .unwrap();
+    }
+    let response = fold.finish(&input, ProviderId::OpencodeGo).unwrap();
+    assert_eq!(visible, format!("prefix {}", fragment.repeat(300)));
+    assert_eq!(response.message.visible_text(), visible);
+    let continuation = response.message.continuation.unwrap();
+    assert!(continuation.required);
+    assert_eq!(continuation.items[0]["thinking"], "private reasoning");
+    assert_eq!(continuation.items[0]["signature"], "signed");
+}
+
+#[test]
+fn streamed_visible_limit_applies_across_content_blocks() {
+    use crate::providers::opencode::{DecodeError, MAX_STREAM_TEXT_BYTES};
+    for wire in [
+        WireProtocol::AnthropicMessages,
+        WireProtocol::OpenAiResponses,
+    ] {
+        let mut fold = StructuredFold::new(wire);
+        let text = "x".repeat(MAX_STREAM_TEXT_BYTES / 2 + 1);
+        let event = |index| match wire {
+            WireProtocol::AnthropicMessages => {
+                json!({"type":"content_block_start","index":index,"content_block":{"type":"text","text":text}})
+            }
+            _ => {
+                json!({"type":"response.output_text.delta","output_index":index,"content_index":0,"delta":text})
+            }
+        };
+        fold.feed(&format!("data: {}\n\n", event(0)), &mut |_| {})
+            .unwrap();
+        assert!(matches!(
+            fold.feed(&format!("data: {}\n\n", event(1)), &mut |_| {}),
+            Err(DecodeError::LimitExceeded { .. })
+        ));
+    }
+}

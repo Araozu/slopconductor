@@ -405,8 +405,7 @@ async fn run_scheduler<R: ChatRepository>(
         }
         let repository = Arc::clone(&repository);
         let turn_id = work.turn_id.clone();
-        let mut provider_map = providers.borrow().clone();
-        if let Ok(model) = work
+        let provider = if let Ok(model) = work
             .requested_model
             .parse::<slop_core::provider::ProviderModelRef>()
         {
@@ -418,18 +417,22 @@ async fn run_scheduler<R: ChatRepository>(
                 pinned_providers.remove(&turn_id);
             }
             if let Some(provider) = pinned_providers.get(&turn_id) {
-                provider_map.insert(id, Arc::clone(&provider.client));
-            } else if let Some(provider) = provider_map.get(&id).cloned() {
+                Some(Arc::clone(&provider.client))
+            } else if let Some(provider) = providers.borrow().get(&id).cloned() {
                 pinned_providers.insert(
                     turn_id.clone(),
                     PinnedProvider {
-                        client: provider,
+                        client: Arc::clone(&provider),
                         resume_count: work.resume_count,
                     },
                 );
+                Some(provider)
+            } else {
+                None
             }
-        }
-        let providers = provider_map;
+        } else {
+            None
+        };
         let deltas = deltas.clone();
         let mut turn_shutdown = shutdown.clone();
         let tools = Arc::clone(&tools);
@@ -437,12 +440,12 @@ async fn run_scheduler<R: ChatRepository>(
         turns.spawn(async move {
             let _permit = permit;
             let result = crate::agent::execute(
-                repository,
-                providers,
-                deltas,
+                repository.as_ref(),
+                provider.as_deref(),
+                &deltas,
                 work,
                 &mut turn_shutdown,
-                tools,
+                tools.as_ref(),
             )
             .await;
             (turn_id, result)

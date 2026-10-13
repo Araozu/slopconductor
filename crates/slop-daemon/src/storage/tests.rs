@@ -595,9 +595,9 @@ async fn boundary_steering_is_durable_idempotent_and_applied_before_readmission(
     let resumed = client.claim_next_turn().await.unwrap().unwrap();
     assert!(
         resumed
-            .messages
+            .history
             .iter()
-            .any(|message| message.text == "change direction")
+            .any(|message| message.visible_text() == "change direction")
     );
     assert_eq!(resumed.turn_id, work.turn_id);
     assert_eq!(resumed.initial_usage.input_tokens, Some(13));
@@ -620,15 +620,15 @@ async fn boundary_steering_is_durable_idempotent_and_applied_before_readmission(
     let resumed_again = client.claim_next_turn().await.unwrap().unwrap();
     assert!(
         resumed_again
-            .messages
+            .history
             .iter()
-            .any(|message| message.text == "change direction")
+            .any(|message| message.visible_text() == "change direction")
     );
     assert!(
         resumed_again
-            .messages
+            .history
             .iter()
-            .any(|message| message.text == "second direction")
+            .any(|message| message.visible_text() == "second direction")
     );
 }
 
@@ -718,9 +718,9 @@ async fn pause_resume_is_durable_and_keeps_the_workspace_request_cap() {
     assert_eq!(resumed.max_model_requests, 2);
     assert!(
         resumed
-            .messages
+            .history
             .iter()
-            .any(|message| message.text == "resume with this")
+            .any(|message| message.visible_text() == "resume with this")
     );
 }
 
@@ -894,9 +894,9 @@ async fn immediate_unknown_usage_resumes_without_replaying_or_fabricating_totals
     assert_eq!(resumed.initial_usage.total_tokens, None);
     assert!(
         resumed
-            .messages
+            .history
             .iter()
-            .any(|message| message.text == "rethink")
+            .any(|message| message.visible_text() == "rethink")
     );
 }
 
@@ -1233,8 +1233,9 @@ async fn claim_context_is_ordered_and_excludes_later_queued_users() {
     assert_eq!(work.turn_id, first.turn_id.clone().expect("turn id"));
     assert_eq!(work.requested_model, "opencode-go/glm-5.3-flash");
     assert_eq!(work.max_tokens, Some(1024));
-    assert_eq!(work.messages.len(), 1);
-    assert_eq!(work.messages[0].text, "first question");
+    assert!(work.messages.is_empty());
+    assert_eq!(work.history.len(), 1);
+    assert_eq!(work.history[0].visible_text(), "first question");
     assert!(
         client
             .claim_next_turn()
@@ -1263,9 +1264,9 @@ async fn claim_context_is_ordered_and_excludes_later_queued_users() {
         .expect("second turn");
     assert_eq!(next.turn_id, second.turn_id.expect("turn id"));
     let context: Vec<String> = next
-        .messages
+        .history
         .into_iter()
-        .map(|message| message.text)
+        .map(|message| message.visible_text())
         .collect();
     assert_eq!(
         context,
@@ -1682,8 +1683,11 @@ async fn startup_recovery_keeps_visible_checkpoint_out_of_context_and_marks_even
         .expect("claim after recovery")
         .expect("queued turn");
     assert_eq!(resumed.turn_id, next.turn_id.expect("turn id"));
-    assert_eq!(resumed.messages.len(), 2);
-    assert_eq!(resumed.messages.last().unwrap().text, "new question");
+    assert_eq!(resumed.history.len(), 2);
+    assert_eq!(
+        resumed.history.last().unwrap().visible_text(),
+        "new question"
+    );
     assert!(
         resumed
             .history

@@ -102,9 +102,8 @@ impl InferenceRequest {
             }
             for block in &message.blocks {
                 bytes = bytes.saturating_add(
-                    serde_json::to_vec(block)
-                        .map_err(|_| ProviderError::InvalidRequest("invalid block"))?
-                        .len(),
+                    crate::json::encoded_len(block)
+                        .map_err(|_| ProviderError::InvalidRequest("invalid block"))?,
                 );
                 match &block.content {
                     BlockContent::ToolCall {
@@ -120,7 +119,7 @@ impl InferenceRequest {
                             || provider_call_id.is_empty()
                             || provider_call_id.len() > 256
                             || !arguments.is_object()
-                            || serde_json::to_vec(arguments).unwrap_or_default().len()
+                            || crate::json::encoded_len(arguments).unwrap_or(usize::MAX)
                                 > MAX_ARGUMENT_BYTES
                             || !calls.insert(call_id)
                             || pending.insert(call_id, provider_call_id).is_some()
@@ -151,9 +150,8 @@ impl InferenceRequest {
                 "tool calls require matching results",
             ));
         }
-        let total = serde_json::to_vec(&self.messages)
-            .map_err(|_| ProviderError::InvalidRequest("invalid context"))?
-            .len();
+        let total = crate::json::encoded_len(&self.messages)
+            .map_err(|_| ProviderError::InvalidRequest("invalid context"))?;
         if bytes > ChatRequest::MAX_REQUEST_BYTES || total > ChatRequest::MAX_REQUEST_BYTES {
             return Err(ProviderError::LimitExceeded {
                 detail: "structured context exceeds byte bound",

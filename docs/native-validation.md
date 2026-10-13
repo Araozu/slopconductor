@@ -62,3 +62,31 @@ The Windows CI result above predates this Codex work; the expanded checks have
 not been rerun on native Windows here. Live login, entitlement, discovery and
 inference against OpenAI remain unverified without a valid credential. Release
 capacity validation remains outstanding.
+
+## Rust ownership and memory audit, 2026-10-13
+
+The audit patch, rebased onto `bf7487f` to include the concurrent chat-history
+changes, passed locally on Linux x86_64 with Rust 1.99.0:
+
+```sh
+cargo build -p slop-cli --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+python3 scripts/smoke.py
+cargo build --release -p slop-daemon -p slop-cli --locked
+python3 scripts/memory_audit.py --runs 3
+```
+
+All 203 offline workspace tests and the full real-binary smoke suite passed.
+Thirteen credentialed live tests remained ignored. Coverage includes context
+compaction/recovery, provider switching and pinned connections, cancellation,
+signed reasoning and streaming bounds, tool admission, durable history,
+forks/edits/suffix deletion, projects, matrices, budgets, and child waits.
+
+The [memory audit](memory-audit.md) records the paired release RSS comparison:
+59.20 to 40.53 MiB median with four active 2 MiB histories, a 31.5% reduction.
+The combined build repeated at 41.20 MiB active and 13.25 MiB baseline RSS, with
+seven threads throughout. This validates the specific offline workload; broader
+capacity, live-heap, supervised-tool, live-provider, and native Windows resource
+measurements remain outstanding. These latest checks were not run on Windows.

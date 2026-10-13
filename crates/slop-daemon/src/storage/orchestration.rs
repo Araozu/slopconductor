@@ -1274,9 +1274,9 @@ mod tests {
         assert_eq!(steered_work.turn_id, first.turn_id);
         assert!(
             steered_work
-                .messages
+                .history
                 .iter()
-                .any(|m| m.text == "keep the interface")
+                .any(|m| m.visible_text() == "keep the interface")
         );
         client
             .finish_chat_turn(&first.turn_id, outcome(ChatStatus::Completed))
@@ -1284,7 +1284,7 @@ mod tests {
             .unwrap();
         let second = client.claim_next_turn().await.unwrap().unwrap();
         assert_eq!(Some(&second.turn_id), queued.turn_id.as_ref());
-        assert!(second.messages.iter().all(|m| m.text != "third"));
+        assert!(second.history.iter().all(|m| m.visible_text() != "third"));
         store.shutdown().await.unwrap();
         let store = open(data).await;
         let client = store.client();
@@ -1423,7 +1423,11 @@ mod tests {
             resumed
         );
         let work = client.claim_next_turn().await.unwrap().unwrap();
-        assert!(work.messages.iter().any(|m| m.text == instruction.text));
+        assert!(
+            work.history
+                .iter()
+                .any(|m| m.visible_text() == instruction.text)
+        );
         client
             .finish_chat_turn(&work.turn_id, outcome(ChatStatus::Completed))
             .await
@@ -1714,8 +1718,8 @@ mod tests {
         assert!(client.run(&receipt.run_id).await.unwrap().effects_unknown);
         let work = client.claim_next_turn().await.unwrap().unwrap();
         assert_eq!(work.turn_id, retried.turn_id);
-        assert_eq!(work.messages.len(), 2);
-        assert!(work.messages.iter().all(|m| m.text == "work"));
+        assert_eq!(work.history.len(), 2);
+        assert!(work.history.iter().all(|m| m.visible_text() == "work"));
         assert!(
             work.history
                 .iter()

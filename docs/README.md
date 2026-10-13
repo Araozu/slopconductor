@@ -37,8 +37,9 @@ now moves from implemented scheduling/batch controls and native children to
 platform/capacity validation, then trusted remote CLI access. Linux/native Windows
 CI is configured for the required checks and offline real-binary workflows.
 [Recorded offline validation](native-validation.md) passes on both platforms.
-M1/M2 remain partial; live-provider and release-build capacity validation remain
-outstanding.
+M1/M2 remain partial; live-provider and broader release-build capacity validation
+remain outstanding. An initial Linux release RSS comparison is recorded in the
+[memory audit](memory-audit.md).
 
 ## Reading order
 
@@ -70,6 +71,7 @@ today, then read in this order:
 | [Roadmap](roadmap.md) | Delivery milestones, dependencies, and acceptance criteria |
 | [Implementation](implementation.md) | Concrete engineering tasks and suggested module layouts |
 | [Native validation](native-validation.md) | Recorded Linux/Windows CI result, coverage, and remaining gates |
+| [Memory audit](memory-audit.md) | Native ownership fixes and reproducible offline release RSS measurements |
 | [Open questions](open-questions.md) | Decisions still requiring experience or product input |
 | [Sources](sources.md) | Primary technical references and changing provider assumptions |
 | [Decisions](decisions/README.md) | Short records of the key architectural choices |

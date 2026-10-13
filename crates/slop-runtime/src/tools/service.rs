@@ -69,7 +69,6 @@ impl ToolService {
             permit=self.slots.clone().acquire_owned()=>match permit{Ok(p)=>p,Err(_)=>return ToolOutcome::failed("tool_unavailable",false)},
             _=cancel.changed()=>return ToolOutcome::failed("cancelled",false),
         };
-        let _permit = Arc::new(permit);
         if *cancel.borrow() {
             return ToolOutcome::failed("cancelled", false);
         }
@@ -82,9 +81,10 @@ impl ToolService {
         let output_limit = policy.max_output_bytes;
         let writes = matches!(name, "write" | "edit");
         let name = name.to_owned();
-        let blocking_permit = Arc::clone(&_permit);
         let result = tokio::task::spawn_blocking(move || {
-            let _permit = blocking_permit;
+            // The worker owns admission until it really finishes, even if its
+            // awaiting future is dropped while a file operation is running.
+            let _permit = permit;
             file_tool(&policy, &name, arguments)
         })
         .await;

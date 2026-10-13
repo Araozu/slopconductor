@@ -254,3 +254,8 @@ idle-session metadata cost, context assembly CPU, queue fairness, and tool
 subprocess consumption. Report the daemon and its supervised tools separately.
 The chosen language is an architectural aid; a large unbounded message buffer
 still consumes memory in Rust.
+
+The [2026-10-13 memory audit](memory-audit.md) records implemented context moves,
+borrowed tool validation and SQLite decoding, reduced provider/stream buffers,
+and an offline release comparison with 1/10/100 additional idle sessions and four
+active 2 MiB contexts. Broader capacity and live-heap validation remain open.

@@ -2,8 +2,10 @@ use super::*;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct BashArgs {
-    pub(super) command: String,
+// Execution owns strings when crossing into a blocking worker; validation uses
+// these same schemas with &str borrowed from the supplied JSON arguments.
+pub(super) struct BashArgs<T = String> {
+    pub(super) command: T,
     pub(super) timeout: Option<f64>,
 }
 fn first_line() -> usize {
@@ -15,8 +17,8 @@ fn read_limit() -> usize {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ReadArgs {
-    path: String,
+struct ReadArgs<T = String> {
+    path: T,
     #[serde(default = "first_line")]
     offset: usize,
     #[serde(default = "read_limit")]
@@ -24,41 +26,41 @@ struct ReadArgs {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WriteArgs {
-    path: String,
-    content: String,
+struct WriteArgs<T = String> {
+    path: T,
+    content: T,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct SingleEditArgs {
-    path: String,
-    old_text: String,
-    new_text: String,
+struct SingleEditArgs<T = String> {
+    path: T,
+    old_text: T,
+    new_text: T,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Replacement {
-    old_text: String,
-    new_text: String,
+struct Replacement<T = String> {
+    old_text: T,
+    new_text: T,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct MultipleEditArgs {
-    path: String,
-    edits: Vec<Replacement>,
+struct MultipleEditArgs<T = String> {
+    path: T,
+    edits: Vec<Replacement<T>>,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum EditArgs {
-    Single(SingleEditArgs),
-    Multiple(MultipleEditArgs),
+enum EditArgs<T = String> {
+    Single(SingleEditArgs<T>),
+    Multiple(MultipleEditArgs<T>),
 }
 
-impl EditArgs {
-    fn into_parts(self) -> (String, Vec<Replacement>) {
+impl<T> EditArgs<T> {
+    fn into_parts(self) -> (T, Vec<Replacement<T>>) {
         match self {
             Self::Single(args) => (
                 args.path,
@@ -323,15 +325,15 @@ pub fn definitions() -> Vec<ToolDefinition> {
 
 pub fn validate_arguments(name: &str, arguments: &Value) -> bool {
     match name {
-        "read" => serde_json::from_value::<ReadArgs>(arguments.clone())
+        "read" => ReadArgs::<&str>::deserialize(arguments)
             .is_ok_and(|args| args.offset > 0 && args.limit > 0),
-        "write" => serde_json::from_value::<WriteArgs>(arguments.clone())
+        "write" => WriteArgs::<&str>::deserialize(arguments)
             .is_ok_and(|args| args.content.len() <= MAX_FILE_BYTES),
-        "edit" => serde_json::from_value::<EditArgs>(arguments.clone()).is_ok_and(|args| {
+        "edit" => EditArgs::<&str>::deserialize(arguments).is_ok_and(|args| {
             let (_, edits) = args.into_parts();
             !edits.is_empty() && edits.iter().all(|edit| !edit.old_text.is_empty())
         }),
-        "bash" => serde_json::from_value::<BashArgs>(arguments.clone()).is_ok_and(|args| {
+        "bash" => BashArgs::<&str>::deserialize(arguments).is_ok_and(|args| {
             !args.command.is_empty()
                 && args.command.len() <= 64 * 1024
                 && !args.command.contains('\0')

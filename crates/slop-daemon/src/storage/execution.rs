@@ -43,8 +43,13 @@ pub(super) fn json_column<T: serde::de::DeserializeOwned>(
     row: &rusqlite::Row<'_>,
     index: usize,
 ) -> rusqlite::Result<T> {
-    let value: String = row.get(index)?;
-    serde_json::from_str(&value).map_err(|error| {
+    // Parse while the SQLite row is borrowed. DeserializeOwned ensures the
+    // result can leave the worker without copying the entire encoded column.
+    let value = row.get_ref(index)?;
+    let text = value.as_str().map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(index, value.data_type(), Box::new(error))
+    })?;
+    serde_json::from_str(text).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(
             index,
             rusqlite::types::Type::Text,
@@ -56,18 +61,11 @@ pub(super) fn optional_json_column<T: serde::de::DeserializeOwned>(
     row: &rusqlite::Row<'_>,
     index: usize,
 ) -> rusqlite::Result<Option<T>> {
-    let value: Option<String> = row.get(index)?;
-    value
-        .map(|value| {
-            serde_json::from_str(&value).map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    index,
-                    rusqlite::types::Type::Text,
-                    Box::new(error),
-                )
-            })
-        })
-        .transpose()
+    if matches!(row.get_ref(index)?, rusqlite::types::ValueRef::Null) {
+        Ok(None)
+    } else {
+        json_column(row, index).map(Some)
+    }
 }
 fn decode<T: serde::de::DeserializeOwned>(value: &str) -> StoreResult<T> {
     serde_json::from_str(value).map_err(|_| StoreError::Database)
@@ -765,7 +763,7 @@ pub(super) fn reconcile_tools(tx: &Transaction<'_>, turn: &str, cause: &str) -> 
 pub(super) fn claim_next_turn(
     connection: &Connection,
 ) -> StoreResult<Option<slop_runtime::chat::TurnWork>> {
-    use slop_runtime::chat::{ContextMessage, RoleKind, TurnWork};
+    use slop_runtime::chat::TurnWork;
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
@@ -892,8 +890,7 @@ pub(super) fn claim_next_turn(
     }
     let mut history_ordinals = vec![saved_through; history.len()];
     let mut context_through_ordinal = saved_through;
-    let mut messages = Vec::new();
-    let mut bytes = canonical(&history)?.len();
+    let mut bytes = slop_runtime::json::encoded_len(&history).map_err(|_| StoreError::Invalid)?;
     let mut overflow = false;
     while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
         if history.len() >= MAX_CONTEXT_MESSAGES {
@@ -902,13 +899,14 @@ pub(super) fn claim_next_turn(
         }
         let id: String = row.get(0).map_err(|_| StoreError::Database)?;
         let role: String = row.get(1).map_err(|_| StoreError::Database)?;
-        let text: String = row.get(2).map_err(|_| StoreError::Database)?;
         let mut blocks: Vec<ContentBlock> =
             json_column(row, 3).map_err(|_| StoreError::Database)?;
         if blocks.is_empty() {
             blocks.push(ContentBlock {
                 id: format!("{id}:block:0"),
-                content: BlockContent::Text { text: text.clone() },
+                content: BlockContent::Text {
+                    text: row.get(2).map_err(|_| StoreError::Database)?,
+                },
             });
         }
         let message_turn: String = row.get(5).map_err(|_| StoreError::Database)?;
@@ -924,7 +922,9 @@ pub(super) fn claim_next_turn(
             if blocks.is_empty() {
                 blocks.push(ContentBlock {
                     id: format!("{id}:block:0"),
-                    content: BlockContent::Text { text: text.clone() },
+                    content: BlockContent::Text {
+                        text: row.get(2).map_err(|_| StoreError::Database)?,
+                    },
                 });
             }
             None
@@ -937,16 +937,6 @@ pub(super) fn claim_next_turn(
             "tool" => MessageRole::Tool,
             _ => return Err(StoreError::Database),
         };
-        if role != MessageRole::Tool {
-            messages.push(ContextMessage {
-                role: if role == MessageRole::User {
-                    RoleKind::User
-                } else {
-                    RoleKind::Assistant
-                },
-                text,
-            });
-        }
         let mut message = InferenceMessage {
             role,
             blocks,
@@ -955,7 +945,9 @@ pub(super) fn claim_next_turn(
         if message_turn != turn_id {
             prepare_historical_message(&mut message, &model_ref, wire);
         }
-        let next_bytes = bytes.saturating_add(canonical(&message)?.len());
+        let next_bytes = bytes.saturating_add(
+            slop_runtime::json::encoded_len(&message).map_err(|_| StoreError::Invalid)?,
+        );
         if next_bytes > MAX_CONTEXT_BYTES && !history.is_empty() {
             overflow = true;
             break;
@@ -971,7 +963,9 @@ pub(super) fn claim_next_turn(
             } else {
                 slop_runtime::agent::output_limit::continuation_prompt(&request)
             };
-            bytes = bytes.saturating_add(canonical(&prompt)?.len());
+            bytes = bytes.saturating_add(
+                slop_runtime::json::encoded_len(&prompt).map_err(|_| StoreError::Invalid)?,
+            );
             if history.len() >= MAX_CONTEXT_MESSAGES || bytes > MAX_CONTEXT_BYTES {
                 overflow = true;
                 break;
@@ -1014,7 +1008,7 @@ pub(super) fn claim_next_turn(
         session_id,
         requested_model,
         max_tokens: settings.max_output_tokens,
-        messages,
+        messages: Vec::new(),
         history,
         settings,
         requested_settings,

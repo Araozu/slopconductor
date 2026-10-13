@@ -130,6 +130,11 @@ Blocking filesystem/database work and CPU-heavy parsing have explicit bounded
 execution paths. A library call that blocks must not be put on the main async
 scheduler without accounting for it.
 
+Admitted execution borrows shared services from its owning supervisor task and
+moves canonical context buffers through successive provider requests. Shared
+connections remain reference-counted; inactive histories stay in SQLite. See the
+[memory audit](memory-audit.md) for ownership details and release measurements.
+
 ## Service lifetime
 
 The daemon eventually starts at login or boot according to installation policy:
