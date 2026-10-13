@@ -74,6 +74,8 @@ pub(super) fn legacy_fixture(c: &Connection, version: i64) -> StoreResult<()> {
             ALTER TABLE sessions DROP COLUMN fork;
             DROP TABLE session_context;
             ALTER TABLE model_requests DROP COLUMN context;
+            ALTER TABLE messages DROP COLUMN provider;
+            ALTER TABLE messages DROP COLUMN model;
             ALTER TABLE sessions DROP COLUMN inbox;
             DROP TABLE conversation_drafts;
             CREATE TEMP TABLE saved_work AS SELECT id,owner_node_id,spec,requested_spec,created_order,last_event_sequence FROM sessions;

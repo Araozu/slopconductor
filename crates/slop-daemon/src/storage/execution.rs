@@ -290,7 +290,11 @@ pub(super) fn begin_request(
         return Ok(false);
     }
     let ordinal = next_message_ordinal(&tx, turn)?;
-    tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,request_id) VALUES(?1,?2,?3,?4,'assistant','','pending',?5)",rusqlite::params![intent.message_id,session,turn,ordinal,intent.id]).map_err(|_|StoreError::Database)?;
+    let model_ref = intent
+        .requested_model
+        .parse::<slop_core::provider::ProviderModelRef>()
+        .map_err(|_| StoreError::Invalid)?;
+    tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,request_id,provider,model) VALUES(?1,?2,?3,?4,'assistant','','pending',?5,?6,?7)",rusqlite::params![intent.message_id,session,turn,ordinal,intent.id,model_ref.provider().as_str(),model_ref.model()]).map_err(|_|StoreError::Database)?;
     tx.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status,context) VALUES(?1,?2,?3,?4,?5,?6,?7,'running',?8)",rusqlite::params![intent.id,turn,intent.message_id,intent.ordinal,intent.requested_model,canonical(&intent.requested_settings)?,canonical(&intent.settings)?,canonical(&intent.context)?]).map_err(|_|StoreError::Database)?;
     if !intent.context.compaction {
         tx.execute(
@@ -398,7 +402,7 @@ pub(super) fn complete_request(
         "completed"
     };
     tx.execute(
-        "UPDATE messages SET text=?1,blocks=?2,continuation=?3,status=?4 WHERE id=?5",
+        "UPDATE messages SET text=?1,blocks=?2,continuation=?3,status=?4,model=COALESCE(?6,model) WHERE id=?5",
         rusqlite::params![
             response.message.visible_text(),
             canonical(&response.message.blocks)?,
@@ -409,7 +413,8 @@ pub(super) fn complete_request(
                 .map(canonical)
                 .transpose()?,
             status,
-            message_id
+            message_id,
+            response.resolved_model
         ],
     )
     .map_err(|_| StoreError::Database)?;
@@ -617,7 +622,10 @@ pub(super) fn finish_tool_tx(
         },
     };
     let ordinal = next_message_ordinal(tx, turn)?;
-    tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,request_id) VALUES(?1,?2,?3,?4,'tool',?5,'completed',?6,?7)",rusqlite::params![intent.result_message_id,session,turn,ordinal,outcome.output,canonical(&vec![block])?,intent.request_id]).map_err(|_|StoreError::Database)?;
+    let inserted = tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,request_id,provider,model) SELECT ?1,?2,?3,?4,'tool',?5,'completed',?6,?7,m.provider,m.model FROM model_requests r JOIN messages m ON m.id=r.message_id WHERE r.id=?7 AND r.turn_id=?3",rusqlite::params![intent.result_message_id,session,turn,ordinal,outcome.output,canonical(&vec![block])?,intent.request_id]).map_err(|_|StoreError::Database)?;
+    if inserted != 1 {
+        return Err(StoreError::Database);
+    }
     tx.execute(
         "UPDATE tool_invocations SET status=?1,outcome=?2 WHERE id=?3",
         rusqlite::params![outcome.status, encoded, intent.id],
@@ -860,6 +868,13 @@ pub(super) fn claim_next_turn(
         }
     };
     let (saved_through, saved_history) = super::context::load(&tx, &session_id)?;
+    let model_ref = requested_model
+        .parse::<slop_core::provider::ProviderModelRef>()
+        .map_err(|_| StoreError::Database)?;
+    let wire = slop_runtime::providers::provider(model_ref.provider())
+        .ok_or(StoreError::Database)?
+        .wire_protocol(model_ref.model())
+        .map_err(|_| StoreError::Database)?;
     let mut statement=tx.prepare("SELECT m.id,m.role,m.text,m.blocks,m.continuation,m.turn_id,m.status,r.finish_reason,r.id,m.ordinal FROM messages m JOIN turns t ON t.id=m.turn_id LEFT JOIN model_requests r ON r.id=m.request_id
         WHERE m.session_id=?1 AND m.deleted=0 AND m.context_excluded=0 AND m.ordinal>?4 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND (m.status='completed' OR (m.status='incomplete' AND r.finish_reason IN('output_limit','context_limit'))) AND (t.status='completed' OR m.turn_id=?2 OR t.status IN('failed','cancelled','interrupted','incomplete'))
         ORDER BY m.ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
@@ -872,6 +887,9 @@ pub(super) fn claim_next_turn(
         ])
         .map_err(|_| StoreError::Database)?;
     let mut history = saved_history;
+    for message in &mut history {
+        prepare_historical_message(message, &model_ref, wire);
+    }
     let mut history_ordinals = vec![saved_through; history.len()];
     let mut context_through_ordinal = saved_through;
     let mut messages = Vec::new();
@@ -929,11 +947,14 @@ pub(super) fn claim_next_turn(
                 text,
             });
         }
-        let message = InferenceMessage {
+        let mut message = InferenceMessage {
             role,
             blocks,
             continuation,
         };
+        if message_turn != turn_id {
+            prepare_historical_message(&mut message, &model_ref, wire);
+        }
         let next_bytes = bytes.saturating_add(canonical(&message)?.len());
         if next_bytes > MAX_CONTEXT_BYTES && !history.is_empty() {
             overflow = true;
@@ -1011,6 +1032,23 @@ pub(super) fn claim_next_turn(
         compactions_seen,
         resume_count: resume_count.clamp(0, u32::MAX as i64) as u32,
     }))
+}
+
+fn prepare_historical_message(
+    message: &mut InferenceMessage,
+    model: &slop_core::provider::ProviderModelRef,
+    wire: slop_runtime::providers::WireProtocol,
+) {
+    // A new turn may change provider/model. Preserve canonical blocks and paired
+    // tool results, while replaying private material only to its original model.
+    // This modifies the inference view; durable history remains intact.
+    if message.continuation.as_ref().is_some_and(|continuation| {
+        continuation.provider != model.provider().as_str()
+            || continuation.model != model.model()
+            || continuation.wire != wire.as_str()
+    }) {
+        message.continuation = None;
+    }
 }
 
 fn ids(connection: &Connection, sql: &str, id: &str) -> StoreResult<Vec<String>> {
@@ -1157,11 +1195,7 @@ impl StoreClient {
     }
     pub async fn message(&self, id: &str) -> StoreResult<MessageResponse> {
         let id = id.to_owned();
-        self.submit(move|c|{
-            let mut statement=c.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id FROM messages WHERE id=?1 AND deleted=0").map_err(|_|StoreError::Database)?;
-            let mut rows=statement.query([id]).map_err(|_|StoreError::Database)?;let row=rows.next().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
-            Ok(MessageResponse{id:row.get(0).map_err(|_|StoreError::Database)?,session_id:row.get(1).map_err(|_|StoreError::Database)?,turn_id:row.get(2).map_err(|_|StoreError::Database)?,role:row.get(3).map_err(|_|StoreError::Database)?,text:row.get(4).map_err(|_|StoreError::Database)?,status:row.get(5).map_err(|_|StoreError::Database)?,blocks:public_blocks_from_row(row,6,0,4)?,request_id:row.get(7).map_err(|_|StoreError::Database)?})
-        }).await
+        self.submit(move |c| messages::get_message(c, &id)).await
     }
     pub async fn artifact(&self, id: &str) -> StoreResult<wire::ArtifactResponse> {
         let id = id.to_owned();

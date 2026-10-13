@@ -106,7 +106,10 @@ requests replay material; completed reasoning items (including summaries),
 assistant `phase`, and associated output items are stored privately and replayed
 only within the same provider/model/endpoint/registration scope. Token refresh
 does not change that scope; changing a key, account, or endpoint does. Required
-incompatible continuation fails without dispatch. Interrupted/incomplete
+incompatible continuation within a turn or under a changed account/endpoint
+fails without dispatch. A new turn selecting another provider/model instead
+uses canonical history and paired tool results without incompatible private
+replay; stored records remain intact. Interrupted/incomplete
 continuation is discarded.
 
 Attachments, media, custom/free-form tools, hosted tools, arbitrary provider

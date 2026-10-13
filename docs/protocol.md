@@ -15,6 +15,9 @@ durable acceptance receipts. Errors use `ErrorResponse { code, message }`.
 [Structured execution](structured-execution.md) also adds message blocks,
 model requests, tool invocations, artifacts, capability discovery, causal delta
 IDs, and per-turn model/settings. Its DTOs live in `slop_protocol::execution`.
+Message DTOs also expose persisted `provider` and `model` fields; these describe
+each message's frozen selection or originating request's reported model, even
+when subsequent turns select a different provider.
 Registered [projects/workspaces](projects-workspaces.md) and durable
 [tasks/run attempts and matrices](tasks-batches.md) are also implemented. Their
 wire structs live in `slop_protocol::projects` and `slop_protocol::orchestration`.

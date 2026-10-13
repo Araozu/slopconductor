@@ -8,6 +8,12 @@ pub struct MessageResponse {
     pub role: String,
     pub text: String,
     pub status: String,
+    /// Provider selected for this message's turn or originating model request.
+    #[serde(default)]
+    pub provider: String,
+    /// Provider-reported model when available, otherwise the selected model ID.
+    #[serde(default)]
+    pub model: String,
     #[serde(default)]
     pub blocks: Vec<crate::execution::ContentBlock>,
     #[serde(default)]

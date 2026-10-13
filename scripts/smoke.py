@@ -197,7 +197,7 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
             stored_id = database.execute(
                 "SELECT node_id FROM node_identity WHERE singleton = 1"
             ).fetchone()[0]
-        if journal != "wal" or schema_version != 12 or stored_id != node["node_id"]:
+        if journal != "wal" or schema_version != 13 or stored_id != node["node_id"]:
             raise RuntimeError(
                 f"unexpected SQLite state: journal={journal}, schema={schema_version}, node={stored_id}"
             )

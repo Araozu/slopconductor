@@ -79,6 +79,10 @@ async fn forks_and_edits_copy_only_the_prefix_and_survive_source_deletion_and_re
             .all(|old| old.id != m.id && old.turn_id != m.turn_id)
     }));
     assert_eq!(fork.message_id.as_ref(), Some(&copied[1].id));
+    for (copy, original) in copied.iter().zip(&original) {
+        assert_eq!(copy.provider, original.provider);
+        assert_eq!(copy.model, original.model);
+    }
     let snapshot = c.session(&fork.session_id).await.unwrap();
     assert_eq!(snapshot.title.as_deref(), Some("Branch"));
     assert_eq!(snapshot.fork.as_ref().unwrap().message_id, original[1].id);
@@ -408,24 +412,43 @@ async fn cuts_inside_tool_exchanges_never_replay_unpaired_tools_or_private_conti
     )
     .await;
     let session_count = c.sessions(None, 200).await.unwrap().items.len();
-    assert!(matches!(
-        c.edit_message(
+    let edited = c
+        .edit_message(
             &source,
             later.message_id.as_ref().unwrap(),
             EditMessageRequest {
-                command_id: "incompatible-edit".into(),
+                command_id: "cross-provider-edit".into(),
                 text: "replacement".into(),
                 ..Default::default()
             },
-            None
+            None,
         )
-        .await,
-        Err(StoreError::Preflight("context_incompatible", _))
-    ));
+        .await
+        .unwrap();
     assert_eq!(
         c.sessions(None, 200).await.unwrap().items.len(),
-        session_count
+        session_count + 1
     );
+    let work = c.claim_next_turn().await.unwrap().unwrap();
+    assert_eq!(work.turn_id, edited.turn_id.unwrap());
+    assert!(work.history.iter().all(|m| m.continuation.is_none()));
+    assert!(slop_runtime::agent::context::safe_boundary(
+        &work.history,
+        work.history.len()
+    ));
+    c.finish_chat_turn(
+        &work.turn_id,
+        ChatOutcome {
+            text: "edited reply".into(),
+            resolved_model: None,
+            usage: Usage::default(),
+            status: ChatStatus::Completed,
+            error_code: None,
+            error_message: None,
+        },
+    )
+    .await
+    .unwrap();
     c.delete_message(
         &source,
         "result-b",
@@ -465,7 +488,7 @@ async fn schema_eleven_migrates_without_changing_existing_history() {
     complete(&c, &source, "message", "old prompt", "old reply").await;
     let original = c.messages(&source, None, 200).await.unwrap().items;
     c.submit(|db|{
-        db.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; PRAGMA user_version=11;").unwrap(); Ok(())
+        db.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap(); Ok(())
     }).await.unwrap();
     store.shutdown().await.unwrap();
     let store = open_test(&dir, None).await;

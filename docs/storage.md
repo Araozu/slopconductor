@@ -25,7 +25,12 @@ completed wait result commits before readmission. See [child tasks](child-tasks.
 Schema 11 adds per-request context size/purpose and an atomic session inference
 checkpoint containing the summary, retained messages, and historical cursor.
 Compaction changes the inference view without deleting public history.
-Schema 12 adds chat-fork lineage, historical-turn markers, message tombstones,
+Schema 12 adds `provider` and `model` to every message. Backfill uses the
+originating model request where available, then the message's frozen turn, with
+reported model IDs preserved. User messages retain the selected model; paired
+tool results inherit their originating assistant request's reported/selected
+model. Later provider changes cannot relabel earlier messages.
+Schema 13 adds chat-fork lineage, historical-turn markers, message tombstones,
 and inference exclusions for cuts inside tool exchanges. Forks copy the selected
 prefix without inheriting execution or compacted summaries. Suffix deletion
 invalidates summaries while retaining execution/audit records and spent budgets.

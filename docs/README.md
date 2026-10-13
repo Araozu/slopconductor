@@ -4,7 +4,7 @@ These documents capture the application idea, accepted constraints, proposed
 design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
-**Status as of 2026-10-11:** milestone M0 is a repository/bootstrap foundation,
+**Status as of 2026-10-13:** milestone M0 is a repository/bootstrap foundation,
 with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
@@ -18,7 +18,9 @@ restart, and own ChatGPT authorization in the daemon. Codex also supports
 separate account registrations, mode selection/sign-out, and explicit live catalog
 probes. Structured Go/Zen/Codex execution adds explicit workspace tools, durable
 request/invocation records, artifacts, block-aware streaming, and per-turn model
-settings. Execution steering supports after-turn, next-boundary, and immediate
+settings. Every message retains its provider/model, and new turns can switch
+providers using canonical history without forwarding incompatible private replay.
+Execution steering supports after-turn, next-boundary, and immediate
 delivery, plus durable pause/resume with explicit re-admission. Same-turn
 steering keeps its provider snapshot; a resumed pause takes a fresh snapshot.
 Managed projects/workspaces now add repository registration, frozen base commits,

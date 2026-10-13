@@ -67,41 +67,6 @@ fn update_prompt(tx: &Transaction<'_>, session: &str) -> StoreResult<()> {
     Ok(())
 }
 
-fn validate_context(
-    tx: &Transaction<'_>,
-    session: &str,
-    source: &SessionResponse,
-) -> StoreResult<()> {
-    let provider_id = source
-        .provider
-        .parse::<slop_core::provider::ProviderId>()
-        .map_err(|_| StoreError::Invalid)?;
-    let provider = slop_runtime::providers::provider(provider_id).ok_or(StoreError::Invalid)?;
-    let wire = provider
-        .wire_protocol(&source.model)
-        .map_err(|_| StoreError::Invalid)?;
-    let mut statement = tx.prepare("SELECT continuation FROM messages WHERE session_id=?1 AND deleted=0 AND context_excluded=0 AND status='completed' ORDER BY ordinal LIMIT 256").map_err(|_| StoreError::Database)?;
-    let mut rows = statement
-        .query([session])
-        .map_err(|_| StoreError::Database)?;
-    while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
-        let continuation: Option<slop_runtime::providers::inference::Continuation> =
-            execution::optional_json_column(row, 0).map_err(|_| StoreError::Database)?;
-        if continuation.is_some_and(|c| {
-            c.required
-                && (c.provider != source.provider
-                    || c.model != source.model
-                    || c.wire != wire.as_str())
-        }) {
-            return Err(StoreError::Preflight(
-                "context_incompatible",
-                "The inherited model cannot replay the fork's required provider continuation.",
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn copy_prefix(
     tx: &Transaction<'_>,
     source: &str,
@@ -130,10 +95,10 @@ fn copy_prefix(
         // SQL copies each row directly without retaining full histories in RAM.
         // Request IDs refer to immutable original inference records, not new work.
         tx.execute(
-            "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,continuation,request_id,context_excluded)
+            "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,continuation,request_id,context_excluded,provider,model)
              SELECT CASE WHEN id=(SELECT user_message_id FROM turns WHERE id=?1) THEN ?2 ELSE lower(hex(randomblob(32))) END,
              ?3,?4,ordinal,role,text,CASE WHEN status IN('pending','checkpoint') THEN 'interrupted' ELSE status END,
-             blocks,CASE WHEN status='completed' THEN continuation ELSE NULL END,request_id,context_excluded
+             blocks,CASE WHEN status='completed' THEN continuation ELSE NULL END,request_id,context_excluded,provider,model
              FROM messages WHERE turn_id=?1 AND deleted=0 AND ordinal<=?5
              AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=messages.request_id AND json_extract(r.context,'$.compaction')=1)",
             rusqlite::params![original, user, destination, turn, through],
@@ -306,7 +271,6 @@ impl StoreClient {
             let through = if role=="user" { ordinal-1 } else { ordinal };
             let (id, copied) = branch(&tx, &source, &message, through, None, true, data_dir)?;
             let (turn_id, message_id) = if role=="user" {
-                validate_context(&tx, &id, &source)?;
                 let accepted = send_message_tx(&tx, &id, SendMessageRequest {
                     command_id: opaque_id()?, text: request.text, ..Default::default()
                 }, effective_settings, None)?;

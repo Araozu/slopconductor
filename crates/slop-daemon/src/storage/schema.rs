@@ -93,6 +93,9 @@ where
             context::migrate(&tx)?;
         }
         if existing_version < 12 {
+            messages::migrate_message_models(&tx)?;
+        }
+        if existing_version < 13 {
             history::migrate(&tx)?;
         }
         let broken: bool = tx
