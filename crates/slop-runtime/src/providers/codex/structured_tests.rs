@@ -285,6 +285,7 @@ async fn restrictions_fail_before_dispatch_and_model_capabilities_are_specific()
 async fn incomplete_failed_refused_and_malformed_streams_are_distinct() {
     let mut incomplete = completed();
     incomplete["status"] = "incomplete".into();
+    incomplete["incomplete_details"] = json!({"reason":"max_output_tokens"});
     incomplete["output"][2]["arguments"] = "{broken".into();
     let mut malformed = completed();
     malformed["output"][2]["arguments"] = "{broken".into();

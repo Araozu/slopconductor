@@ -92,7 +92,11 @@ pub trait ProviderClient: Send + Sync {
                 usage: result.usage,
                 finish_reason: match result.outcome {
                     TurnOutcome::Completed => inference::FinishReason::Stop,
-                    TurnOutcome::Incomplete { .. } => inference::FinishReason::OutputLimit,
+                    TurnOutcome::Incomplete { reason } => match reason.as_str() {
+                        "max_tokens" | "max_output_tokens" => inference::FinishReason::OutputLimit,
+                        "content_filter" => inference::FinishReason::ContentFilter,
+                        _ => inference::FinishReason::Incomplete,
+                    },
                 },
             })
         })

@@ -2,6 +2,7 @@
 mod request_completion;
 mod request_intent;
 mod tool_intent;
+pub mod output_limit;
 
 pub use request_completion::RequestCompletion;
 pub use request_intent::RequestIntent;
@@ -180,6 +181,7 @@ pub(crate) async fn execute<R: ChatRepository>(
     };
     let mut tool_count = work.tool_calls_used;
     let mut ordinal = work.next_request_ordinal.max(1);
+    let mut output_limits_seen = work.output_limits_seen;
     let mut cancel_tick = tokio::time::interval(Duration::from_millis(100));
     cancel_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     while ordinal <= max_requests {
@@ -413,7 +415,7 @@ pub(crate) async fn execute<R: ChatRepository>(
             }
         };
         drop(inference);
-        let response = match result {
+        let mut response = match result {
             Ok(response) => response,
             Err(error) => {
                 let outcome = provider_failure(error);
@@ -427,6 +429,24 @@ pub(crate) async fn execute<R: ChatRepository>(
                 return stop(repository.as_ref(), &work.turn_id, outcome, total).await;
             }
         };
+        // Only a completed tool proposal can launch a side effect. Keep visible
+        // partial text, but never replay incomplete reasoning or tool arguments.
+        if matches!(
+            response.finish_reason,
+            FinishReason::OutputLimit | FinishReason::Incomplete | FinishReason::ContentFilter
+        ) {
+            response.message.continuation = None;
+            response.message.blocks.retain(|block| {
+                matches!(block.content, BlockContent::Text { .. } | BlockContent::Refusal { .. })
+            });
+            if response.message.blocks.is_empty() {
+                response.message = InferenceMessage::text(
+                    MessageRole::Assistant,
+                    format!("{request_id}:block:0"),
+                    String::new(),
+                );
+            }
+        }
         total = aggregate(total, response.usage, is_first_request);
         let mut invocations = Vec::new();
         for block in &response.message.blocks {
@@ -473,8 +493,39 @@ pub(crate) async fn execute<R: ChatRepository>(
             return false;
         }
         let finish = response.finish_reason.clone();
+        let text = response.message.visible_text();
+        let no_progress = output_limits_seen > 0
+            && messages.iter().rev().find(|message| message.role == MessageRole::Assistant)
+                .is_some_and(|previous| previous.visible_text().trim() == text.trim());
         messages.push(response.message.clone());
+        if finish == FinishReason::OutputLimit {
+            output_limits_seen = output_limits_seen.saturating_add(1);
+            let refused = response.message.blocks.iter().any(|block| {
+                matches!(block.content, BlockContent::Refusal { .. })
+            });
+            if !no_progress
+                && !refused
+                && output_limits_seen <= output_limit::MAX_CONTINUATIONS
+                && ordinal <= max_requests
+            {
+                messages.push(output_limit::continuation_prompt(&request_id));
+                continue;
+            }
+        }
         if finish != FinishReason::ToolCalls {
+            let incomplete = matches!(
+                finish,
+                FinishReason::OutputLimit | FinishReason::Incomplete | FinishReason::ContentFilter
+            );
+            let error_message = match finish {
+                FinishReason::OutputLimit if no_progress =>
+                    Some("The provider reached its output-token limit again without progress. Increase the output limit or request smaller steps."),
+                FinishReason::OutputLimit =>
+                    Some("The provider reached its output-token limit and automatic continuation has no remaining budget. Increase the output limit or request smaller steps."),
+                FinishReason::ContentFilter => Some("The provider stopped the response with a content filter."),
+                FinishReason::Incomplete => Some("The provider returned an incomplete response without a recognized output-token limit."),
+                _ => None,
+            };
             return stop(
                 repository.as_ref(),
                 &work.turn_id,
@@ -482,21 +533,17 @@ pub(crate) async fn execute<R: ChatRepository>(
                     text: response.message.visible_text(),
                     resolved_model: response.resolved_model,
                     usage: total,
-                    status: if finish == FinishReason::OutputLimit {
+                    status: if incomplete {
                         ChatStatus::Incomplete
                     } else {
                         ChatStatus::Completed
                     },
-                    error_code: if finish == FinishReason::OutputLimit {
+                    error_code: if incomplete {
                         Some("provider_incomplete".into())
                     } else {
                         None
                     },
-                    error_message: if finish == FinishReason::OutputLimit {
-                        Some("The provider reached an output limit.".into())
-                    } else {
-                        None
-                    },
+                    error_message: error_message.map(str::to_owned),
                 },
                 total,
             )

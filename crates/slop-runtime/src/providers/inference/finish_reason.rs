@@ -6,5 +6,8 @@ pub enum FinishReason {
     Stop,
     ToolCalls,
     OutputLimit,
+    /// An incomplete response without a recognized token-limit reason.
+    Incomplete,
+    ContentFilter,
     Refusal,
 }

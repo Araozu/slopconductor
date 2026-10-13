@@ -365,7 +365,12 @@ pub(super) fn complete_request(
         .ok_or(StoreError::Conflict)?;
     let response = completion.response;
     let finish = serde_json::to_value(&response.finish_reason).map_err(|_| StoreError::Database)?;
-    let incomplete = response.finish_reason == inference::FinishReason::OutputLimit;
+    let incomplete = matches!(
+        response.finish_reason,
+        inference::FinishReason::OutputLimit
+            | inference::FinishReason::Incomplete
+            | inference::FinishReason::ContentFilter
+    );
     let status = if incomplete {
         "incomplete"
     } else {
@@ -757,13 +762,20 @@ pub(super) fn claim_next_turn(
             |row| row.get(0),
         )
         .map_err(|_| StoreError::Database)?;
+    let output_limits_seen: u32 = tx
+        .query_row(
+            "SELECT count(*) FROM model_requests WHERE turn_id=?1 AND finish_reason='output_limit'",
+            [&turn_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
     let orchestration:Option<slop_runtime::orchestration::OrchestrationPolicy>=tx.query_row("SELECT json_extract(k.spec,'$.orchestration') FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=?1",[&turn_id],|r|r.get::<_,Option<String>>(0)).optional().map_err(|_|StoreError::Database)?.flatten().map(|s|decode(&s)).transpose()?;
     let base_request_limit = execution
         .as_ref()
-        .map_or(1_i64, |policy| i64::from(policy.max_model_requests));
+        .map_or(1 + i64::from(slop_runtime::agent::output_limit::MAX_CONTINUATIONS), |policy| i64::from(policy.max_model_requests));
     // Delegation has a bounded continuation allowance under aggregate budgets.
     // Other workspace turns retain their policy cap; plain text retains its
-    // one-request default with a bounded steering/resume allowance.
+    // one initial request plus bounded output-limit/steering/resume recovery.
     let max_model_requests = if orchestration.is_some() {
         64
     } else if execution.is_some() {
@@ -788,8 +800,8 @@ pub(super) fn claim_next_turn(
             }),
         }
     };
-    let mut statement=tx.prepare("SELECT m.id,m.role,m.text,m.blocks,m.continuation FROM messages m JOIN turns t ON t.id=m.turn_id
-        WHERE m.session_id=?1 AND m.status='completed' AND (t.status='completed' OR m.turn_id=?2 OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
+    let mut statement=tx.prepare("SELECT m.id,m.role,m.text,m.blocks,m.continuation,m.turn_id,m.status,r.finish_reason,r.id FROM messages m JOIN turns t ON t.id=m.turn_id LEFT JOIN model_requests r ON r.id=m.request_id
+        WHERE m.session_id=?1 AND (m.status='completed' OR (m.status='incomplete' AND r.finish_reason='output_limit')) AND (t.status='completed' OR m.turn_id=?2 OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
         ORDER BY m.ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![
@@ -818,7 +830,23 @@ pub(super) fn claim_next_turn(
                 content: BlockContent::Text { text: text.clone() },
             });
         }
-        let continuation = optional_json_column(row, 4).map_err(|_| StoreError::Database)?;
+        let message_turn: String = row.get(5).map_err(|_| StoreError::Database)?;
+        let message_status: String = row.get(6).map_err(|_| StoreError::Database)?;
+        let finish_reason: Option<String> = row.get(7).map_err(|_| StoreError::Database)?;
+        let output_limited = message_status == "incomplete"
+            && finish_reason.as_deref() == Some("output_limit");
+        let continuation = if output_limited {
+            blocks.retain(|block| matches!(block.content, BlockContent::Text { .. }));
+            if blocks.is_empty() {
+                blocks.push(ContentBlock {
+                    id: format!("{id}:block:0"),
+                    content: BlockContent::Text { text: text.clone() },
+                });
+            }
+            None
+        } else {
+            optional_json_column(row, 4).map_err(|_| StoreError::Database)?
+        };
         let role = match role.as_str() {
             "user" => MessageRole::User,
             "assistant" => MessageRole::Assistant,
@@ -846,6 +874,16 @@ pub(super) fn claim_next_turn(
             break;
         }
         history.push(message);
+        if output_limited && message_turn == turn_id {
+            let request: String = row.get(8).map_err(|_| StoreError::Database)?;
+            let prompt = slop_runtime::agent::output_limit::continuation_prompt(&request);
+            bytes = bytes.saturating_add(canonical(&prompt)?.len());
+            if history.len() >= MAX_CONTEXT_MESSAGES || bytes > MAX_CONTEXT_BYTES {
+                overflow = true;
+                break;
+            }
+            history.push(prompt);
+        }
     }
     drop(rows);
     drop(statement);
@@ -877,6 +915,7 @@ pub(super) fn claim_next_turn(
         next_request_ordinal: previous_ordinal.saturating_add(1).max(1) as u32,
         max_model_requests,
         tool_calls_used: tool_calls_used as u32,
+        output_limits_seen,
         initial_usage,
         resume_count: resume_count.clamp(0, u32::MAX as i64) as u32,
     }))

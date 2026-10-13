@@ -32,7 +32,8 @@ pub(in crate::providers) fn decode(
             let finish = match string(&choices[0], "finish_reason")? {
                 "stop" => FinishReason::Stop,
                 "tool_calls" => FinishReason::ToolCalls,
-                "length" | "content_filter" => FinishReason::OutputLimit,
+                "length" => FinishReason::OutputLimit,
+                "content_filter" => FinishReason::ContentFilter,
                 _ => return Err(invalid("unknown chat finish reason")),
             };
             if let Some(text) = message.get("content").filter(|v| !v.is_null()) {
@@ -170,7 +171,15 @@ pub(in crate::providers) fn decode(
                 private_items = output.to_vec();
             }
             if status == "incomplete" {
-                FinishReason::OutputLimit
+                match value
+                    .get("incomplete_details")
+                    .and_then(|details| details.get("reason"))
+                    .and_then(Value::as_str)
+                {
+                    Some("max_output_tokens") => FinishReason::OutputLimit,
+                    Some("content_filter") => FinishReason::ContentFilter,
+                    _ => FinishReason::Incomplete,
+                }
             } else if blocks
                 .iter()
                 .any(|b| matches!(b.content, BlockContent::ToolCall { .. }))
@@ -268,7 +277,12 @@ pub(in crate::providers) fn decode(
     if text_bytes > super::super::opencode::MAX_STREAM_TEXT_BYTES {
         return Err(invalid("visible output exceeds bound"));
     }
-    let continuation = if private_items.is_empty() || finish_reason == FinishReason::OutputLimit {
+    let continuation = if private_items.is_empty()
+        || matches!(
+            finish_reason,
+            FinishReason::OutputLimit | FinishReason::Incomplete | FinishReason::ContentFilter
+        )
+    {
         None
     } else {
         Some(Continuation {

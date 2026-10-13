@@ -26,6 +26,7 @@ pub struct TurnWork {
     pub next_request_ordinal: u32,
     pub max_model_requests: u32,
     pub tool_calls_used: u32,
+    pub output_limits_seen: u32,
     pub initial_usage: Usage,
     pub resume_count: u32,
 }
