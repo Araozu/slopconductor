@@ -31,6 +31,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         tools,
         effort,
         max_output_tokens,
+        full_context,
         delivery,
         project,
         base,
@@ -43,10 +44,11 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         );
     }
     let client = context.client()?;
-    let settings = if effort.is_some() || max_output_tokens.is_some() {
+    let settings = if effort.is_some() || max_output_tokens.is_some() || full_context.is_some() {
         Some(slop_protocol::execution::GenerationSettings {
             max_output_tokens,
             reasoning_effort: effort,
+            full_context,
         })
     } else {
         None

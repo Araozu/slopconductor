@@ -23,6 +23,8 @@ Implemented:
   visible checkpoints, terminal replies/usage, and restart reconciliation.
 - Automatic token-aware context compaction with durable working memory, full
   transcript retention, cached-input accounting, and bounded provider recovery.
+  The default cost cap is 275,000 tokens; `slop chat --full-context` explicitly
+  opts in to the model's full available window.
 - Daemon-owned OpenCode Go, OpenCode Zen, and Codex inference with bounded concurrency, one active turn
   per session, and explicit cancellation. CLI exit leaves accepted work alive.
 - A consumer CLI with interactive and one-shot chat, session inspection,

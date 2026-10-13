@@ -171,6 +171,8 @@ async fn discover(State(state): State<Arc<AppState>>, Path(provider): Path<Strin
                     .then(|| "Advertised model has no executable adapter mapping.".to_owned()),
                 capabilities: slop_protocol::execution::ModelCapabilities {
                     tools: executable && caps.tools,
+                    context_window_tokens: caps.context_window_tokens,
+                    max_input_tokens: caps.max_input_tokens,
                     reasoning_efforts: if executable {
                         caps.reasoning_efforts
                     } else {

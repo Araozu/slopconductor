@@ -373,7 +373,7 @@ pub(super) fn checkpoint_turn(
     turn_id: &str,
     text: &str,
 ) -> StoreResult<()> {
-    if text.len() > MAX_CONTEXT_BYTES {
+    if text.len() > MAX_OUTPUT_BYTES {
         return Err(StoreError::Limit);
     }
     let tx = connection
@@ -428,7 +428,7 @@ pub(super) fn finish_turn(
     mut outcome: slop_runtime::chat::ChatOutcome,
 ) -> StoreResult<()> {
     use slop_runtime::chat::ChatStatus;
-    if outcome.text.len() > MAX_CONTEXT_BYTES {
+    if outcome.text.len() > MAX_OUTPUT_BYTES {
         outcome.text.clear();
         outcome.status = ChatStatus::Failed;
         outcome.error_code = Some("output_limit".to_owned());

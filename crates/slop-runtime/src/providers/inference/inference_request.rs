@@ -22,6 +22,12 @@ impl InferenceRequest {
         capabilities: &ModelCapabilities,
     ) -> Result<WireProtocol, ProviderError> {
         let wire = provider.wire_protocol(&self.model)?;
+        if self.settings.full_context == Some(true) && capabilities.context_window_tokens.is_none()
+        {
+            return Err(ProviderError::UnsupportedCapability {
+                capability: "settings.full_context",
+            });
+        }
         if self.request_id.is_empty()
             || self.request_id.len() > 128
             || self.messages.is_empty()

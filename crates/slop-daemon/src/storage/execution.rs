@@ -114,6 +114,9 @@ pub(super) fn validate_settings(model: &str, settings: &GenerationSettings) -> S
         return Err(StoreError::Invalid);
     }
     let capabilities = inference::capabilities(provider, selected.model());
+    if settings.full_context == Some(true) && capabilities.context_window_tokens.is_none() {
+        return Err(StoreError::Unsupported("settings.full_context"));
+    }
     if settings
         .reasoning_effort
         .as_ref()
@@ -135,6 +138,7 @@ pub(super) fn turn_settings(
     settings.max_output_tokens = settings
         .max_output_tokens
         .or(session.settings.max_output_tokens);
+    settings.full_context = settings.full_context.or(session.settings.full_context);
     validate_settings(model, &settings)?;
     Ok(settings)
 }
@@ -327,7 +331,7 @@ pub(super) fn checkpoint_request(
         .map_err(|_| StoreError::Database)?
         .ok_or(StoreError::Conflict)?;
     let text = message.visible_text();
-    if text.len() > MAX_CONTEXT_BYTES {
+    if text.len() > MAX_OUTPUT_BYTES {
         return Err(StoreError::Limit);
     }
     tx.execute(

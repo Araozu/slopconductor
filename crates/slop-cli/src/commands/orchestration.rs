@@ -57,6 +57,7 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
                         settings: GenerationSettings {
                             max_output_tokens,
                             reasoning_effort: effort,
+                            full_context: None,
                         },
                         project: project.map(|project_id| ProjectWorkspaceRequest {
                             project_id,

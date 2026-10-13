@@ -799,6 +799,7 @@ mod tests {
             settings: slop_protocol::execution::GenerationSettings {
                 max_output_tokens: Some(17),
                 reasoning_effort: None,
+                full_context: None,
             },
             project: None,
         }
@@ -837,10 +838,12 @@ mod tests {
                 slop_protocol::execution::GenerationSettings {
                     max_output_tokens: Some(17),
                     reasoning_effort: None,
+                    full_context: None,
                 },
                 slop_protocol::execution::GenerationSettings {
                     max_output_tokens: Some(18),
                     reasoning_effort: None,
+                    full_context: None,
                 },
             ],
             project: None,

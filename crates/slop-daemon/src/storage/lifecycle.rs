@@ -148,9 +148,9 @@ impl StoreClient {
                    AND (t.status='completed'
                      OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id))
                      OR (t.status='running' AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
-                 ORDER BY m.ordinal LIMIT 256",
+                 ORDER BY m.ordinal LIMIT ?3",
             ).map_err(|_| StoreError::Database)?;
-            let mut rows = statement.query(rusqlite::params![session_id,through]).map_err(|_| StoreError::Database)?;
+            let mut rows = statement.query(rusqlite::params![session_id,through,MAX_CONTEXT_MESSAGES as i64]).map_err(|_| StoreError::Database)?;
             while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
                 let blocks: Vec<slop_runtime::providers::inference::ContentBlock> = execution::json_column(row, 0).map_err(|_| StoreError::Database)?;
                 non_text |= blocks.iter().any(|block| !matches!(block.content, slop_runtime::providers::inference::BlockContent::Text { .. }));

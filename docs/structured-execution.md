@@ -70,6 +70,8 @@ When settings are omitted, session settings apply. When a settings object is
 provided, a missing token cap falls back to the session cap; absent/null
 `reasoning_effort` means provider default. Legacy `max_tokens` is supported at
 session creation; conflicting legacy/structured caps are rejected.
+An omitted `full_context` inherits the session policy, while explicit `false`
+selects the local cost cap for that turn.
 
 `reasoning_effort` is part of the contract and CLI (`--effort`). Codex advertises
 [model-specific effort values](codex-connection.md#reasoning-settings) and encodes
@@ -95,10 +97,23 @@ OpenAI cached-token details are already included and are not added twice.
 Missing usage uses a conservative estimate of one token per three serialized
 bytes. Estimates remain distinct from provider-reported public usage.
 
-`context_token_budget` defaults to 32,768. This is a configurable conservative
-local budget, not an advertised window for every model. Compaction starts at
-75% of the budget remaining after reserving response room, or near the local
-message/byte caps. The summary request has no tools, uses a 4,096-token cap where
+`context_token_budget` defaults to 275,000 tokens as a local cost cap. The budget
+is clamped to the selected provider/model's documented context and input limits.
+`settings.full_context: true` explicitly opts in to the model's full available
+window instead of that cap. New sessions store this default; per-turn settings
+inherit it when omitted and can override it with `false`. CLI users pass
+`--full-context` or `--full-context=false`. Compaction remains enabled in both
+modes and reserves the requested reply plus 2% growth room (1,024–8,192 tokens).
+The input safety bounds are 8,192 messages and 16 MiB, with earlier compaction
+near those bounds. Provider-reported usage takes precedence over byte estimates;
+only growth since the measured request is estimated.
+
+`/v1/models` and provider discovery expose `context_window_tokens` and optional
+`max_input_tokens`. OpenCode limits use a pinned snapshot of its maintained
+[models.dev catalog](https://github.com/anomalyco/models.dev/tree/74dac73b3587dde8032641951d87530819dbb4e8),
+including gateway-specific overrides; Codex uses verified OpenAI model windows.
+Full context is rejected before acceptance when no verified window is known.
+Unknown limits never imply an unlimited window. The summary request has no tools, uses a 4,096-token cap where
 supported, and records its own effective settings and usage. Normal inference
 keeps its frozen settings. ChatGPT subscription summaries omit unsupported caps.
 
@@ -249,7 +264,7 @@ upstream payloads.
 
 ## Limits and CLI
 
-Context is at most 256 messages/1 MiB; individual files at most 1 MiB; a read
+Context is at most 8,192 messages/16 MiB; individual files at most 1 MiB; a read
 returns at most 2000 complete lines/256 KiB. A single line exceeding the read
 byte cap returns `read_line_limit`; Bash can inspect a smaller byte range. Each model
 response proposes at most 16 tools, with at most 64 KiB of arguments per call.
@@ -269,6 +284,8 @@ slop chat --workspace /absolute/project --prompt "Inspect this project."
 slop chat --workspace /absolute/project --tool read --prompt "Review this project without changing files."
 slop chat --workspace /absolute/project --tool read --tool edit --tool bash --prompt "Fix the failing test."
 slop chat --session SESSION_ID --model opencode-go/glm-5.3 --max-output-tokens 512 --prompt "Review this."
+slop chat --full-context --prompt "Work with the model's full context window."
+slop session send SESSION_ID --full-context=false --text "Use the cost cap for this turn."
 slop capabilities
 slop turn requests TURN_ID
 slop turn tools TURN_ID

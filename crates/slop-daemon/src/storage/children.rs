@@ -816,6 +816,7 @@ mod tests {
             settings: slop_protocol::execution::GenerationSettings {
                 max_output_tokens: Some(64),
                 reasoning_effort: None,
+                full_context: None,
             },
             project: None,
             budget: Some(OperationBudget {

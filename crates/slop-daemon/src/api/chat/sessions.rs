@@ -247,6 +247,7 @@ pub(super) async fn preflight_turn(
     effective.max_output_tokens = effective
         .max_output_tokens
         .or(session.settings.max_output_tokens);
+    effective.full_context = effective.full_context.or(session.settings.full_context);
     if model_ref.provider() == slop_core::provider::ProviderId::Codex
         && subscription
         && effective.max_output_tokens.is_some()
@@ -296,6 +297,12 @@ pub(super) async fn preflight_turn(
         || slop_runtime::providers::inference::capabilities(provider, model_ref.model()),
         |client| client.capabilities(model_ref.model()),
     );
+    if effective.full_context == Some(true) && caps.context_window_tokens.is_none() {
+        return Err((
+            "unsupported_capability",
+            "The model's full context window is unknown.",
+        ));
+    }
     if effective
         .reasoning_effort
         .as_ref()

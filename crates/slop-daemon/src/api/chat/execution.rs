@@ -168,6 +168,8 @@ pub(super) async fn models(State(state): State<Arc<AppState>>) -> Response {
                 reason: reason.clone(),
                 capabilities: slop_protocol::execution::ModelCapabilities {
                     tools,
+                    context_window_tokens: fallback_caps.context_window_tokens,
+                    max_input_tokens: fallback_caps.max_input_tokens,
                     reasoning_efforts: client_caps.unwrap_or(fallback_caps).reasoning_efforts,
                     incremental_streaming: true,
                     max_output_tokens: if cap_supported { 65_536 } else { 0 },
