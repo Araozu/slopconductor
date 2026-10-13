@@ -107,7 +107,7 @@ impl CodexClient {
             .json(&payload)
             .send()
             .await?;
-        transport::check_status(ProviderId::Codex, &response)?;
+        transport::check_status(ProviderId::Codex, &mut response).await?;
         let mut result = if wire::is_event_stream(&response) {
             let mut framing = super::super::opencode::SseStream::new();
             let mut fold = super::super::structured_wire::StructuredFold::new(wire);
@@ -278,8 +278,8 @@ impl CodexClient {
         mut on_delta: impl FnMut(StreamDelta) + Send,
     ) -> Result<ChatResponse, ProviderError> {
         self.validate(request)?;
-        let response = self.inference(request, true).await?.send().await?;
-        transport::check_status(ProviderId::Codex, &response)?;
+        let mut response = self.inference(request, true).await?.send().await?;
+        transport::check_status(ProviderId::Codex, &mut response).await?;
         if self.is_subscription() && !wire::is_event_stream(&response) {
             return Err(ProviderError::InvalidResponse {
                 provider: ProviderId::Codex,

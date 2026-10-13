@@ -366,9 +366,13 @@ async fn failures_keep_gateway_identity_and_exclude_reflected_secrets() {
                 .complete(&request("glm-5.3-flash"))
                 .await
                 .unwrap_err();
-            assert!(
-                matches!(error, ProviderError::UnexpectedStatus { provider, status: code } if provider == id && code == status.as_u16())
-            );
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                assert!(matches!(error, ProviderError::RateLimited { .. }));
+            } else {
+                assert!(
+                    matches!(error, ProviderError::UnexpectedStatus { provider, status: code } if provider == id && code == status.as_u16())
+                );
+            }
             assert!(!error.to_string().contains(KEY));
             assert!(!format!("{error:?}").contains(KEY));
             assert_eq!(

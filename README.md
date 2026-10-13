@@ -21,6 +21,8 @@ Implemented:
   API credentials, and bounded shutdown.
 - Durable text chats with atomic command receipts, ordered history/events,
   visible checkpoints, terminal replies/usage, and restart reconciliation.
+- Automatic token-aware context compaction with durable working memory, full
+  transcript retention, cached-input accounting, and bounded provider recovery.
 - Daemon-owned OpenCode Go, OpenCode Zen, and Codex inference with bounded concurrency, one active turn
   per session, and explicit cancellation. CLI exit leaves accepted work alive.
 - A consumer CLI with interactive and one-shot chat, session inspection,

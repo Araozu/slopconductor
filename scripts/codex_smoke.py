@@ -83,6 +83,9 @@ class CodexFixture:
                                                                "settings": {"reasoning_effort": "low"}}})]
                     elif not waited:
                         calls = [call("child_wait", {"child_run_ids": [receipt["run_id"] for receipt in receipts]})]
+                original_prompt = next(m["content"] for m in reversed(history) if m.get("role") == "user" and isinstance(m.get("content"), str) and not m["content"].startswith("Your previous response reached its output-token limit."))
+                if original_prompt == "incomplete":
+                    status = "incomplete"
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
@@ -97,7 +100,7 @@ class CodexFixture:
                         fixture.started.set()
                         fixture.release.wait(15)
                         return
-                    text = "Inspecting." if calls else "Done: " + prompt
+                    text = "Inspecting." if calls or status == "incomplete" else "Done: " + prompt
                     output = [{"type": "message", "role": "assistant", "phase": "commentary" if calls else "final_answer",
                                "content": [{"type": "output_text", "text": text}]}]
                     if prompt == "refuse":
@@ -115,7 +118,7 @@ class CodexFixture:
                         for index, proposal in enumerate(calls, 2):
                             emit({"type": "response.function_call_arguments.delta", "output_index": index, "delta": proposal["arguments"]})
                     response = {"status": status, "model": payload["model"], "output": output,
-                                "usage": {"input_tokens": 7, "output_tokens": 3}}
+                                "usage": {"input_tokens": 29000 if prompt == "reported-usage" else 7, "output_tokens": 3}}
                     if status == "incomplete":
                         response["incomplete_details"] = {"reason": "max_output_tokens"}
                     emit({"type": "response." + status, "response": response})
@@ -230,6 +233,10 @@ def check_codex(daemon_binary, cli_binary, root):
         assert len(catalog["models"]) == 2 and catalog["models"][0]["ready"] and not catalog["models"][1]["ready"]
         assert catalog["models"][0]["capabilities"]["tools"]
         assert catalog["models"][0]["capabilities"]["reasoning_efforts"] == ["low", "medium", "high", "xhigh", "max"]
+        context = chat("reported-usage", "codex-context-start")
+        continued = chat("continue context", "codex-context-continue", "--session", context["session_id"])
+        context_requests = api(f"/v1/turns/{continued['turn_id']}/requests")["items"]
+        assert any(r["compaction"] and r["effective_settings"]["max_output_tokens"] is None for r in context_requests)
         receipt = chat("workflow", "codex-workflow", "--workspace", str(workspace), "--effort", "high")
         state = api(f"/v1/turns/{receipt['turn_id']}")
         assert state["status"] == "completed" and state["usage"]["total_tokens"] == 20

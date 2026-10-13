@@ -10,6 +10,9 @@ pub(in crate::providers) fn decode(
     request: &InferenceRequest,
     provider: ProviderId,
 ) -> Result<InferenceResponse> {
+    if super::super::transport::is_context_error(value) {
+        return Err(DecodeError::ContextLengthExceeded);
+    }
     if value.get("error").is_some_and(|e| !e.is_null()) {
         return Err(DecodeError::TurnFailed);
     }
@@ -194,6 +197,7 @@ pub(in crate::providers) fn decode(
                 "end_turn" | "stop_sequence" => FinishReason::Stop,
                 "tool_use" => FinishReason::ToolCalls,
                 "max_tokens" => FinishReason::OutputLimit,
+                "model_context_window_exceeded" => FinishReason::ContextLimit,
                 "refusal" => FinishReason::Refusal,
                 _ => return Err(invalid("unknown messages finish reason")),
             };
@@ -217,7 +221,11 @@ pub(in crate::providers) fn decode(
                             .cloned()
                             .ok_or_else(|| invalid("missing tool input"))?,
                     )?),
-                    "tool_use" if finish == FinishReason::OutputLimit => {}
+                    "tool_use"
+                        if matches!(
+                            finish,
+                            FinishReason::OutputLimit | FinishReason::ContextLimit
+                        ) => {}
                     "tool_use" => return Err(invalid("tool calls contradict finish reason")),
                     "thinking" | "redacted_thinking" => {
                         private = true;
@@ -280,9 +288,11 @@ pub(in crate::providers) fn decode(
     let continuation = if private_items.is_empty()
         || matches!(
             finish_reason,
-            FinishReason::OutputLimit | FinishReason::Incomplete | FinishReason::ContentFilter
-        )
-    {
+            FinishReason::OutputLimit
+                | FinishReason::ContextLimit
+                | FinishReason::Incomplete
+                | FinishReason::ContentFilter
+        ) {
         None
     } else {
         Some(Continuation {

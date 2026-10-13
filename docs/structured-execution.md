@@ -61,7 +61,10 @@ subsequent inference request within that turn. Overrides do not mutate session
 defaults, queued turns, or an in-flight request. Request records retain both
 requested settings and effective settings, plus requested/reported model and
 per-request usage. Turn usage aggregates model requests without double-counting
-cumulative stream snapshots. Unknown counters remain unknown.
+cumulative stream snapshots. Unknown counters remain unknown. Completed request
+usage commits to turn totals with each response, before subsequent work. A crash
+during a later tool step preserves those counters; an interrupted or failed
+inference marks final billing usage unknown rather than inventing zero cost.
 
 When settings are omitted, session settings apply. When a settings object is
 provided, a missing token cap falls back to the session cap; absent/null
@@ -75,9 +78,55 @@ unsupported values return `unsupported_capability` before acceptance and inferen
 
 Per-turn model selection works with compatible canonical context. A history
 requiring another model's private continuation is rejected explicitly; portable
-context conversion/reset is future work. New native clients check advertised
+general context conversion/reset is future work; automatic compaction summarizes
+older visible content and retains compatible structured tool exchanges. New native clients check advertised
 capabilities before delivering tool policies or model/settings overrides to an
 older daemon, so an older server cannot silently ignore those selections.
+
+## Automatic context compaction
+
+The daemon uses the latest completed request's provider-reported **input** tokens
+and its recorded input size, then budgets newly appended messages, tool schemas,
+and private continuation. Billing totals summed across requests are not context
+measurements. Anthropic cache reads and writes are included in input usage;
+OpenAI cached-token details are already included and are not added twice.
+Missing usage uses a conservative estimate of one token per three serialized
+bytes. Estimates remain distinct from provider-reported public usage.
+
+`context_token_budget` defaults to 32,768. This is a configurable conservative
+local budget, not an advertised window for every model. Compaction starts at
+75% of the budget remaining after reserving response room, or near the local
+message/byte caps. The summary request has no tools, uses a 4,096-token cap where
+supported, and records its own effective settings and usage. Normal inference
+keeps its frozen settings. ChatGPT subscription summaries omit unsupported caps.
+
+Compaction preserves system/developer instructions, the latest user instruction,
+and complete retained tool/result exchanges. Its working memory includes prior
+goals, decisions, completed actions, failures, unknown effects and next steps.
+Opaque provider reasoning is not copied into summary text. A successful summary
+uses bounded head/tail excerpts for oversized historical content while retaining
+tool outcome, artifact and unknown-effect metadata. Full records stay in history.
+The summary and retained inference view commit atomically with
+`context_compacted`.
+Public history remains complete; maintenance summaries are available through
+request inspection (`compaction: true`) rather than displayed as assistant replies.
+Restart, pause, steering and subsequent turns reuse the committed checkpoint.
+Already oversized transcripts are processed as bounded historical pages.
+
+Only a complete, smaller summary replaces context. Failure, refusal, truncated
+summary, cancellation or interrupted compaction preserves the prior view.
+Maintenance requests consume aggregate budgets and workspace per-turn caps;
+plain chats have eight bounded compaction attempts in addition to the initial
+request and two output-limit continuations. A context-window rejection triggers
+compaction and a narrower local budget before retrying. Context-window stops
+preserve partial text and discard unfinished tool proposals. Output limits use
+the separately bounded continuation path and never execute truncated calls.
+
+Rate limits are distinguished from account quota and context exhaustion.
+Transient rate/connection/timeouts and HTTP 5xx failures get at most two retries,
+within the request budget, with bounded backoff and responsive cancellation and
+pause/steering. A Retry-After exceeding five seconds is surfaced to the caller;
+quota/authentication failures are not retried. Uncertain retry usage stays unknown.
 
 ## Workspace authority and tools
 

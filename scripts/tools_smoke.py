@@ -76,7 +76,9 @@ class ToolFixture:
                     emit({"content": "Tool workflow "})
                     time.sleep(0.02)
                     emit({"content": "complete."})
-                    emit({}, "length" if prompt == "workflow incomplete" else "stop")
+                    original_prompt = next(m["content"] for m in reversed(payload["messages"]) if m.get("role") == "user" and not m["content"].startswith("Your previous response reached its output-token limit."))
+                    keeps_limiting = original_prompt in {"limited", "workflow incomplete"}
+                    emit({}, "length" if keeps_limiting else "stop")
                 self.wfile.write(b'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}\n\n')
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()

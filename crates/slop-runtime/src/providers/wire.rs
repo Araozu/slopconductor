@@ -21,6 +21,9 @@ pub(super) fn decode_response(
     model: &str,
     value: &Value,
 ) -> Result<ChatResponse, ProviderError> {
+    if super::transport::is_context_error(value) {
+        return Err(ProviderError::ContextLengthExceeded);
+    }
     let (text, usage, outcome) = match wire {
         WireProtocol::OpenAiChatCompletions => opencode::parse_chat_response(value),
         WireProtocol::OpenAiResponses => opencode::parse_responses_response(value),

@@ -36,6 +36,9 @@ impl StreamFold {
         }
         let value: Value = serde_json::from_str(&payload)
             .map_err(|_| invalid_terminal("stream event is not valid JSON"))?;
+        if super::super::transport::is_context_error(&value) {
+            return Err(DecodeError::ContextLengthExceeded);
+        }
         if sse_stream_error(&value) {
             return Err(DecodeError::TurnFailed);
         }

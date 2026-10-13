@@ -723,6 +723,14 @@ mod tests {
                 socket.write_all(b"\r\n").await.unwrap();
             }
             socket.write_all(b"0\r\n\r\n").await.unwrap();
+            // Finish the response without resetting the connection while the
+            // client's request writer is still draining on another runtime task.
+            socket.shutdown().await.unwrap();
+            while let Ok(size) = socket.read(&mut part).await {
+                if size == 0 {
+                    break;
+                }
+            }
         });
         Url::parse(&format!("http://{address}/events")).unwrap()
     }

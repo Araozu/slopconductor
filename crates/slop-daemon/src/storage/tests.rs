@@ -163,7 +163,7 @@ async fn schema_nine_upgrade_preserves_conversations_history_and_receipts() {
         .unwrap();
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
-    connection.execute_batch("ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; PRAGMA user_version=9;").unwrap();
+    connection.execute_batch("ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; PRAGMA user_version=9;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
     let client = reopened.client();
@@ -474,6 +474,7 @@ async fn boundary_steering_is_durable_idempotent_and_applied_before_readmission(
         .begin_request(
             &work.turn_id,
             slop_runtime::agent::RequestIntent {
+                context: Default::default(),
                 id: "steer-model-request".into(),
                 message_id: "steer-assistant-message".into(),
                 ordinal: 1,
@@ -826,6 +827,7 @@ async fn immediate_unknown_usage_resumes_without_replaying_or_fabricating_totals
         .begin_request(
             &work.turn_id,
             slop_runtime::agent::RequestIntent {
+                context: Default::default(),
                 id: request_id.into(),
                 message_id: "unknown-running-message".into(),
                 ordinal: 1,
@@ -923,6 +925,7 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
         .begin_request(
             &turn,
             RequestIntent {
+                context: Default::default(),
                 id: "request".into(),
                 message_id: "assistant".into(),
                 ordinal: 1,
@@ -960,7 +963,8 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
             },
         })
         .collect();
-    client.complete_request(&turn, RequestCompletion { request_id: "request".into(),
+    client.complete_request(&turn, RequestCompletion {
+                compaction: None, request_id: "request".into(),
             response: InferenceResponse { resolved_model: None, usage: Usage::default(), finish_reason: FinishReason::ToolCalls,
                 message: InferenceMessage { role: MessageRole::Assistant, blocks, continuation: Some(Continuation {
                     scope:"scope".into(), provider:"opencode-go".into(), model:"glm-5.3-flash".into(), wire:"chat_completions".into(), required:true,
@@ -1252,7 +1256,95 @@ async fn claim_context_is_ordered_and_excludes_later_queued_users() {
 }
 
 #[tokio::test]
-async fn oversized_context_is_failed_before_a_provider_claim() {
+async fn completed_request_usage_is_durable_before_the_turn_finishes() {
+    use slop_runtime::{
+        agent::{RequestCompletion, RequestIntent},
+        chat::ChatRepository,
+        providers::{
+            Usage,
+            inference::{FinishReason, InferenceMessage, InferenceResponse, MessageRole},
+        },
+    };
+    let dir = TempDir::new().unwrap();
+    let store = open_test(&dir, None).await;
+    let client = store.client();
+    let session = client
+        .create_session(create_request("usage-checkpoint-create", None))
+        .await
+        .unwrap()
+        .session_id;
+    let receipt = client
+        .send_message(
+            &session,
+            SendMessageRequest {
+                command_id: "usage-checkpoint-send".into(),
+                text: "goal".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let work = client.claim_next_turn().await.unwrap().unwrap();
+    let turn = receipt.turn_id.unwrap();
+    client
+        .begin_request(
+            &turn,
+            RequestIntent {
+                id: "usage-checkpoint-request".into(),
+                message_id: "usage-checkpoint-message".into(),
+                ordinal: 1,
+                requested_model: work.requested_model.clone(),
+                requested_settings: work.requested_settings,
+                settings: work.settings,
+                context: slop_runtime::agent::context::RequestContext {
+                    input_bytes: 1024,
+                    compaction: false,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .complete_request(
+            &turn,
+            RequestCompletion {
+                request_id: "usage-checkpoint-request".into(),
+                tools: Vec::new(),
+                compaction: None,
+                response: InferenceResponse {
+                    resolved_model: None,
+                    usage: Usage::from_reported(Some(30000), Some(10), Some(30010)),
+                    finish_reason: FinishReason::Stop,
+                    message: InferenceMessage::text(
+                        MessageRole::Assistant,
+                        "usage-block".into(),
+                        "completed step".into(),
+                    ),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .turn(&turn)
+            .await
+            .unwrap()
+            .usage
+            .unwrap()
+            .total_tokens,
+        Some(30010)
+    );
+    store.shutdown().await.unwrap();
+    let reopened = open_test(&dir, None).await;
+    let recovered = reopened.client().turn(&turn).await.unwrap();
+    assert_eq!(recovered.status, "interrupted");
+    assert_eq!(recovered.usage.unwrap().total_tokens, Some(30010));
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn oversized_context_is_claimed_as_a_bounded_compaction_page() {
     let dir = TempDir::new().expect("temp dir");
     let store = open_test(&dir, None).await;
     let client = store.client();
@@ -1308,19 +1400,17 @@ async fn oversized_context_is_failed_before_a_provider_claim() {
         )
         .await
         .expect("queue pending");
+    let work = client.claim_next_turn().await.unwrap().unwrap();
+    assert_eq!(work.turn_id, pending.turn_id.unwrap());
+    assert!(work.context_overflow);
+    assert!(work.history.len() <= MAX_CONTEXT_MESSAGES);
     assert!(
-        client
-            .claim_next_turn()
-            .await
-            .expect("bounded claim")
-            .is_none()
+        !work
+            .history
+            .iter()
+            .any(|m| m.visible_text() == "last question")
     );
-    let turn = client
-        .turn(&pending.turn_id.expect("turn id"))
-        .await
-        .expect("failed turn");
-    assert_eq!(turn.status, "failed");
-    assert_eq!(turn.error_code.as_deref(), Some("context_limit"));
+    assert_eq!(client.turn(&work.turn_id).await.unwrap().status, "running");
     store.shutdown().await.expect("shutdown");
 }
 
@@ -1399,8 +1489,14 @@ async fn startup_recovery_keeps_visible_checkpoint_out_of_context_and_marks_even
         .expect("claim after recovery")
         .expect("queued turn");
     assert_eq!(resumed.turn_id, next.turn_id.expect("turn id"));
-    assert_eq!(resumed.messages.len(), 1);
-    assert_eq!(resumed.messages[0].text, "new question");
+    assert_eq!(resumed.messages.len(), 2);
+    assert_eq!(resumed.messages.last().unwrap().text, "new question");
+    assert!(
+        resumed
+            .history
+            .iter()
+            .all(|m| m.role == slop_runtime::providers::inference::MessageRole::User)
+    );
     store.shutdown().await.expect("shutdown");
 }
 

@@ -74,6 +74,7 @@ An omitted name preserves existing identity/name on restart.
 | `shutdown_timeout_ms` | `10000` | 100–300000 ms |
 | `default_model` | `opencode-go/glm-5.3-flash` | Verified compiled provider catalog model |
 | `max_output_tokens` | `4096` | 1–65536 tokens, frozen in each created session |
+| `context_token_budget` | `32768` | 8192–1000000; conservative local compaction budget, not a claimed model context window |
 | `execution_concurrency` | `4` | 1–64 concurrent turns globally |
 | `provider_base_url` | Official Go endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
 | `opencode_zen_base_url` | Official Zen endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |

@@ -148,6 +148,14 @@ pub fn load_with_environment_and_name(
     let execution_concurrency = file
         .execution_concurrency
         .unwrap_or(slop_runtime::chat::DEFAULT_CONCURRENCY);
+    let context_token_budget = file
+        .context_token_budget
+        .unwrap_or(slop_runtime::agent::context::DEFAULT_TOKEN_BUDGET);
+    if !(8_192..=1_000_000).contains(&context_token_budget) {
+        return Err(ConfigError::Invalid(
+            "context_token_budget must be between 8192 and 1000000".into(),
+        ));
+    }
     if !(1..=64).contains(&execution_concurrency) {
         return Err(ConfigError::Invalid(
             "execution_concurrency must be between 1 and 64".into(),
@@ -190,6 +198,7 @@ pub fn load_with_environment_and_name(
         codex_base_url,
         default_model,
         max_output_tokens,
+        context_token_budget,
         execution_concurrency,
     })
 }

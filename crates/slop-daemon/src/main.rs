@@ -70,6 +70,7 @@ async fn run(args: Args) -> Result<()> {
     let token = auth::LocalToken::from_data_dir(&config.data_dir)?;
     let token = Arc::new(token);
     let store_client = store.client();
+    store_client.set_context_token_budget(config.context_token_budget);
     let bootstrap = credentials::PROVIDERS
         .iter()
         .filter_map(|(provider, variable)| {
@@ -228,6 +229,7 @@ async fn health() -> Json<HealthResponse> {
             "provider-discovery".to_owned(),
             "provider-accounts".to_owned(),
             "structured-messages".to_owned(),
+            "context-compaction".to_owned(),
             "tools".to_owned(),
             "per-turn-settings".to_owned(),
             "execution-steering".to_owned(),

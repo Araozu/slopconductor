@@ -1,8 +1,9 @@
 //! Serialized, daemon-owned inference/tool steps within one accepted user turn.
+pub mod context;
+pub mod output_limit;
 mod request_completion;
 mod request_intent;
 mod tool_intent;
-pub mod output_limit;
 
 pub use request_completion::RequestCompletion;
 pub use request_intent::RequestIntent;
@@ -21,7 +22,7 @@ use crate::{
         ChatDelta, ChatOutcome, ChatRepository, ChatStatus, RoleKind, TurnWork, canceled, failed,
         finish_with_retry, interrupted_shutdown, provider_failure,
     },
-    providers::{ProviderClient, Usage, UsageSource, inference::*},
+    providers::{ProviderClient, Usage, inference::*},
     tools::{ToolOutcome, ToolService},
 };
 
@@ -29,19 +30,6 @@ pub fn new_id() -> std::io::Result<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
     Ok(format!("{:032x}", u128::from_le_bytes(bytes)))
-}
-
-fn aggregate(previous: Usage, next: Usage, first: bool) -> Usage {
-    if first {
-        return next;
-    }
-    let sum = |a: Option<u64>, b: Option<u64>| a.zip(b).and_then(|(a, b)| a.checked_add(b));
-    let input = sum(previous.input_tokens, next.input_tokens);
-    let output = sum(previous.output_tokens, next.output_tokens);
-    let total = sum(previous.total_tokens, next.total_tokens);
-    let reported = previous.total_source == Some(UsageSource::Reported)
-        && next.total_source == Some(UsageSource::Reported);
-    Usage::from_reported(input, output, if reported { total } else { None })
 }
 
 async fn stop<R: ChatRepository>(
@@ -182,6 +170,17 @@ pub(crate) async fn execute<R: ChatRepository>(
     let mut tool_count = work.tool_calls_used;
     let mut ordinal = work.next_request_ordinal.max(1);
     let mut output_limits_seen = work.output_limits_seen;
+    let mut context_usage = work.context_usage;
+    let mut context_budget = if work.context_token_budget == 0 {
+        context::DEFAULT_TOKEN_BUDGET
+    } else {
+        work.context_token_budget
+    };
+    let mut compactions_seen = work.compactions_seen;
+    let mut force_compaction = work.context_overflow;
+    let mut context_frontier = Some(work.context_through_ordinal);
+    let mut usage_started = work.next_request_ordinal > 1;
+    let mut transient_retries = 0u32;
     let mut cancel_tick = tokio::time::interval(Duration::from_millis(100));
     cancel_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     while ordinal <= max_requests {
@@ -247,13 +246,52 @@ pub(crate) async fn execute<R: ChatRepository>(
             Ok(id) => id,
             Err(_) => return false,
         };
+        let compact = force_compaction
+            || context::needs_compaction(
+                &messages,
+                &definitions,
+                context_usage,
+                context_budget,
+                settings.max_output_tokens,
+            );
+        let compaction_plan = if compact && compactions_seen < context::MAX_COMPACTIONS_PER_TURN {
+            context::plan(
+                &messages,
+                context_budget,
+                work.context_overflow,
+                force_compaction,
+            )
+        } else {
+            None
+        };
+        if force_compaction && compaction_plan.is_none() {
+            return stop(repository.as_ref(), &work.turn_id,
+                failed("context_limit", "The context cannot be reduced further within the compaction budget. Shorten the latest input or increase context_token_budget."), total).await;
+        }
+        let is_compaction = compaction_plan.is_some();
+        if is_compaction && ordinal == max_requests {
+            return stop(repository.as_ref(), &work.turn_id,
+                failed("model_budget_exhausted", "Context compaction needs a summary request and a continuation, but this turn has no remaining model-request budget."), total).await;
+        }
         let request = InferenceRequest {
             request_id: request_id.clone(),
             session_id: work.session_id.clone(),
             model: model.model().to_owned(),
-            settings: settings.clone(),
-            messages: messages.clone(),
-            tools: definitions.clone(),
+            settings: if is_compaction {
+                context::summary_settings(
+                    provider.auth_mode() != crate::providers::AuthMode::ChatGptSubscription,
+                )
+            } else {
+                settings.clone()
+            },
+            messages: compaction_plan
+                .as_ref()
+                .map_or_else(|| messages.clone(), |plan| plan.prompt.clone()),
+            tools: if is_compaction {
+                Vec::new()
+            } else {
+                definitions.clone()
+            },
         };
         if let Err(error) = request.validate(
             provider.descriptor(),
@@ -279,14 +317,17 @@ pub(crate) async fn execute<R: ChatRepository>(
             };
             return stop(repository.as_ref(), &work.turn_id, outcome, total).await;
         }
-        let is_first_request = ordinal == 1;
         let intent = RequestIntent {
             id: request_id.clone(),
             message_id: message_id.clone(),
             ordinal,
             requested_model: work.requested_model.clone(),
             requested_settings: work.requested_settings.clone(),
-            settings: settings.clone(),
+            settings: request.settings.clone(),
+            context: context::RequestContext {
+                input_bytes: context::input_bytes(&request.messages, &request.tools),
+                compaction: is_compaction,
+            },
         };
         let started = match repository.begin_request(&work.turn_id, intent).await {
             Ok(started) => started,
@@ -335,6 +376,9 @@ pub(crate) async fn execute<R: ChatRepository>(
             .await;
         }
         ordinal = ordinal.saturating_add(1);
+        if is_compaction {
+            compactions_seen = compactions_seen.saturating_add(1);
+        }
         let visible = Arc::new(Mutex::new(BTreeMap::<usize, String>::new()));
         let stream_visible = Arc::clone(&visible);
         let stream_deltas = deltas.clone();
@@ -344,6 +388,9 @@ pub(crate) async fn execute<R: ChatRepository>(
         let delta_message = message_id.clone();
         let mut chunk_index = 0u64;
         let mut on_event = move |event: ProviderEvent| {
+            if is_compaction {
+                return;
+            }
             let (index, text, kind) = match event {
                 ProviderEvent::TextDelta { block_index, text } => {
                     if let Ok(mut v) = stream_visible.lock() {
@@ -418,6 +465,26 @@ pub(crate) async fn execute<R: ChatRepository>(
         let mut response = match result {
             Ok(response) => response,
             Err(error) => {
+                let context_error = matches!(
+                    error,
+                    crate::providers::ProviderError::ContextLengthExceeded
+                );
+                let retry_delay = match &error {
+                    crate::providers::ProviderError::RateLimited { retry_after } => {
+                        Some(retry_after.unwrap_or(Duration::from_millis(
+                            500 * (1 << transient_retries.min(2)),
+                        )))
+                    }
+                    crate::providers::ProviderError::UnexpectedStatus {
+                        status: 500..=599, ..
+                    } => Some(Duration::from_millis(500 * (1 << transient_retries.min(2)))),
+                    crate::providers::ProviderError::Http(error)
+                        if error.is_connect() || error.is_timeout() =>
+                    {
+                        Some(Duration::from_millis(500 * (1 << transient_retries.min(2))))
+                    }
+                    _ => None,
+                };
                 let outcome = provider_failure(error);
                 let _ = repository
                     .fail_request(
@@ -426,6 +493,38 @@ pub(crate) async fn execute<R: ChatRepository>(
                         outcome.error_code.as_deref().unwrap_or("provider_failed"),
                     )
                     .await;
+                if context_error
+                    && ordinal <= max_requests
+                    && compactions_seen < context::MAX_COMPACTIONS_PER_TURN
+                {
+                    context_budget = (context_budget / 2).max(8192);
+                    context_usage = None;
+                    force_compaction = true;
+                    continue;
+                }
+                if let Some(delay) = retry_delay.filter(|d| *d <= Duration::from_secs(5))
+                    && transient_retries < 2
+                    && ordinal <= max_requests
+                {
+                    transient_retries += 1;
+                    // A failed/timeout inference can have consumed tokens. Preserve
+                    // unknown billing counters instead of inventing zero usage.
+                    total = Usage::default();
+                    usage_started = true;
+                    let deadline = tokio::time::Instant::now() + delay;
+                    loop {
+                        tokio::select! {
+                            _ = tokio::time::sleep_until(deadline) => break,
+                            _ = shutdown.changed() => return stop(repository.as_ref(), &work.turn_id, interrupted_shutdown(), total).await,
+                            _ = cancel_tick.tick() => match repository.turn_control(&work.turn_id).await {
+                                Ok(control) if control.cancellation_requested => return stop(repository.as_ref(), &work.turn_id, canceled(), total).await,
+                                Ok(control) if control.pause_requested || control.steering_pending => return stop(repository.as_ref(), &work.turn_id, steering_yield(if control.pause_requested { "pause_turn" } else { "steering_resume" }, total), total).await,
+                                Ok(_) => {}, Err(_) => return false,
+                            }
+                        }
+                    }
+                    continue;
+                }
                 return stop(repository.as_ref(), &work.turn_id, outcome, total).await;
             }
         };
@@ -433,11 +532,17 @@ pub(crate) async fn execute<R: ChatRepository>(
         // partial text, but never replay incomplete reasoning or tool arguments.
         if matches!(
             response.finish_reason,
-            FinishReason::OutputLimit | FinishReason::Incomplete | FinishReason::ContentFilter
+            FinishReason::OutputLimit
+                | FinishReason::ContextLimit
+                | FinishReason::Incomplete
+                | FinishReason::ContentFilter
         ) {
             response.message.continuation = None;
             response.message.blocks.retain(|block| {
-                matches!(block.content, BlockContent::Text { .. } | BlockContent::Refusal { .. })
+                matches!(
+                    block.content,
+                    BlockContent::Text { .. } | BlockContent::Refusal { .. }
+                )
             });
             if response.message.blocks.is_empty() {
                 response.message = InferenceMessage::text(
@@ -447,7 +552,73 @@ pub(crate) async fn execute<R: ChatRepository>(
                 );
             }
         }
-        total = aggregate(total, response.usage, is_first_request);
+        total = if usage_started {
+            total.accumulate(response.usage)
+        } else {
+            response.usage
+        };
+        usage_started = true;
+        if let Some(plan) = compaction_plan {
+            let summary = response.message.visible_text();
+            let usable = response.finish_reason == FinishReason::Stop
+                && !summary.trim().is_empty()
+                && !response
+                    .message
+                    .blocks
+                    .iter()
+                    .any(|b| !matches!(b.content, BlockContent::Text { .. }));
+            let compacted = usable.then(|| plan.finish(&request_id, summary));
+            let compacted = compacted.filter(|next| {
+                context::estimated_tokens(context::input_bytes(next, &[]), None)
+                    < context::estimated_tokens(context::input_bytes(&messages, &[]), context_usage)
+            });
+            if repository
+                .complete_request(
+                    &work.turn_id,
+                    RequestCompletion {
+                        request_id: request_id.clone(),
+                        response: response.clone(),
+                        tools: Vec::new(),
+                        compaction: compacted
+                            .clone()
+                            .map(|messages| context::ContextCheckpoint {
+                                messages,
+                                through_ordinal: context_frontier,
+                            }),
+                    },
+                )
+                .await
+                .is_err()
+            {
+                return false;
+            }
+            let Some(compacted) = compacted else {
+                return stop(repository.as_ref(), &work.turn_id,
+                    failed("context_compaction_failed", "The provider did not produce a complete, smaller context summary. The original history was preserved."), total).await;
+            };
+            messages = compacted;
+            context_usage = None;
+            force_compaction = false;
+            if work.context_overflow {
+                return stop(
+                    repository.as_ref(),
+                    &work.turn_id,
+                    steering_yield("context_compaction_resume", total),
+                    total,
+                )
+                .await;
+            }
+            continue;
+        }
+        context_usage = response
+            .usage
+            .input_tokens
+            .map(|input_tokens| context::ContextUsage {
+                input_tokens,
+                input_bytes: context::input_bytes(&request.messages, &request.tools),
+            });
+        context_frontier = None;
+        transient_retries = 0;
         let mut invocations = Vec::new();
         for block in &response.message.blocks {
             if let BlockContent::ToolCall {
@@ -478,6 +649,7 @@ pub(crate) async fn execute<R: ChatRepository>(
                     request_id: request_id.clone(),
                     response: response.clone(),
                     tools: invocations.clone(),
+                    compaction: None,
                 },
             )
             .await
@@ -495,14 +667,25 @@ pub(crate) async fn execute<R: ChatRepository>(
         let finish = response.finish_reason.clone();
         let text = response.message.visible_text();
         let no_progress = output_limits_seen > 0
-            && messages.iter().rev().find(|message| message.role == MessageRole::Assistant)
+            && messages
+                .iter()
+                .rev()
+                .find(|message| message.role == MessageRole::Assistant)
                 .is_some_and(|previous| previous.visible_text().trim() == text.trim());
         messages.push(response.message.clone());
+        if finish == FinishReason::ContextLimit && ordinal <= max_requests {
+            messages.push(output_limit::context_continuation_prompt(&request_id));
+            context_budget = (context_budget / 2).max(8192);
+            force_compaction = true;
+            continue;
+        }
         if finish == FinishReason::OutputLimit {
             output_limits_seen = output_limits_seen.saturating_add(1);
-            let refused = response.message.blocks.iter().any(|block| {
-                matches!(block.content, BlockContent::Refusal { .. })
-            });
+            let refused = response
+                .message
+                .blocks
+                .iter()
+                .any(|block| matches!(block.content, BlockContent::Refusal { .. }));
             if !no_progress
                 && !refused
                 && output_limits_seen <= output_limit::MAX_CONTINUATIONS
@@ -515,15 +698,27 @@ pub(crate) async fn execute<R: ChatRepository>(
         if finish != FinishReason::ToolCalls {
             let incomplete = matches!(
                 finish,
-                FinishReason::OutputLimit | FinishReason::Incomplete | FinishReason::ContentFilter
+                FinishReason::OutputLimit
+                    | FinishReason::ContextLimit
+                    | FinishReason::Incomplete
+                    | FinishReason::ContentFilter
             );
             let error_message = match finish {
-                FinishReason::OutputLimit if no_progress =>
-                    Some("The provider reached its output-token limit again without progress. Increase the output limit or request smaller steps."),
-                FinishReason::OutputLimit =>
-                    Some("The provider reached its output-token limit and automatic continuation has no remaining budget. Increase the output limit or request smaller steps."),
-                FinishReason::ContentFilter => Some("The provider stopped the response with a content filter."),
-                FinishReason::Incomplete => Some("The provider returned an incomplete response without a recognized output-token limit."),
+                FinishReason::OutputLimit if no_progress => Some(
+                    "The provider reached its output-token limit again without progress. Increase the output limit or request smaller steps.",
+                ),
+                FinishReason::OutputLimit => Some(
+                    "The provider reached its output-token limit and automatic continuation has no remaining budget. Increase the output limit or request smaller steps.",
+                ),
+                FinishReason::ContextLimit => Some(
+                    "The provider context window was reached and this turn has no remaining compaction budget.",
+                ),
+                FinishReason::ContentFilter => {
+                    Some("The provider stopped the response with a content filter.")
+                }
+                FinishReason::Incomplete => Some(
+                    "The provider returned an incomplete response without a recognized output-token limit.",
+                ),
                 _ => None,
             };
             return stop(

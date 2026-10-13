@@ -518,16 +518,28 @@ pub(crate) fn interrupted_shutdown() -> ChatOutcome {
 
 pub(crate) fn provider_failure(error: ProviderError) -> ChatOutcome {
     let (code, message) = match error {
+        ProviderError::ContextLengthExceeded => (
+            "context_limit",
+            "The provider's context window is full and automatic compaction could not reduce it further.",
+        ),
+        ProviderError::RateLimited { .. } => (
+            "provider_rate_limited",
+            "The provider request rate limit was reached. Try again shortly.",
+        ),
+        ProviderError::QuotaExceeded => (
+            "provider_quota_exhausted",
+            "The provider account has exhausted its quota or credits.",
+        ),
         ProviderError::InvalidModel { .. } => {
             ("unsupported_model", "The requested model is not supported.")
         }
         ProviderError::MissingApiKey { .. } | ProviderError::EmptyApiKey { .. } => (
             "provider_auth_required",
-            "OpenCode Go credentials are unavailable.",
+            "Provider credentials are unavailable.",
         ),
         ProviderError::UnexpectedStatus { status, .. } if status == 401 || status == 403 => (
             "provider_auth_failed",
-            "OpenCode Go rejected the configured credentials.",
+            "The provider rejected the configured credentials.",
         ),
         ProviderError::UnsupportedCapability { capability }
             if capability.starts_with("context_incompatible") =>

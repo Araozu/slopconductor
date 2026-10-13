@@ -988,6 +988,7 @@ mod tests {
             .unwrap();
         let work = client.claim_next_turn().await.unwrap().unwrap();
         let intent = |id: &str| RequestIntent {
+            context: Default::default(),
             id: id.into(),
             message_id: format!("message-{id}"),
             ordinal: 1,
@@ -1314,6 +1315,7 @@ mod tests {
                 .begin_request(
                     &fourth_work.turn_id,
                     RequestIntent {
+                        context: Default::default(),
                         id: "fourth-request".into(),
                         message_id: "fourth-message".into(),
                         ordinal: 1,

@@ -15,5 +15,6 @@ pub(super) struct FileConfig {
     pub(super) codex_base_url: Option<String>,
     pub(super) default_model: Option<String>,
     pub(super) max_output_tokens: Option<u32>,
+    pub(super) context_token_budget: Option<u64>,
     pub(super) execution_concurrency: Option<usize>,
 }

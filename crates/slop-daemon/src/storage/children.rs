@@ -878,6 +878,7 @@ mod tests {
             c.begin_request(
                 turn,
                 RequestIntent {
+                    context: Default::default(),
                     id: request.clone(),
                     message_id: message.clone(),
                     ordinal,
@@ -901,6 +902,7 @@ mod tests {
         c.complete_request(
             turn,
             RequestCompletion {
+                compaction: None,
                 request_id: request,
                 response: InferenceResponse {
                     resolved_model: None,
@@ -1488,6 +1490,7 @@ mod tests {
         c.begin_request(
             &independent.turn_id,
             RequestIntent {
+                context: Default::default(),
                 id: "counted-child".into(),
                 message_id: "counted-message".into(),
                 ordinal: 1,

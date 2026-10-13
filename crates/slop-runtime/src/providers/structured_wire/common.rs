@@ -36,15 +36,7 @@ pub(in crate::providers) fn append(target: &mut String, text: &str, limit: usize
 }
 pub(in crate::providers) fn usage(value: &Value) -> Usage {
     let u = value.get("usage").unwrap_or(&Value::Null);
-    Usage::from_reported(
-        u.get("input_tokens")
-            .or_else(|| u.get("prompt_tokens"))
-            .and_then(Value::as_u64),
-        u.get("output_tokens")
-            .or_else(|| u.get("completion_tokens"))
-            .and_then(Value::as_u64),
-        u.get("total_tokens").and_then(Value::as_u64),
-    )
+    super::super::opencode::parse_usage(u)
 }
 pub(in crate::providers) fn role(role: &MessageRole) -> &'static str {
     match role {

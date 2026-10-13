@@ -29,4 +29,9 @@ pub struct TurnWork {
     pub output_limits_seen: u32,
     pub initial_usage: Usage,
     pub resume_count: u32,
+    pub context_usage: Option<crate::agent::context::ContextUsage>,
+    pub context_token_budget: u64,
+    pub context_overflow: bool,
+    pub context_through_ordinal: i64,
+    pub compactions_seen: u32,
 }

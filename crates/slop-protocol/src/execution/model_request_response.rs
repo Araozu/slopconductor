@@ -15,4 +15,6 @@ pub struct ModelRequestResponse {
     pub finish_reason: Option<String>,
     pub usage: Option<crate::chat::UsageResponse>,
     pub error_code: Option<String>,
+    #[serde(default)]
+    pub compaction: bool,
 }

@@ -19,6 +19,22 @@ pub struct Usage {
 }
 
 impl Usage {
+    /// Sum independent requests; absent counters remain unknown.
+    pub fn accumulate(self, next: Self) -> Self {
+        let sum = |a: Option<u64>, b: Option<u64>| a.zip(b).and_then(|(a, b)| a.checked_add(b));
+        let reported = self.total_source == Some(UsageSource::Reported)
+            && next.total_source == Some(UsageSource::Reported);
+        Self::from_reported(
+            sum(self.input_tokens, next.input_tokens),
+            sum(self.output_tokens, next.output_tokens),
+            if reported {
+                sum(self.total_tokens, next.total_tokens)
+            } else {
+                None
+            },
+        )
+    }
+
     #[must_use]
     pub fn from_reported(input: Option<u64>, output: Option<u64>, total: Option<u64>) -> Self {
         let derived = input.zip(output).and_then(|(i, o)| i.checked_add(o));

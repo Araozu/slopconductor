@@ -12,3 +12,8 @@ pub fn continuation_prompt(request_id: &str) -> InferenceMessage {
             .into(),
     )
 }
+
+pub fn context_continuation_prompt(request_id: &str) -> InferenceMessage {
+    InferenceMessage::text(MessageRole::User, format!("{request_id}:context-limit-continuation"),
+        "Your previous response reached the model's context window. After context compaction, continue the original task from the partial response and recorded results. Do not repeat completed work. Truncated tool calls were discarded and did not execute.".into())
+}

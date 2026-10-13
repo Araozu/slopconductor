@@ -287,12 +287,14 @@ pub(super) fn begin_request(
     }
     let ordinal = next_message_ordinal(&tx, turn)?;
     tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,request_id) VALUES(?1,?2,?3,?4,'assistant','','pending',?5)",rusqlite::params![intent.message_id,session,turn,ordinal,intent.id]).map_err(|_|StoreError::Database)?;
-    tx.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status) VALUES(?1,?2,?3,?4,?5,?6,?7,'running')",rusqlite::params![intent.id,turn,intent.message_id,intent.ordinal,intent.requested_model,canonical(&intent.requested_settings)?,canonical(&intent.settings)?]).map_err(|_|StoreError::Database)?;
-    tx.execute(
-        "UPDATE turns SET assistant_message_id=?1 WHERE id=?2",
-        rusqlite::params![intent.message_id, turn],
-    )
-    .map_err(|_| StoreError::Database)?;
+    tx.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status,context) VALUES(?1,?2,?3,?4,?5,?6,?7,'running',?8)",rusqlite::params![intent.id,turn,intent.message_id,intent.ordinal,intent.requested_model,canonical(&intent.requested_settings)?,canonical(&intent.settings)?,canonical(&intent.context)?]).map_err(|_|StoreError::Database)?;
+    if !intent.context.compaction {
+        tx.execute(
+            "UPDATE turns SET assistant_message_id=?1 WHERE id=?2",
+            rusqlite::params![intent.message_id, turn],
+        )
+        .map_err(|_| StoreError::Database)?;
+    }
     event(
         &tx,
         &session,
@@ -364,10 +366,25 @@ pub(super) fn complete_request(
         .map_err(|_| StoreError::Database)?
         .ok_or(StoreError::Conflict)?;
     let response = completion.response;
+    let request_context: slop_runtime::agent::context::RequestContext = tx
+        .query_row(
+            "SELECT context FROM model_requests WHERE id=?1",
+            [request],
+            |r| json_column(r, 0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    if completion.compaction.is_some()
+        && (!request_context.compaction
+            || response.finish_reason != inference::FinishReason::Stop
+            || !completion.tools.is_empty())
+    {
+        return Err(StoreError::Invalid);
+    }
     let finish = serde_json::to_value(&response.finish_reason).map_err(|_| StoreError::Database)?;
     let incomplete = matches!(
         response.finish_reason,
         inference::FinishReason::OutputLimit
+            | inference::FinishReason::ContextLimit
             | inference::FinishReason::Incomplete
             | inference::FinishReason::ContentFilter
     );
@@ -393,15 +410,17 @@ pub(super) fn complete_request(
     )
     .map_err(|_| StoreError::Database)?;
     tx.execute("UPDATE model_requests SET status=?1,resolved_model=?2,finish_reason=?3,usage=?4,error_code=?5 WHERE id=?6",rusqlite::params![status,response.resolved_model,finish.as_str(),canonical(&response.usage)?,if incomplete{Some("provider_incomplete")}else{None},request]).map_err(|_|StoreError::Database)?;
-    event(
-        &tx,
-        &session,
-        "assistant_message_completed",
-        turn,
-        Some(&message_id),
-        Some(request),
-        None,
-    )?;
+    if !request_context.compaction {
+        event(
+            &tx,
+            &session,
+            "assistant_message_completed",
+            turn,
+            Some(&message_id),
+            Some(request),
+            None,
+        )?;
+    }
     event(
         &tx,
         &session,
@@ -426,6 +445,38 @@ pub(super) fn complete_request(
             Some(&intent.id),
         )?;
     }
+    if let Some(checkpoint) = completion.compaction {
+        super::context::save(&tx, &session, turn, request, checkpoint)?;
+    }
+    // Each completed request is a billing fact, even if a later tool or model
+    // step is interrupted before the turn's final write.
+    let mut usage = None;
+    let mut statement = tx.prepare("SELECT usage FROM model_requests WHERE turn_id=?1 AND status IN('completed','incomplete') ORDER BY ordinal").map_err(|_| StoreError::Database)?;
+    let rows = statement
+        .query_map([turn], |r| {
+            json_column::<slop_runtime::providers::Usage>(r, 0)
+        })
+        .map_err(|_| StoreError::Database)?;
+    for next in rows {
+        let next = next.map_err(|_| StoreError::Database)?;
+        usage = Some(
+            usage.map_or(next, |previous: slop_runtime::providers::Usage| {
+                previous.accumulate(next)
+            }),
+        );
+    }
+    drop(statement);
+    let unknown: bool = tx
+        .query_row("SELECT usage_unknown FROM turns WHERE id=?1", [turn], |r| {
+            r.get(0)
+        })
+        .map_err(|_| StoreError::Database)?;
+    let usage = if unknown {
+        Default::default()
+    } else {
+        usage.unwrap_or_default()
+    };
+    tx.execute("UPDATE turns SET input_tokens=?1,output_tokens=?2,total_tokens=?3,total_source=?4 WHERE id=?5",rusqlite::params![usage.input_tokens.map(|v|v.to_string()),usage.output_tokens.map(|v|v.to_string()),usage.total_tokens.map(|v|v.to_string()),usage.total_source.map(|s|match s {slop_runtime::providers::UsageSource::Reported=>"reported",slop_runtime::providers::UsageSource::Derived=>"derived"}),turn]).map_err(|_|StoreError::Database)?;
     tx.commit().map_err(|_| StoreError::Database)
 }
 pub(super) fn fail_request(
@@ -441,6 +492,7 @@ pub(super) fn fail_request(
     if status != "running" {
         return Ok(());
     }
+    tx.execute("UPDATE turns SET usage_unknown=1,input_tokens=NULL,output_tokens=NULL,total_tokens=NULL,total_source=NULL WHERE id=?1",[turn]).map_err(|_|StoreError::Database)?;
     let status = if matches!(
         code,
         "cancelled" | "daemon_shutdown" | "steering_interrupted"
@@ -618,6 +670,7 @@ pub(super) fn reconcile_requests(tx: &Transaction<'_>, turn: &str, cause: &str) 
         .map_err(|_| StoreError::Database)?;
     drop(statement);
     for (request, message) in unfinished {
+        tx.execute("UPDATE turns SET usage_unknown=1,input_tokens=NULL,output_tokens=NULL,total_tokens=NULL,total_source=NULL WHERE id=?1",[turn]).map_err(|_|StoreError::Database)?;
         tx.execute(
             "UPDATE model_requests SET status='interrupted',error_code=?1 WHERE id=?2",
             rusqlite::params![cause, request],
@@ -770,9 +823,11 @@ pub(super) fn claim_next_turn(
         )
         .map_err(|_| StoreError::Database)?;
     let orchestration:Option<slop_runtime::orchestration::OrchestrationPolicy>=tx.query_row("SELECT json_extract(k.spec,'$.orchestration') FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=?1",[&turn_id],|r|r.get::<_,Option<String>>(0)).optional().map_err(|_|StoreError::Database)?.flatten().map(|s|decode(&s)).transpose()?;
-    let base_request_limit = execution
-        .as_ref()
-        .map_or(1 + i64::from(slop_runtime::agent::output_limit::MAX_CONTINUATIONS), |policy| i64::from(policy.max_model_requests));
+    let base_request_limit = execution.as_ref().map_or(
+        1 + i64::from(slop_runtime::agent::output_limit::MAX_CONTINUATIONS)
+            + i64::from(slop_runtime::agent::context::MAX_COMPACTIONS_PER_TURN),
+        |policy| i64::from(policy.max_model_requests),
+    );
     // Delegation has a bounded continuation allowance under aggregate budgets.
     // Other workspace turns retain their policy cap; plain text retains its
     // one initial request plus bounded output-limit/steering/resume recovery.
@@ -800,19 +855,23 @@ pub(super) fn claim_next_turn(
             }),
         }
     };
-    let mut statement=tx.prepare("SELECT m.id,m.role,m.text,m.blocks,m.continuation,m.turn_id,m.status,r.finish_reason,r.id FROM messages m JOIN turns t ON t.id=m.turn_id LEFT JOIN model_requests r ON r.id=m.request_id
-        WHERE m.session_id=?1 AND (m.status='completed' OR (m.status='incomplete' AND r.finish_reason='output_limit')) AND (t.status='completed' OR m.turn_id=?2 OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
+    let (saved_through, saved_history) = super::context::load(&tx, &session_id)?;
+    let mut statement=tx.prepare("SELECT m.id,m.role,m.text,m.blocks,m.continuation,m.turn_id,m.status,r.finish_reason,r.id,m.ordinal FROM messages m JOIN turns t ON t.id=m.turn_id LEFT JOIN model_requests r ON r.id=m.request_id
+        WHERE m.session_id=?1 AND m.ordinal>?4 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND (m.status='completed' OR (m.status='incomplete' AND r.finish_reason IN('output_limit','context_limit'))) AND (t.status='completed' OR m.turn_id=?2 OR t.status IN('failed','cancelled','interrupted','incomplete'))
         ORDER BY m.ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![
             session_id,
             turn_id,
-            (MAX_CONTEXT_MESSAGES + 1) as i64
+            (MAX_CONTEXT_MESSAGES + 1) as i64,
+            saved_through
         ])
         .map_err(|_| StoreError::Database)?;
-    let mut history = Vec::new();
+    let mut history = saved_history;
+    let mut history_ordinals = vec![saved_through; history.len()];
+    let mut context_through_ordinal = saved_through;
     let mut messages = Vec::new();
-    let mut bytes = 0usize;
+    let mut bytes = canonical(&history)?.len();
     let mut overflow = false;
     while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
         if history.len() >= MAX_CONTEXT_MESSAGES {
@@ -834,7 +893,10 @@ pub(super) fn claim_next_turn(
         let message_status: String = row.get(6).map_err(|_| StoreError::Database)?;
         let finish_reason: Option<String> = row.get(7).map_err(|_| StoreError::Database)?;
         let output_limited = message_status == "incomplete"
-            && finish_reason.as_deref() == Some("output_limit");
+            && matches!(
+                finish_reason.as_deref(),
+                Some("output_limit" | "context_limit")
+            );
         let continuation = if output_limited {
             blocks.retain(|block| matches!(block.content, BlockContent::Text { .. }));
             if blocks.is_empty() {
@@ -868,31 +930,52 @@ pub(super) fn claim_next_turn(
             blocks,
             continuation,
         };
-        bytes = bytes.saturating_add(canonical(&message)?.len());
-        if bytes > MAX_CONTEXT_BYTES {
+        let next_bytes = bytes.saturating_add(canonical(&message)?.len());
+        if next_bytes > MAX_CONTEXT_BYTES && !history.is_empty() {
             overflow = true;
             break;
         }
+        bytes = next_bytes;
+        context_through_ordinal = row.get(9).map_err(|_| StoreError::Database)?;
+        history_ordinals.push(context_through_ordinal);
         history.push(message);
         if output_limited && message_turn == turn_id {
             let request: String = row.get(8).map_err(|_| StoreError::Database)?;
-            let prompt = slop_runtime::agent::output_limit::continuation_prompt(&request);
+            let prompt = if finish_reason.as_deref() == Some("context_limit") {
+                slop_runtime::agent::output_limit::context_continuation_prompt(&request)
+            } else {
+                slop_runtime::agent::output_limit::continuation_prompt(&request)
+            };
             bytes = bytes.saturating_add(canonical(&prompt)?.len());
             if history.len() >= MAX_CONTEXT_MESSAGES || bytes > MAX_CONTEXT_BYTES {
                 overflow = true;
                 break;
             }
+            history_ordinals.push(context_through_ordinal);
             history.push(prompt);
         }
     }
     drop(rows);
     drop(statement);
+    // An overflow is a bounded historical page to summarize, not a dead session.
     if overflow {
-        tx.execute("UPDATE turns SET status='failed',error_code='context_limit',error_message='Conversation context exceeds the supported bound.' WHERE id=?1",[&turn_id]).map_err(|_|StoreError::Database)?;
-        append_event(&tx, &session_id, "turn_failed", Some(&turn_id), None)?;
-        tx.commit().map_err(|_| StoreError::Database)?;
-        return Ok(None);
+        while !history.is_empty()
+            && !slop_runtime::agent::context::safe_boundary(&history, history.len())
+        {
+            history.pop();
+            history_ordinals.pop();
+        }
+        context_through_ordinal = history_ordinals.last().copied().unwrap_or(saved_through);
     }
+    let context_usage = tx.query_row(
+        "SELECT r.usage,r.context FROM model_requests r JOIN turns t ON t.id=r.turn_id WHERE t.session_id=?1 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND r.requested_model=?3 AND r.status IN('completed','incomplete') AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND r.rowid>COALESCE((SELECT cr.rowid FROM session_context sc JOIN model_requests cr ON cr.id=sc.request_id WHERE sc.session_id=?1),0) ORDER BY r.rowid DESC LIMIT 1",
+        rusqlite::params![session_id,turn_id,requested_model], |r| {
+            Ok((optional_json_column::<slop_runtime::providers::Usage>(r,0)?, json_column::<slop_runtime::agent::context::RequestContext>(r,1)?))
+        }
+    ).optional().map_err(|_| StoreError::Database)?.and_then(|(usage,context)| {
+        usage?.input_tokens.filter(|_| context.input_bytes > 0).map(|input_tokens| slop_runtime::agent::context::ContextUsage { input_tokens, input_bytes: context.input_bytes })
+    });
+    let compactions_seen = tx.query_row("SELECT count(*) FROM model_requests WHERE turn_id=?1 AND json_extract(context,'$.compaction')=1", [&turn_id], |r| r.get(0)).map_err(|_| StoreError::Database)?;
     tx.execute(
         "UPDATE turns SET status='running' WHERE id=?1 AND status='queued'",
         [&turn_id],
@@ -917,6 +1000,11 @@ pub(super) fn claim_next_turn(
         tool_calls_used: tool_calls_used as u32,
         output_limits_seen,
         initial_usage,
+        context_usage,
+        context_token_budget: slop_runtime::agent::context::DEFAULT_TOKEN_BUDGET,
+        context_overflow: overflow,
+        context_through_ordinal,
+        compactions_seen,
         resume_count: resume_count.clamp(0, u32::MAX as i64) as u32,
     }))
 }
@@ -978,6 +1066,7 @@ fn request_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<wire::ModelReques
         finish_reason: r.get(9)?,
         usage: usage.map(public_usage),
         error_code: r.get(11)?,
+        compaction: json_column::<slop_runtime::agent::context::RequestContext>(r, 12)?.compaction,
     })
 }
 fn tool_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<wire::ToolInvocationResponse> {
@@ -1046,7 +1135,7 @@ impl StoreClient {
     ) -> StoreResult<Page<wire::ModelRequestResponse>> {
         let turn = turn.to_owned();
         let limit = page_limit(limit)?;
-        self.submit(move|c|paginated(c,&turn,after.unwrap_or(0),limit,"SELECT id,turn_id,message_id,ordinal,requested_model,resolved_model,requested_settings,settings,status,finish_reason,usage,error_code FROM model_requests WHERE turn_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3",request_from_row,3)).await
+        self.submit(move|c|paginated(c,&turn,after.unwrap_or(0),limit,"SELECT id,turn_id,message_id,ordinal,requested_model,resolved_model,requested_settings,settings,status,finish_reason,usage,error_code,context FROM model_requests WHERE turn_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3",request_from_row,3)).await
     }
     pub async fn tool_invocations(
         &self,

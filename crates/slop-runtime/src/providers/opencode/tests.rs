@@ -2,6 +2,32 @@ use super::super::OpencodeGoProvider;
 use super::decode::{chat_outcome, incomplete, messages_outcome, parse_openai_usage, parse_usage};
 use super::requests::{to_anthropic_parts, to_responses_input};
 use super::stream::{merge_sse_usage, parse_sse_line, process_sse_body};
+
+#[test]
+fn anthropic_cached_input_counts_toward_context_without_double_counting_openai_cache() {
+    let mut usage = Usage::default();
+    merge_sse_usage(
+        &mut usage,
+        &serde_json::json!({"type":"message_start","message":{"usage":{
+            "input_tokens":42,"cache_creation_input_tokens":1000,"cache_read_input_tokens":30000,"output_tokens":0
+        }}}),
+    );
+    merge_sse_usage(
+        &mut usage,
+        &serde_json::json!({"usage":{"output_tokens":12}}),
+    );
+    assert_eq!(usage.input_tokens, Some(31042));
+    assert_eq!(usage.total_tokens, Some(31054));
+    let openai = parse_usage(
+        &serde_json::json!({"prompt_tokens":30000,"prompt_tokens_details":{"cached_tokens":29000},"completion_tokens":10}),
+    );
+    assert_eq!(openai.input_tokens, Some(30000));
+    let overflowing = parse_usage(
+        &serde_json::json!({"input_tokens":u64::MAX,"cache_read_input_tokens":1,"output_tokens":2}),
+    );
+    assert_eq!(overflowing.input_tokens, None);
+    assert_eq!(overflowing.total_tokens, None);
+}
 use super::*;
 
 #[test]

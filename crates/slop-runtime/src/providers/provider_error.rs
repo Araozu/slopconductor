@@ -19,6 +19,14 @@ pub enum ProviderError {
     InvalidRequest(&'static str),
     #[error("provider {provider} returned HTTP {status}")]
     UnexpectedStatus { provider: ProviderId, status: u16 },
+    #[error("provider context window exceeded")]
+    ContextLengthExceeded,
+    #[error("provider request rate limit reached")]
+    RateLimited {
+        retry_after: Option<std::time::Duration>,
+    },
+    #[error("provider account quota exhausted")]
+    QuotaExceeded,
     #[error("provider {provider} returned an unrecognized response: {detail}")]
     InvalidResponse {
         provider: ProviderId,

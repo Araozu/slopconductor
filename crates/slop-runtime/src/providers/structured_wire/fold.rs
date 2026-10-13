@@ -69,6 +69,9 @@ impl StructuredFold {
         }
         let value: Value =
             serde_json::from_str(&payload).map_err(|_| invalid("invalid stream JSON"))?;
+        if super::super::transport::is_context_error(&value) {
+            return Err(DecodeError::ContextLengthExceeded);
+        }
         if value.get("error").is_some_and(|e| !e.is_null())
             || matches!(
                 value.get("type").and_then(Value::as_str),

@@ -6,6 +6,7 @@ pub(in crate::providers) enum DecodeError {
     InvalidResponse { detail: &'static str },
     UnsupportedCapability { capability: &'static str },
     TurnFailed,
+    ContextLengthExceeded,
     LimitExceeded { detail: &'static str },
 }
 
@@ -17,6 +18,7 @@ impl DecodeError {
                 ProviderError::UnsupportedCapability { capability }
             }
             Self::TurnFailed => ProviderError::TurnFailed { provider },
+            Self::ContextLengthExceeded => ProviderError::ContextLengthExceeded,
             Self::LimitExceeded { detail } => ProviderError::LimitExceeded { detail },
         }
     }

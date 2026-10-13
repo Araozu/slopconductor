@@ -54,9 +54,7 @@ impl OpencodeClient {
             .json(&payload)
             .send()
             .await?;
-        if !response.status().is_success() {
-            return Err(self.status_error(response.status().as_u16()));
-        }
+        super::super::transport::check_status(self.provider.id(), &mut response).await?;
         if !is_event_stream(&response) {
             let body = self.read_body_limited(response).await?;
             let value =
@@ -152,6 +150,7 @@ impl OpencodeClient {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn status_error(&self, status: u16) -> ProviderError {
         ProviderError::UnexpectedStatus {
             provider: self.provider.id(),
@@ -181,17 +180,14 @@ impl OpencodeClient {
 
     /// Fetch the live model list (`GET /models`). Returns advertised ids.
     pub async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
-        let response = self
+        let mut response = self
             .http
             .get(format!("{}/models", self.base_url))
             .bearer_auth(&self.api_key)
             .header(SESSION_HEADER, "slop-model-discovery")
             .send()
             .await?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(self.status_error(status.as_u16()));
-        }
+        super::super::transport::check_status(self.provider.id(), &mut response).await?;
         let body = self.read_body_limited(response).await?;
         parse_models_list(&body).map_err(|error| error.for_provider(self.provider.id()))
     }
@@ -263,10 +259,7 @@ impl OpencodeClient {
             .header("Accept", "text/event-stream")
             .json(&payload);
         let mut response = req.send().await?;
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            return Err(self.status_error(status));
-        }
+        super::super::transport::check_status(self.provider.id(), &mut response).await?;
         if !is_event_stream(&response) {
             // The gateway answered 200 with plain JSON instead of SSE (it
             // ignored `stream: true`). Parse it as a blocking turn rather
@@ -412,15 +405,12 @@ impl OpencodeClient {
                 req.bearer_auth(&self.api_key)
             }
         };
-        let response = req
+        let mut response = req
             .header(SESSION_HEADER, session_id)
             .json(&payload)
             .send()
             .await?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(self.status_error(status.as_u16()));
-        }
+        super::super::transport::check_status(self.provider.id(), &mut response).await?;
         let body = self.read_body_limited(response).await?;
         serde_json::from_str(&body).map_err(|_| ProviderError::InvalidResponse {
             provider: self.provider.id(),

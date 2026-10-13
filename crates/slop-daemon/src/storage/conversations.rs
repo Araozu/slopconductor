@@ -67,7 +67,9 @@ pub(super) fn legacy_fixture(c: &Connection, version: i64) -> StoreResult<()> {
         let tx = c
             .unchecked_transaction()
             .map_err(|_| StoreError::Database)?;
-        tx.execute_batch("ALTER TABLE sessions DROP COLUMN inbox;
+        tx.execute_batch("DROP TABLE session_context;
+            ALTER TABLE model_requests DROP COLUMN context;
+            ALTER TABLE sessions DROP COLUMN inbox;
             DROP TABLE conversation_drafts;
             CREATE TEMP TABLE saved_work AS SELECT id,owner_node_id,spec,requested_spec,created_order,last_event_sequence FROM sessions;
             DROP TABLE child_waits; DROP TABLE child_links;

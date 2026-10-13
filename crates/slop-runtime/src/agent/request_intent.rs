@@ -8,4 +8,5 @@ pub struct RequestIntent {
     pub requested_model: String,
     pub requested_settings: GenerationSettings,
     pub settings: GenerationSettings,
+    pub context: super::context::RequestContext,
 }

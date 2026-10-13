@@ -110,9 +110,9 @@ new admissions use the saved connection and active turns retain their original
 connection. Legacy environment keys are imported only when no saved key exists.
 
 The steering inbox is bounded to 32 pending instructions per logical turn.
-Plain-text turns retain a one-request default and receive at most one additional
-model request per accepted steering instruction or explicit resume, capped at
-64 total requests. Workspace execution keeps its configured `max_model_requests`
+Plain-text turns allow an initial request, two output-limit continuations, and
+eight compaction requests, plus one request per steering instruction or resume,
+capped at 64 total requests. Workspace execution keeps its configured `max_model_requests`
 as a hard cumulative limit. `next-boundary` applies between completed inference
 and tool steps, never in the middle of a token stream.
 
@@ -121,13 +121,15 @@ for providers that accept a cap and four concurrent requests across sessions.
 Codex's ChatGPT subscription mode has no output cap; explicitly requested caps
 are rejected before acceptance. Platform Codex and Go/Zen defaults retain the
 configured cap. `default_model`,
-`max_output_tokens`, and `execution_concurrency` can be set in the daemon TOML
-configuration; session defaults and accepted per-turn overrides are frozen
+`max_output_tokens`, `context_token_budget`, and `execution_concurrency` can be
+set in the daemon TOML configuration; session defaults and accepted per-turn overrides are frozen
 for execution. The execution
 queue allows 32 queued turns per session and 1,024 globally. Provider context is
-limited to 256 messages and 1 MiB; exceeding it records `context_limit` without
-dispatching inference. Visible text is limited to 1 MiB. Lists have at most 200
-items per page, and history pages also have a 16 MiB encoded JSON bound.
+limited to 256 messages and 1 MiB. Automatic compaction keeps the inference view
+within these bounds while retaining the full transcript. Historical sessions
+already beyond the cap are summarized in bounded pages instead of rejected.
+An individual input that cannot be reduced still records `context_limit`.
+Visible text is limited to 1 MiB. Lists have at most 200 items per page, and history pages also have a 16 MiB encoded JSON bound.
 
 `--default-model`/`SLOP_DEFAULT_MODEL` overrides the configured model.
 `--provider-base-url`/`SLOP_PROVIDER_BASE_URL` selects an explicitly trusted Go

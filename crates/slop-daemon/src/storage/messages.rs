@@ -203,7 +203,7 @@ pub(super) fn list_messages(
 ) -> StoreResult<Page<MessageResponse>> {
     let _ = get_session(connection, session_id)?;
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id,ordinal FROM messages WHERE session_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
+    let mut statement=connection.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id,ordinal FROM messages WHERE session_id=?1 AND ordinal>?2 AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=messages.request_id AND json_extract(r.context,'$.compaction')=1) ORDER BY ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![session_id, after, (limit + 1) as i64])
         .map_err(|_| StoreError::Database)?;
@@ -246,7 +246,7 @@ pub(super) fn list_messages(
     } else if next_after.is_some_and(|cursor| {
         connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND ordinal>?2)",
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE session_id=?1 AND ordinal>?2 AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=messages.request_id AND json_extract(r.context,'$.compaction')=1))",
                 rusqlite::params![session_id, cursor as i64],
                 |r| r.get::<_, bool>(0),
             )

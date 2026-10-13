@@ -441,6 +441,9 @@ pub(super) fn finish_turn(
     if status != "running" {
         return Err(StoreError::Conflict);
     }
+    if already_unknown {
+        outcome.usage = slop_runtime::providers::Usage::default();
+    }
     let pending_steering: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted')",
@@ -450,7 +453,7 @@ pub(super) fn finish_turn(
         .map_err(|_| StoreError::Database)?;
     let steering_yield = matches!(
         outcome.error_code.as_deref(),
-        Some("steering_resume" | "steering_resume_unknown")
+        Some("steering_resume" | "steering_resume_unknown" | "context_compaction_resume")
     ) || pending_steering && outcome.status == ChatStatus::Completed;
     let pause_yield = outcome.error_code.as_deref() == Some("pause_turn")
         || pause_requested
@@ -517,7 +520,11 @@ pub(super) fn finish_turn(
             if paused {
                 "turn_paused"
             } else {
-                "turn_steering_yielded"
+                if outcome.error_code.as_deref() == Some("context_compaction_resume") {
+                    "turn_context_yielded"
+                } else {
+                    "turn_steering_yielded"
+                }
             },
             Some(turn_id),
             existing.as_deref(),

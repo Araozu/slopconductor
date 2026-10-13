@@ -23,6 +23,7 @@ from projects_smoke import check_projects
 from filesystem_smoke import check_filesystem
 from orchestration_smoke import check_orchestration
 from delegation_smoke import check_delegation
+from context_smoke import check_context
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -195,7 +196,7 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
             stored_id = database.execute(
                 "SELECT node_id FROM node_identity WHERE singleton = 1"
             ).fetchone()[0]
-        if journal != "wal" or schema_version != 10 or stored_id != node["node_id"]:
+        if journal != "wal" or schema_version != 11 or stored_id != node["node_id"]:
             raise RuntimeError(
                 f"unexpected SQLite state: journal={journal}, schema={schema_version}, node={stored_id}"
             )
@@ -395,6 +396,7 @@ def main():
             raise RuntimeError("bootstrap daemon accepted a non-loopback listener")
 
         check_chat_lifecycle(daemon_binary, cli_binary, root / "durable-chat")
+        check_context(daemon_binary, root / "context", start_daemon, stop_daemon, isolated_env)
         check_tools(daemon_binary, cli_binary, root / "structured-tools")
         check_projects(daemon_binary, cli_binary, root / "projects")
         check_filesystem(daemon_binary, root / "filesystem")

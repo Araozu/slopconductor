@@ -33,6 +33,7 @@ pub(super) fn incomplete(reason: Option<&str>) -> TurnOutcome {
             Some("max_tokens") => "max_tokens",
             Some("max_output_tokens") => "max_output_tokens",
             Some("content_filter") => "content_filter",
+            Some("model_context_window_exceeded") => "model_context_window_exceeded",
             _ => "unknown",
         }
         .to_owned(),
@@ -79,6 +80,9 @@ pub(super) fn messages_outcome(stop_reason: Option<&str>) -> Result<TurnOutcome,
     match stop_reason {
         Some("end_turn" | "stop_sequence") => Ok(TurnOutcome::Completed),
         Some("max_tokens") => Ok(incomplete(Some("max_tokens"))),
+        Some("model_context_window_exceeded") => {
+            Ok(incomplete(Some("model_context_window_exceeded")))
+        }
         Some("tool_use" | "pause_turn" | "refusal") => Err(DecodeError::UnsupportedCapability {
             capability: "structured message outcome",
         }),
@@ -217,11 +221,24 @@ pub(super) fn parse_openai_usage(body: &Value) -> Usage {
     parse_usage(usage)
 }
 
-pub(super) fn parse_usage(usage: &Value) -> Usage {
+pub(in crate::providers) fn parse_usage(usage: &Value) -> Usage {
     let input = usage
         .get("input_tokens")
         .or_else(|| usage.get("prompt_tokens"))
         .and_then(Value::as_u64);
+    // Anthropic input_tokens excludes cache writes and cache reads. OpenAI's
+    // nested cached_tokens is already part of prompt/input_tokens: do not add it.
+    let input = input.and_then(|input| {
+        ["cache_creation_input_tokens", "cache_read_input_tokens"]
+            .into_iter()
+            .try_fold(input, |total, field| {
+                let count = match usage.get(field) {
+                    None | Some(Value::Null) => 0,
+                    Some(value) => value.as_u64()?,
+                };
+                total.checked_add(count)
+            })
+    });
     let output = usage
         .get("output_tokens")
         .or_else(|| usage.get("completion_tokens"))

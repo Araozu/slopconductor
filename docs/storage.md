@@ -22,6 +22,9 @@ and durable batch cancellation. Schema 8 adds child parent/run/root links,
 inherited admission scopes, selected context references, and exact-attempt wait
 dependencies. Child creation and its native tool result commit together; a
 completed wait result commits before readmission. See [child tasks](child-tasks.md).
+Schema 11 adds per-request context size/purpose and an atomic session inference
+checkpoint containing the summary, retained messages, and historical cursor.
+Compaction changes the inference view without deleting public history.
 Schema 9 unifies all work in `sessions` and all execution in `turns`.
 Conversation rows hold policy, requested/effective inputs, batch membership, and
 lineage; turn rows hold retry links. It removes the separate `tasks`, `runs`, and

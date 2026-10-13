@@ -51,6 +51,9 @@ impl Store {
             git: slop_runtime::git::GitService::new(canonical_dir.clone()),
             workspace_jobs: Arc::new(tokio::sync::Mutex::new(tokio::task::JoinSet::new())),
             workspace_healthy: AtomicBool::new(true),
+            context_token_budget: std::sync::atomic::AtomicU64::new(
+                slop_runtime::agent::context::DEFAULT_TOKEN_BUDGET,
+            ),
         });
         let (ready_tx, ready_rx) = oneshot::channel();
         let (finished_tx, finished_rx) = oneshot::channel();
@@ -132,17 +135,22 @@ impl StoreClient {
     ) -> StoreResult<(bool, Vec<(String, String, String)>)> {
         let session_id = session_id.to_owned();
         self.submit(move |connection| {
+            let (through, saved) = context::load(connection, &session_id)?;
+            let mut non_text = false;
+            let mut required = Vec::new();
+            for message in saved {
+                non_text |= message.blocks.iter().any(|block| !matches!(block.content, slop_runtime::providers::inference::BlockContent::Text { .. }));
+                if let Some(c) = message.continuation.filter(|c| c.required) { required.push((c.provider,c.model,c.wire)); }
+            }
             let mut statement = connection.prepare(
                 "SELECT m.blocks,m.continuation FROM messages m JOIN turns t ON t.id=m.turn_id
-                 WHERE m.session_id=?1 AND m.status='completed'
+                 WHERE m.session_id=?1 AND m.ordinal>?2 AND m.status='completed' AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=m.request_id AND json_extract(r.context,'$.compaction')=1)
                    AND (t.status='completed'
                      OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id))
                      OR (t.status='running' AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
                  ORDER BY m.ordinal LIMIT 256",
             ).map_err(|_| StoreError::Database)?;
-            let mut rows = statement.query([session_id]).map_err(|_| StoreError::Database)?;
-            let mut non_text = false;
-            let mut required = Vec::new();
+            let mut rows = statement.query(rusqlite::params![session_id,through]).map_err(|_| StoreError::Database)?;
             while let Some(row) = rows.next().map_err(|_| StoreError::Database)? {
                 let blocks: Vec<slop_runtime::providers::inference::ContentBlock> = execution::json_column(row, 0).map_err(|_| StoreError::Database)?;
                 non_text |= blocks.iter().any(|block| !matches!(block.content, slop_runtime::providers::inference::BlockContent::Text { .. }));
@@ -352,7 +360,21 @@ impl StoreClient {
     }
 
     pub async fn claim_next_turn(&self) -> StoreResult<Option<slop_runtime::chat::TurnWork>> {
-        self.submit(claim_next_turn).await
+        let budget = self.shared.context_token_budget.load(Ordering::Acquire);
+        self.submit(move |c| {
+            let mut work = claim_next_turn(c)?;
+            if let Some(work) = &mut work {
+                work.context_token_budget = budget;
+            }
+            Ok(work)
+        })
+        .await
+    }
+
+    pub fn set_context_token_budget(&self, budget: u64) {
+        self.shared
+            .context_token_budget
+            .store(budget, Ordering::Release);
     }
 
     pub async fn checkpoint_visible(&self, turn_id: &str, text: &str) -> StoreResult<()> {
@@ -391,7 +413,7 @@ impl StoreClient {
         let turn_id = turn_id.to_owned();
         self.submit(move |connection| {
             let queued: bool = connection.query_row(
-                "SELECT status IN ('queued','running','awaiting_children') AND (EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='applied') OR EXISTS(SELECT 1 FROM child_waits WHERE parent_turn_id=?1)) FROM turns WHERE id=?1",
+                "SELECT status IN ('queued','running','awaiting_children') AND (EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='applied') OR EXISTS(SELECT 1 FROM child_waits WHERE parent_turn_id=?1) OR EXISTS(SELECT 1 FROM session_events WHERE turn_id=?1 AND kind='turn_context_yielded')) FROM turns WHERE id=?1",
                 [&turn_id],
                 |row| row.get(0),
             ).optional().map_err(|_| StoreError::Database)?.ok_or(StoreError::NotFound)?;

@@ -44,7 +44,7 @@ mod tests;
 pub(in crate::providers) use client::{OpencodeClient, validate_base_url};
 pub(in crate::providers) use decode::{
     parse_chat_response, parse_messages_response, parse_models_list, parse_responses_response,
-    reported_model,
+    parse_usage, reported_model,
 };
 pub(in crate::providers) use sse::{DecodeError, SseStream, is_event_stream};
 pub(in crate::providers) use stream::StreamFold;

@@ -13,5 +13,6 @@ pub struct Config {
     pub codex_base_url: Option<String>,
     pub default_model: String,
     pub max_output_tokens: u32,
+    pub context_token_budget: u64,
     pub execution_concurrency: usize,
 }

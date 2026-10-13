@@ -95,6 +95,7 @@ pub trait ProviderClient: Send + Sync {
                     TurnOutcome::Incomplete { reason } => match reason.as_str() {
                         "max_tokens" | "max_output_tokens" => inference::FinishReason::OutputLimit,
                         "content_filter" => inference::FinishReason::ContentFilter,
+                        "model_context_window_exceeded" => inference::FinishReason::ContextLimit,
                         _ => inference::FinishReason::Incomplete,
                     },
                 },
