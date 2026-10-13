@@ -186,7 +186,7 @@ fn selected_context(
         }
         let (session, status, public): (String, String, String) = c
             .query_row(
-                "SELECT session_id,status,text FROM messages WHERE id=?1",
+                "SELECT session_id,status,text FROM messages WHERE id=?1 AND deleted=0",
                 [id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
@@ -272,12 +272,7 @@ fn summaries(c: &Connection, ids: &[String]) -> StoreResult<String> {
     let mut values = Vec::new();
     for id in ids {
         let run = orchestration::run(c, id)?;
-        let output = run
-            .turn
-            .assistant_message_id
-            .as_deref()
-            .map(|id| orchestration::message(c, id))
-            .transpose()?;
+        let output = orchestration::output(c, run.turn.assistant_message_id.as_deref())?;
         let text = output.as_ref().map(|m| bounded_text(&m.text, limit));
         values.push(serde_json::json!({"run_id":run.id,"task_id":run.task_id,"status":run.turn.status,"error_code":run.turn.error_code,"effects_unknown":run.effects_unknown,"assistant_message_id":run.turn.assistant_message_id,"text":text,"output_truncated":output.as_ref().is_some_and(|m|m.text.len()>limit)}));
     }
@@ -642,12 +637,7 @@ impl StoreClient {
         let id = id.to_owned();
         self.submit(move |c| {
             let run = orchestration::run(c, &id)?;
-            let output = run
-                .turn
-                .assistant_message_id
-                .as_deref()
-                .map(|id| orchestration::message(c, id))
-                .transpose()?;
+            let output = orchestration::output(c, run.turn.assistant_message_id.as_deref())?;
             Ok(RunResultResponse { run, output })
         })
         .await

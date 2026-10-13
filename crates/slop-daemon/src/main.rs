@@ -239,6 +239,7 @@ async fn health() -> Json<HealthResponse> {
             "filesystem-navigation".to_owned(),
             "persistent-conversations".to_owned(),
             "durable-inbox".to_owned(),
+            "chat-history-editing".to_owned(),
             "orchestration-controls".to_owned(),
             "child-tasks".to_owned(),
             "batch-matrices".to_owned(),

@@ -25,4 +25,6 @@ pub struct SessionResponse {
     pub child: Option<crate::orchestration::ChildLink>,
     #[serde(default)]
     pub inbox: Option<super::SessionInbox>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork: Option<super::SessionFork>,
 }

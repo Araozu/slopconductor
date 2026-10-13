@@ -63,6 +63,7 @@ promise that an entire machine contains only one operating-system process.
 | F21 | Idle conversation transfer | M6 | Identity, history, and required attachments survive transfer. |
 | F22 | Paused task/workspace migration | M6, exploratory | Destination restores state and ownership transfers safely. |
 | F23 | Optional local-model provider | Later | Uses the same provider boundary without affecting cloud-only installs. |
+| F24 | Chat forks, message edits, and suffix deletion | M1, local slice implemented | Fork at a selected message; edits create a new branch; deletion removes that message and later history without replaying tools. |
 
 ## Reliability requirements
 

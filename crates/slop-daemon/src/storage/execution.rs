@@ -861,7 +861,7 @@ pub(super) fn claim_next_turn(
     };
     let (saved_through, saved_history) = super::context::load(&tx, &session_id)?;
     let mut statement=tx.prepare("SELECT m.id,m.role,m.text,m.blocks,m.continuation,m.turn_id,m.status,r.finish_reason,r.id,m.ordinal FROM messages m JOIN turns t ON t.id=m.turn_id LEFT JOIN model_requests r ON r.id=m.request_id
-        WHERE m.session_id=?1 AND m.ordinal>?4 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND (m.status='completed' OR (m.status='incomplete' AND r.finish_reason IN('output_limit','context_limit'))) AND (t.status='completed' OR m.turn_id=?2 OR t.status IN('failed','cancelled','interrupted','incomplete'))
+        WHERE m.session_id=?1 AND m.deleted=0 AND m.context_excluded=0 AND m.ordinal>?4 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND (m.status='completed' OR (m.status='incomplete' AND r.finish_reason IN('output_limit','context_limit'))) AND (t.status='completed' OR m.turn_id=?2 OR t.status IN('failed','cancelled','interrupted','incomplete'))
         ORDER BY m.ordinal LIMIT ?3").map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![
@@ -972,7 +972,7 @@ pub(super) fn claim_next_turn(
         context_through_ordinal = history_ordinals.last().copied().unwrap_or(saved_through);
     }
     let context_usage = tx.query_row(
-        "SELECT r.usage,r.context FROM model_requests r JOIN turns t ON t.id=r.turn_id WHERE t.session_id=?1 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND r.requested_model=?3 AND r.status IN('completed','incomplete') AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND r.rowid>COALESCE((SELECT cr.rowid FROM session_context sc JOIN model_requests cr ON cr.id=sc.request_id WHERE sc.session_id=?1),0) ORDER BY r.rowid DESC LIMIT 1",
+        "SELECT r.usage,r.context FROM model_requests r JOIN turns t ON t.id=r.turn_id WHERE t.session_id=?1 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND r.requested_model=?3 AND r.status IN('completed','incomplete') AND EXISTS(SELECT 1 FROM messages m WHERE m.id=r.message_id AND m.deleted=0 AND m.context_excluded=0) AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND r.rowid>COALESCE((SELECT cr.rowid FROM session_context sc JOIN model_requests cr ON cr.id=sc.request_id WHERE sc.session_id=?1),0) ORDER BY r.rowid DESC LIMIT 1",
         rusqlite::params![session_id,turn_id,requested_model], |r| {
             Ok((optional_json_column::<slop_runtime::providers::Usage>(r,0)?, json_column::<slop_runtime::agent::context::RequestContext>(r,1)?))
         }
@@ -1158,7 +1158,7 @@ impl StoreClient {
     pub async fn message(&self, id: &str) -> StoreResult<MessageResponse> {
         let id = id.to_owned();
         self.submit(move|c|{
-            let mut statement=c.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id FROM messages WHERE id=?1").map_err(|_|StoreError::Database)?;
+            let mut statement=c.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id FROM messages WHERE id=?1 AND deleted=0").map_err(|_|StoreError::Database)?;
             let mut rows=statement.query([id]).map_err(|_|StoreError::Database)?;let row=rows.next().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
             Ok(MessageResponse{id:row.get(0).map_err(|_|StoreError::Database)?,session_id:row.get(1).map_err(|_|StoreError::Database)?,turn_id:row.get(2).map_err(|_|StoreError::Database)?,role:row.get(3).map_err(|_|StoreError::Database)?,text:row.get(4).map_err(|_|StoreError::Database)?,status:row.get(5).map_err(|_|StoreError::Database)?,blocks:public_blocks_from_row(row,6,0,4)?,request_id:row.get(7).map_err(|_|StoreError::Database)?})
         }).await

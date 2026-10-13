@@ -67,7 +67,12 @@ pub(super) fn legacy_fixture(c: &Connection, version: i64) -> StoreResult<()> {
         let tx = c
             .unchecked_transaction()
             .map_err(|_| StoreError::Database)?;
-        tx.execute_batch("DROP TABLE session_context;
+        tx.execute_batch("DROP INDEX messages_request;
+            ALTER TABLE messages DROP COLUMN deleted;
+            ALTER TABLE messages DROP COLUMN context_excluded;
+            ALTER TABLE turns DROP COLUMN history_only;
+            ALTER TABLE sessions DROP COLUMN fork;
+            DROP TABLE session_context;
             ALTER TABLE model_requests DROP COLUMN context;
             ALTER TABLE sessions DROP COLUMN inbox;
             DROP TABLE conversation_drafts;

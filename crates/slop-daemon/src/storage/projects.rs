@@ -63,7 +63,7 @@ fn workspace_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceResponse>
         effects_unknown: row.get(8)?,
     })
 }
-fn project(connection: &Connection, id: &str) -> StoreResult<ProjectResponse> {
+pub(super) fn project(connection: &Connection, id: &str) -> StoreResult<ProjectResponse> {
     connection
         .query_row(
             "SELECT id,owner_node_id,path,git_common_dir FROM projects WHERE id=?1",
@@ -74,7 +74,7 @@ fn project(connection: &Connection, id: &str) -> StoreResult<ProjectResponse> {
         .map_err(|_| StoreError::Database)?
         .ok_or(StoreError::NotFound)
 }
-fn workspace(connection: &Connection, id: &str) -> StoreResult<WorkspaceResponse> {
+pub(super) fn workspace(connection: &Connection, id: &str) -> StoreResult<WorkspaceResponse> {
     connection.query_row("SELECT id,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown FROM managed_workspaces WHERE id=?1", [id], workspace_row)
         .optional().map_err(|_| StoreError::Database)?.ok_or(StoreError::NotFound)
 }

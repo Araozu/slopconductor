@@ -1,7 +1,7 @@
 use super::*;
 use tempfile::TempDir;
 
-async fn open_test(dir: &TempDir, name: Option<&str>) -> Store {
+pub(super) async fn open_test(dir: &TempDir, name: Option<&str>) -> Store {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -18,7 +18,7 @@ async fn open_test(dir: &TempDir, name: Option<&str>) -> Store {
     .expect("store opens")
 }
 
-fn create_request(command_id: &str, title: Option<&str>) -> CreateSessionRequest {
+pub(super) fn create_request(command_id: &str, title: Option<&str>) -> CreateSessionRequest {
     CreateSessionRequest {
         command_id: command_id.to_owned(),
         title: title.map(str::to_owned),
@@ -163,7 +163,7 @@ async fn schema_nine_upgrade_preserves_conversations_history_and_receipts() {
         .unwrap();
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
-    connection.execute_batch("ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; PRAGMA user_version=9;").unwrap();
+    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; PRAGMA user_version=9;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
     let client = reopened.client();

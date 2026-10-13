@@ -136,6 +136,9 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | PUT, DELETE /v1/drafts/{id} | Implemented: save or remove a compose draft; writes commit before acknowledgement |
 | GET /v1/sessions/{id}/messages | Implemented: paginated durable conversation |
 | POST /v1/sessions/{id}/messages | Implemented: accept a message with optional model/settings and `after-turn`, `next-boundary`, or `immediate` delivery |
+| POST /v1/sessions/{id}/fork | Implemented: idempotent fork through a selected message, with independent history IDs and source lineage |
+| PATCH /v1/sessions/{id}/messages/{message_id} | Implemented: edit user/assistant text in a new fork; a user edit queues a new response |
+| DELETE /v1/sessions/{id}/messages/{message_id} | Implemented: idempotent suffix removal from an idle conversation; preserves execution audit records |
 | GET /v1/sessions/{id}/instructions | Implemented: query durable steering status/history |
 | GET /v1/sessions/{id}/events | Implemented: catch up and optionally follow NDJSON session events |
 | GET /v1/turns/{id} | Implemented: turn status, message/request/invocation IDs, frozen settings, model, and usage |

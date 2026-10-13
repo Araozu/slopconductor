@@ -214,11 +214,12 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
         budget_usage: Default::default(),
         child: None,
         inbox: execution::optional_json_column(row, 15)?,
+        fork: execution::optional_json_column(row, 16)?,
     })
 }
 
 pub(super) fn get_session(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
-    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox FROM sessions WHERE id=?1",[id],session_from_row)
+    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork FROM sessions WHERE id=?1",[id],session_from_row)
         .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
     enrich(connection, session)
 }
@@ -229,7 +230,7 @@ pub(super) fn list_sessions(
     limit: usize,
 ) -> StoreResult<Page<SessionResponse>> {
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
+    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
         .map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![after, (limit + 1) as i64])
@@ -244,7 +245,7 @@ pub(super) fn list_sessions(
             connection,
             session_from_row(row).map_err(|_| StoreError::Database)?,
         )?;
-        next_after = Some(row.get::<_, i64>(16).map_err(|_| StoreError::Database)? as u64);
+        next_after = Some(row.get::<_, i64>(17).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     let has_more = items.len() == limit
@@ -264,7 +265,7 @@ pub(super) fn list_sessions(
 fn enrich(connection: &Connection, mut session: SessionResponse) -> StoreResult<SessionResponse> {
     let latest: Option<String> = connection
         .query_row(
-            "SELECT id FROM turns WHERE session_id=?1 ORDER BY ordinal DESC LIMIT 1",
+            "SELECT id FROM turns t WHERE session_id=?1 AND EXISTS(SELECT 1 FROM messages m WHERE m.turn_id=t.id AND m.deleted=0) ORDER BY ordinal DESC LIMIT 1",
             [&session.id],
             |r| r.get(0),
         )

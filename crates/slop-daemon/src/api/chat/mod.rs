@@ -40,6 +40,11 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/models", get(models))
         .route("/v1/sessions", get(sessions).post(create_session))
         .route("/v1/sessions/{session_id}", get(session))
+        .route("/v1/sessions/{session_id}/fork", post(fork_session))
+        .route(
+            "/v1/sessions/{session_id}/messages/{message_id}",
+            axum::routing::patch(edit_message).delete(delete_message),
+        )
         .route(
             "/v1/sessions/{session_id}/inbox",
             post(update_session_inbox),
@@ -86,6 +91,7 @@ pub struct EventQuery {
 
 mod events;
 mod execution;
+mod history;
 #[cfg(test)]
 mod provider_preflight_tests;
 mod sessions;
@@ -94,6 +100,7 @@ mod turns;
 
 use events::*;
 use execution::*;
+use history::*;
 pub(super) use sessions::send_message;
 use sessions::*;
 pub(in crate::api) use support::error;

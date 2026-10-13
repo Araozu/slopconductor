@@ -7,6 +7,12 @@ pub use inbox::{
 
 mod session_response;
 pub use session_response::SessionResponse;
+mod fork_session_request;
+pub use fork_session_request::{ForkSessionRequest, SessionFork};
+mod edit_message_request;
+pub use edit_message_request::EditMessageRequest;
+mod delete_message_request;
+pub use delete_message_request::DeleteMessageRequest;
 mod create_session_request;
 pub use create_session_request::CreateSessionRequest;
 mod send_message_request;

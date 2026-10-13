@@ -144,9 +144,8 @@ impl StoreClient {
             }
             let mut statement = connection.prepare(
                 "SELECT m.blocks,m.continuation FROM messages m JOIN turns t ON t.id=m.turn_id
-                 WHERE m.session_id=?1 AND m.ordinal>?2 AND m.status='completed' AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=m.request_id AND json_extract(r.context,'$.compaction')=1)
-                   AND (t.status='completed'
-                     OR (t.status IN('failed','cancelled','interrupted','incomplete') AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id))
+                 WHERE m.session_id=?1 AND m.deleted=0 AND m.context_excluded=0 AND m.ordinal>?2 AND m.status='completed' AND NOT EXISTS(SELECT 1 FROM model_requests r WHERE r.id=m.request_id AND json_extract(r.context,'$.compaction')=1)
+                   AND (t.status IN('completed','failed','cancelled','interrupted','incomplete')
                      OR (t.status='running' AND EXISTS(SELECT 1 FROM tool_invocations i WHERE i.turn_id=t.id)))
                  ORDER BY m.ordinal LIMIT ?3",
             ).map_err(|_| StoreError::Database)?;

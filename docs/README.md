@@ -10,8 +10,10 @@ The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
 shutdown. Durable text chat now adds sessions, idempotent message acceptance,
 paginated history/events, daemon-owned Go/Zen/Codex provider selection,
-cancellation, and a consumer CLI. Runtime provider credential commands persist
-secrets in private XDG storage, replace active provider connections without
+cancellation, and a consumer CLI. Chat history supports forks at a selected
+message, edits in a new fork, and idle-session suffix deletion through the public
+API and CLI. Runtime provider credential commands persist secrets in private
+XDG storage, replace active provider connections without
 restart, and own ChatGPT authorization in the daemon. Codex also supports
 separate account registrations, mode selection/sign-out, and explicit live catalog
 probes. Structured Go/Zen/Codex execution adds explicit workspace tools, durable

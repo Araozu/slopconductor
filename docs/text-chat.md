@@ -94,11 +94,82 @@ anonymous. The daemon accepts loopback listeners only.
 | GET, POST /v1/sessions | Paginated listing or durable creation |
 | GET /v1/sessions/{id} | Session configuration, revision, and event watermark |
 | GET, POST /v1/sessions/{id}/messages | Paginated history or durable message/turn acceptance |
+| POST /v1/sessions/{id}/fork | Copy history through a selected message into a new conversation |
+| PATCH /v1/sessions/{id}/messages/{message_id} | Edit user/assistant text in a new fork, discarding the original suffix |
+| DELETE /v1/sessions/{id}/messages/{message_id} | Remove that message and all later messages from an idle conversation |
 | GET /v1/sessions/{id}/instructions | Paginated durable steering instruction status/history |
 | GET /v1/sessions/{id}/events | Replay from `after`; optional NDJSON following |
 | GET /v1/turns/{id} | Outcome, message IDs, requested/resolved model, and usage |
 | POST /v1/turns/{id}/cancel | Idempotent explicit cancellation |
 | POST /v1/turns/{id}/pause, /resume | Durable pause at safe boundaries and explicit fresh admission |
+
+## Forking, editing, and deleting history
+
+Health advertises `chat-history-editing`. All three mutations require a
+`command_id`, accept an optional `expected_revision` of the source session, and
+commit the receipt, state, and semantic event together. A repeat returns the
+original receipt even after the source message is deleted or the daemon restarts.
+Reusing a command ID with a different operation, target, or payload conflicts.
+Messages must belong to the specified session. Internal compaction messages are
+not valid targets.
+
+`POST /v1/sessions/{id}/fork` accepts `message_id` and an optional `title`. The
+new conversation contains history **through and including** that message and
+inherits the session's model, settings, execution policy, and budget limits.
+Its receipt identifies the new session and the copied selected message. It does
+not start inference. Copied messages and turns have independent IDs, while
+`session.fork` records the source session/message and whether this was an edit.
+The original conversation remains unchanged. A fork of running work is a
+committed snapshot; provisional deltas are not copied, and inherited unfinished
+turns become interrupted historical records rather than queued execution.
+
+`PATCH` accepts replacement `text`. Editing a user message copies only its
+preceding history, accepts the replacement as a new user turn, and generates a
+new response using the inherited session defaults. Editing assistant text copies
+through that message and stores the replacement without starting inference.
+Assistant edits discard that message's original provider continuation and tool
+proposals. Tool-result messages cannot be edited. Neither edit includes later
+messages, and neither changes the source session.
+
+`DELETE` removes the selected message and its entire suffix from history,
+canonical message lookups, public run output, child context selection, and future
+inference. Outstanding queued, running, paused, or awaiting-child turns return
+`409 history_busy`; cancel them and wait for terminal state before deletion.
+Deletion clears compacted context because a saved summary may contain removed
+facts. History ordinals and event cursors remain monotonic; a later message
+continues after the retained execution records. `messages_deleted` identifies
+the original cutoff, and clients refresh history when receiving that event.
+The CLI follower also skips missing canonical records when replaying events
+committed before deletion, while continuing to advance its durable cursor.
+
+A cut inside an assistant/tool exchange preserves the retained public messages
+but excludes that entire incomplete exchange from inference. Completed paired
+exchanges preserve structured blocks and private provider continuation. Forks
+reference the original immutable request records; inherited turns cannot be
+retried as execution. Deletion retains internal message tombstones, receipts,
+requests, tools, artifacts, lineage, and spent budgets for audit and recovery;
+it is a transcript operation, not a purge of execution records or filesystem
+effects. Existing forks retain their copied history after source deletion.
+
+Each Git-backed fork reserves a separate lazy worktree at the original frozen
+base commit. Uncommitted source-worktree changes are not copied. Folder projects
+and explicit workspace roots continue to share the configured directory under
+the existing writer lease. Transcript operations do not undo or replay tools.
+The new fork starts its own operation ledger; inherited history is not charged
+as new inference or tool execution.
+
+The CLI prints message IDs in `slop session history`. For example:
+
+```sh
+slop session fork SESSION --message MESSAGE --command-id fork-1
+slop session edit SESSION --message MESSAGE --text "Revised prompt" --command-id edit-1
+slop session delete-message SESSION --message MESSAGE --command-id delete-1
+```
+
+`session edit` follows a new user turn unless `--detach` is supplied. Its input
+also supports `--prompt-file` or stdin. Each operation supports
+`--expected-revision`; fork accepts `--title`. JSON output includes the receipt
+and new session ID, allowing scripts to continue the branch explicitly.
 
 Model readiness reports local configuration. It does not prove account
 entitlement, provider availability, or a successful paid inference. Unsupported

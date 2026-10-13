@@ -20,6 +20,44 @@ pub enum SessionCommand {
         #[arg(long, default_value_t = 100)]
         limit: u32,
     },
+    /// Create a new conversation with history through the selected message.
+    Fork {
+        id: String,
+        #[arg(long)]
+        message: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        command_id: Option<String>,
+        #[arg(long)]
+        expected_revision: Option<u64>,
+    },
+    /// Edit a message in a new fork; user edits start a new response.
+    Edit {
+        id: String,
+        #[arg(long)]
+        message: String,
+        #[arg(long, conflicts_with = "text")]
+        prompt_file: Option<PathBuf>,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        command_id: Option<String>,
+        #[arg(long)]
+        expected_revision: Option<u64>,
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Delete the selected message and everything after it in an idle session.
+    DeleteMessage {
+        id: String,
+        #[arg(long)]
+        message: String,
+        #[arg(long)]
+        command_id: Option<String>,
+        #[arg(long)]
+        expected_revision: Option<u64>,
+    },
     Send {
         id: String,
         #[arg(long, conflicts_with = "text")]

@@ -110,6 +110,11 @@ pub(in crate::api) fn store_error(store_error: StoreError) -> Response {
             "active_turn_override",
             "An instruction attached to an active turn cannot change its frozen model or settings.",
         ),
+        StoreError::HistoryBusy => error(
+            StatusCode::CONFLICT,
+            "history_busy",
+            "Stop outstanding turns before deleting conversation history.",
+        ),
         StoreError::Preflight(code, message) => error(StatusCode::BAD_REQUEST, code, message),
         StoreError::Limit => error(
             StatusCode::TOO_MANY_REQUESTS,

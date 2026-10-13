@@ -1,6 +1,54 @@
 use super::*;
 
 impl DaemonClient {
+    pub async fn fork_session(
+        &self,
+        session_id: &str,
+        request: &ForkSessionRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("chat-history-editing").await?;
+        self.post_json(
+            session_url(&self.endpoint, session_id, Some("fork"))?,
+            request,
+        )
+        .await
+    }
+
+    pub async fn edit_message(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        request: &EditMessageRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("chat-history-editing").await?;
+        self.mutate_json(
+            reqwest::Method::PATCH,
+            self.session_message_url(session_id, message_id)?,
+            request,
+        )
+        .await
+    }
+
+    pub async fn delete_message(
+        &self,
+        session_id: &str,
+        message_id: &str,
+        request: &DeleteMessageRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("chat-history-editing").await?;
+        self.mutate_json(
+            reqwest::Method::DELETE,
+            self.session_message_url(session_id, message_id)?,
+            request,
+        )
+        .await
+    }
+
+    fn session_message_url(&self, session: &str, message: &str) -> Result<Url, ClientError> {
+        let base = session_url(&self.endpoint, session, Some("messages"))?;
+        id_url(&self.endpoint, base.path(), message, None)
+    }
+
     pub async fn update_session_inbox(
         &self,
         session_id: &str,

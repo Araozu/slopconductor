@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use slop_client::{DaemonClient, EventStream};
+use slop_client::{ClientError, DaemonClient, EventStream};
 use slop_protocol::chat::EventFrame;
 
 use crate::{Result, history::find_message, output::Output};
@@ -108,6 +108,9 @@ async fn consume_stream(
         };
         match &frame {
             EventFrame::Durable { event } => {
+                if event.kind == "messages_deleted" {
+                    *display = StreamDisplay::default();
+                }
                 if (turn_id.is_empty() || event.turn_id.as_deref() == Some(turn_id))
                     && matches!(
                         event.kind.as_str(),
@@ -116,17 +119,25 @@ async fn consume_stream(
                     && let Some(id) = &event.message_id
                     && !display.completed.contains(id)
                 {
-                    let message = client.message(id).await?;
-                    if display.active_message.as_ref() != Some(id) {
+                    // Replayed events can refer to a suffix removed since the
+                    // event was committed. Still advance its durable cursor.
+                    let message = match client.message(id).await {
+                        Ok(message) => Some(message),
+                        Err(ClientError::Api { status: 404, .. }) => None,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if let Some(message) = message {
+                        if display.active_message.as_ref() != Some(id) {
+                            display.shown.clear();
+                            display.active_message = Some(id.clone());
+                        }
+                        output.message_snapshot(&message, &display.shown);
+                        let keep = bounded_utf8_prefix_len(&message.text, MAX_RENDERED_TURN_BYTES);
                         display.shown.clear();
-                        display.active_message = Some(id.clone());
-                    }
-                    output.message_snapshot(&message, &display.shown);
-                    let keep = bounded_utf8_prefix_len(&message.text, MAX_RENDERED_TURN_BYTES);
-                    display.shown.clear();
-                    display.shown.push_str(&message.text[..keep]);
-                    if message.status != "checkpoint" {
-                        display.completed.insert(id.clone());
+                        display.shown.push_str(&message.text[..keep]);
+                        if message.status != "checkpoint" {
+                            display.completed.insert(id.clone());
+                        }
                     }
                 }
                 if (turn_id.is_empty() || event.turn_id.as_deref() == Some(turn_id))

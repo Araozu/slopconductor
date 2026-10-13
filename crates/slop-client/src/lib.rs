@@ -8,9 +8,9 @@ use reqwest::header::{AUTHORIZATION, HeaderValue};
 use slop_protocol::{
     API_VERSION, HEALTH_PATH, HealthResponse, NODE_PATH, NodeResponse, SERVICE_NAME,
     chat::{
-        CancelTurnRequest, CommandReceipt, CreateSessionRequest, EventFrame, MessageResponse,
-        ModelResponse, Page, SendMessageRequest, SessionResponse, TurnResponse,
-        UpdateSessionInboxRequest,
+        CancelTurnRequest, CommandReceipt, CreateSessionRequest, DeleteMessageRequest,
+        EditMessageRequest, EventFrame, ForkSessionRequest, MessageResponse, ModelResponse, Page,
+        SendMessageRequest, SessionResponse, TurnResponse, UpdateSessionInboxRequest,
     },
     providers::{
         LoginResponse, LoginStatus, ProviderAccount, ProviderCatalog, ProviderStatus,

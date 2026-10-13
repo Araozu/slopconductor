@@ -236,6 +236,16 @@ fn retry_allowed(
     previous: &RunResponse,
     acknowledge: bool,
 ) -> StoreResult<SessionResponse> {
+    let history_only: bool = connection
+        .query_row(
+            "SELECT history_only FROM turns WHERE id=?1",
+            [&previous.id],
+            |r| r.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    if history_only {
+        return Err(StoreError::Conflict);
+    }
     let current = task(connection, &previous.task_id)?;
     children::retry_allowed(connection, &current)?;
     if let Some(batch) = &current.batch_id
@@ -761,7 +771,7 @@ pub(super) fn page<T: serde::Serialize>(
 }
 
 pub(super) fn message(c: &Connection, id: &str) -> StoreResult<MessageResponse> {
-    let mut statement=c.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id FROM messages WHERE id=?1").map_err(|_|StoreError::Database)?;
+    let mut statement=c.prepare("SELECT id,session_id,turn_id,role,text,status,blocks,request_id FROM messages WHERE id=?1 AND deleted=0").map_err(|_|StoreError::Database)?;
     let mut rows = statement.query([id]).map_err(|_| StoreError::Database)?;
     let row = rows
         .next()
@@ -777,6 +787,13 @@ pub(super) fn message(c: &Connection, id: &str) -> StoreResult<MessageResponse> 
         blocks: execution::public_blocks_from_row(row, 6, 0, 4)?,
         request_id: row.get(7).map_err(|_| StoreError::Database)?,
     })
+}
+
+pub(super) fn output(c: &Connection, id: Option<&str>) -> StoreResult<Option<MessageResponse>> {
+    match id.map(|id| message(c, id)).transpose() {
+        Err(StoreError::NotFound) => Ok(None),
+        result => result,
+    }
 }
 
 #[cfg(test)]

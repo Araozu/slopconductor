@@ -1,5 +1,7 @@
 use slop_client::DaemonClient;
-use slop_protocol::chat::SendMessageRequest;
+use slop_protocol::chat::{
+    DeleteMessageRequest, EditMessageRequest, ForkSessionRequest, SendMessageRequest,
+};
 
 use crate::{
     Result,
@@ -60,8 +62,89 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
             let page = client.history(&id, after, Some(limit)).await?;
             context.output.value(&page, || {
                 for message in &page.items {
-                    println!("{}: {}", message.role, message.text);
+                    println!("{}\t{}: {}", message.id, message.role, message.text);
                 }
+            })?;
+        }
+        SessionCommand::Fork {
+            id,
+            message,
+            title,
+            command_id,
+            expected_revision,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .fork_session(
+                    &id,
+                    &ForkSessionRequest {
+                        command_id: command_id.clone(),
+                        message_id: message,
+                        title,
+                        expected_revision,
+                    },
+                )
+                .await
+                .map_err(|error| mutation_error(error, &command_id))?;
+            context.output.value(&receipt, || {
+                println!("forked session {}", receipt.session_id)
+            })?;
+        }
+        SessionCommand::Edit {
+            id,
+            message,
+            prompt_file,
+            text,
+            command_id,
+            expected_revision,
+            detach,
+        } => {
+            let text = prompt_value(text, prompt_file).await?;
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .edit_message(
+                    &id,
+                    &message,
+                    &EditMessageRequest {
+                        command_id: command_id.clone(),
+                        text,
+                        expected_revision,
+                    },
+                )
+                .await
+                .map_err(|error| mutation_error(error, &command_id))?;
+            context.output.message_receipt(&receipt, true);
+            if !detach && let Some(turn_id) = receipt.turn_id.as_deref() {
+                follow_turn(
+                    &client,
+                    &receipt.session_id,
+                    turn_id,
+                    receipt.event_sequence,
+                    context.output,
+                )
+                .await?;
+            }
+        }
+        SessionCommand::DeleteMessage {
+            id,
+            message,
+            command_id,
+            expected_revision,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .delete_message(
+                    &id,
+                    &message,
+                    &DeleteMessageRequest {
+                        command_id: command_id.clone(),
+                        expected_revision,
+                    },
+                )
+                .await
+                .map_err(|error| mutation_error(error, &command_id))?;
+            context.output.value(&receipt, || {
+                println!("deleted message suffix in session {}", receipt.session_id)
             })?;
         }
         SessionCommand::Send {

@@ -29,13 +29,14 @@ mod context;
 mod conversations;
 mod execution;
 mod governance;
+mod history;
 mod inbox;
 pub(crate) mod orchestration;
 mod projects;
 
 const DATABASE_FILE: &str = "state.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 const MINIMUM_SQLITE_VERSION: i32 = 3_051_003;
 const MAX_QUEUE_CAPACITY: usize = 4096;
 const MAX_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -83,6 +84,8 @@ pub enum StoreError {
     Unsupported(&'static str),
     #[error("active-turn steering cannot change its frozen model or settings")]
     ActiveTurnOverride,
+    #[error("stop outstanding turns before deleting conversation history")]
+    HistoryBusy,
     #[error("message preflight failed: {0}")]
     Preflight(&'static str, &'static str),
     #[error("Git operation failed: {0}")]

@@ -25,6 +25,11 @@ completed wait result commits before readmission. See [child tasks](child-tasks.
 Schema 11 adds per-request context size/purpose and an atomic session inference
 checkpoint containing the summary, retained messages, and historical cursor.
 Compaction changes the inference view without deleting public history.
+Schema 12 adds chat-fork lineage, historical-turn markers, message tombstones,
+and inference exclusions for cuts inside tool exchanges. Forks copy the selected
+prefix without inheriting execution or compacted summaries. Suffix deletion
+invalidates summaries while retaining execution/audit records and spent budgets.
+See [chat history operations](text-chat.md#forking-editing-and-deleting-history).
 Schema 9 unifies all work in `sessions` and all execution in `turns`.
 Conversation rows hold policy, requested/effective inputs, batch membership, and
 lineage; turn rows hold retry links. It removes the separate `tasks`, `runs`, and
