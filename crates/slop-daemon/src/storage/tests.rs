@@ -1276,6 +1276,105 @@ async fn claim_context_is_ordered_and_excludes_later_queued_users() {
 }
 
 #[tokio::test]
+async fn recovered_context_counts_reported_response_tokens_once() {
+    use slop_runtime::{
+        agent::{RequestCompletion, RequestIntent, context},
+        chat::ChatRepository,
+        providers::{
+            Usage,
+            inference::{FinishReason, InferenceMessage, InferenceResponse, MessageRole},
+        },
+    };
+    let dir = TempDir::new().unwrap();
+    let store = open_test(&dir, None).await;
+    let client = store.client();
+    let mut request = create_request("context-baseline-create", None);
+    request.prompt = Some("initial goal".into());
+    let created = client.create_session(request).await.unwrap();
+    let work = client.claim_next_turn().await.unwrap().unwrap();
+    let input_bytes = context::input_bytes(&work.history, &[]);
+    let message = InferenceMessage::text(
+        MessageRole::Assistant,
+        "large-context-response".into(),
+        "x".repeat(90_000),
+    );
+    client
+        .begin_request(
+            &work.turn_id,
+            RequestIntent {
+                id: "context-baseline-request".into(),
+                message_id: "context-baseline-message".into(),
+                ordinal: 1,
+                requested_model: work.requested_model,
+                requested_settings: work.requested_settings,
+                settings: work.settings,
+                context: context::RequestContext {
+                    input_bytes,
+                    compaction: false,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .complete_request(
+            &work.turn_id,
+            RequestCompletion {
+                request_id: "context-baseline-request".into(),
+                tools: Vec::new(),
+                compaction: None,
+                response: InferenceResponse {
+                    resolved_model: None,
+                    usage: Usage::from_reported(Some(10_000), Some(30_000), Some(40_000)),
+                    finish_reason: FinishReason::Stop,
+                    message: message.clone(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    // A later crash must not turn this completed response into fresh,
+    // unmeasured growth when the next turn reconstructs its context.
+    store.shutdown().await.unwrap();
+    let reopened = open_test(&dir, None).await;
+    let client = reopened.client();
+    client
+        .send_message(
+            &created.session_id,
+            SendMessageRequest {
+                command_id: "context-baseline-followup".into(),
+                text: "continue".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let next = client.claim_next_turn().await.unwrap().unwrap();
+    let baseline =
+        context::ContextUsage::after_response(10_000, Some(30_000), input_bytes, &message);
+    assert_eq!(next.context_usage, Some(baseline));
+    let measured =
+        context::estimated_tokens(context::input_bytes(&next.history, &[]), next.context_usage);
+    assert!(
+        (40_000..40_100).contains(&measured),
+        "double-counted completed output: {measured}"
+    );
+    let persisted_input_bytes: i64 = client
+        .submit(|c| {
+            c.query_row(
+                "SELECT json_extract(context,'$.input_bytes') FROM model_requests WHERE id='context-baseline-request'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| StoreError::Database)
+        })
+        .await
+        .unwrap();
+    assert_eq!(persisted_input_bytes as u64, input_bytes);
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn completed_request_usage_is_durable_before_the_turn_finishes() {
     use slop_runtime::{
         agent::{RequestCompletion, RequestIntent},

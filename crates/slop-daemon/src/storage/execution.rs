@@ -987,12 +987,31 @@ pub(super) fn claim_next_turn(
         context_through_ordinal = history_ordinals.last().copied().unwrap_or(saved_through);
     }
     let context_usage = tx.query_row(
-        "SELECT r.usage,r.context FROM model_requests r JOIN turns t ON t.id=r.turn_id WHERE t.session_id=?1 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND r.requested_model=?3 AND r.status IN('completed','incomplete') AND EXISTS(SELECT 1 FROM messages m WHERE m.id=r.message_id AND m.deleted=0 AND m.context_excluded=0) AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND r.rowid>COALESCE((SELECT cr.rowid FROM session_context sc JOIN model_requests cr ON cr.id=sc.request_id WHERE sc.session_id=?1),0) ORDER BY r.rowid DESC LIMIT 1",
+        "SELECT r.usage,r.context,m.id,m.text,m.blocks,m.continuation,m.status,r.finish_reason FROM model_requests r JOIN turns t ON t.id=r.turn_id JOIN messages m ON m.id=r.message_id WHERE t.session_id=?1 AND t.ordinal<=(SELECT ordinal FROM turns WHERE id=?2) AND r.requested_model=?3 AND r.status IN('completed','incomplete') AND m.deleted=0 AND m.context_excluded=0 AND COALESCE(json_extract(r.context,'$.compaction'),0)=0 AND r.rowid>COALESCE((SELECT cr.rowid FROM session_context sc JOIN model_requests cr ON cr.id=sc.request_id WHERE sc.session_id=?1),0) ORDER BY r.rowid DESC LIMIT 1",
         rusqlite::params![session_id,turn_id,requested_model], |r| {
-            Ok((optional_json_column::<slop_runtime::providers::Usage>(r,0)?, json_column::<slop_runtime::agent::context::RequestContext>(r,1)?))
+            let usage = optional_json_column::<slop_runtime::providers::Usage>(r, 0)?;
+            let context = json_column::<slop_runtime::agent::context::RequestContext>(r, 1)?;
+            let mut message = InferenceMessage {
+                role: MessageRole::Assistant,
+                blocks: json_column(r, 4)?,
+                continuation: optional_json_column(r, 5)?,
+            };
+            if r.get::<_, String>(6)? == "incomplete"
+                && matches!(r.get::<_, Option<String>>(7)?.as_deref(), Some("output_limit" | "context_limit"))
+            {
+                message.blocks.retain(|block| matches!(block.content, BlockContent::Text { .. }));
+                message.continuation = None;
+            }
+            if message.blocks.is_empty() {
+                message.blocks.push(ContentBlock {
+                    id: format!("{}:block:0", r.get::<_, String>(2)?),
+                    content: BlockContent::Text { text: r.get(3)? },
+                });
+            }
+            Ok((usage, context, message))
         }
-    ).optional().map_err(|_| StoreError::Database)?.and_then(|(usage,context)| {
-        let usage = usage?; usage.input_tokens.filter(|_| context.input_bytes > 0).map(|input_tokens| slop_runtime::agent::context::ContextUsage { input_tokens, output_tokens:usage.output_tokens, input_bytes: context.input_bytes })
+    ).optional().map_err(|_| StoreError::Database)?.and_then(|(usage,context,message)| {
+        let usage = usage?; usage.input_tokens.filter(|_| context.input_bytes > 0).map(|input_tokens| slop_runtime::agent::context::ContextUsage::after_response(input_tokens, usage.output_tokens, context.input_bytes, &message))
     });
     let compactions_seen = tx.query_row("SELECT count(*) FROM model_requests WHERE turn_id=?1 AND json_extract(context,'$.compaction')=1", [&turn_id], |r| r.get(0)).map_err(|_| StoreError::Database)?;
     tx.execute(

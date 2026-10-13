@@ -20,7 +20,11 @@ coding-tool allowlist alone does not enable delegation.
 A user turn can contain several model requests, assistant messages, tool
 invocations, and paired tool-result messages. Each has a stable daemon ID.
 A provider call ID remains private and is scoped to its request; it is never
-used as a globally unique invocation ID. Content blocks have stable IDs and
+used as a globally unique invocation ID. When earlier requests reuse a provider
+call ID, adapters deterministically assign distinct IDs in the outgoing history
+and apply the same mapping to paired results and compatible replay items.
+Persisted call metadata and opaque reasoning remain unchanged. Content blocks
+have stable IDs and
 preserve text, refusals, tool proposals, arguments, result errors, artifact
 references, and uncertainty about effects. `MessageResponse.text` remains a
 visible-text projection for existing clients. Each message also exposes its
@@ -36,6 +40,10 @@ partial argument fragments are provisional. Recognized upstream completion
 and successfully parsed proposals precede execution. Truncated, malformed,
 contradictory, or output-limited responses launch no tools. The adapter proposes
 calls; the daemon validates policy and dispatches them.
+
+Chat Completions refusal fragments stream with their canonical block identity,
+share the visible output byte limit with text, and retain the refusal field when
+replayed instead of becoming ordinary assistant text.
 
 Completed provider reasoning/signatures/encrypted continuation stay in a
 private database column. They are excluded from public history, event frames,
@@ -104,8 +112,10 @@ The daemon uses the latest completed request's provider-reported input and outpu
 tokens and recorded input size, then budgets newly appended messages, tool schemas,
 and private continuation. Billing totals summed across requests are not context
 measurements. Reported output also covers reasoning that occupies more tokens
-than its encrypted representation suggests; dense history is summarized rather
-than retaining that older reasoning in the recent tail. Anthropic cache reads and writes are included in input usage;
+than its encrypted representation suggests. Completed assistant output counts
+once; only subsequent tool results and instructions are estimated as new growth,
+including after restart. Dense history is summarized rather than retaining that
+older reasoning in the recent tail. Anthropic cache reads and writes are included in input usage;
 OpenAI cached-token details are already included and are not added twice.
 Missing usage uses a conservative estimate of one token per three serialized
 bytes. Estimates remain distinct from provider-reported public usage.
@@ -136,6 +146,9 @@ goals, decisions, completed actions, failures, unknown effects and next steps.
 Opaque provider reasoning is not copied into summary text. A successful summary
 uses bounded head/tail excerpts for oversized historical content while retaining
 tool outcome, artifact and unknown-effect metadata. Full records stay in history.
+The selected transcript includes every tool outcome; excerpts shrink to fit
+instead of cutting off later results. If essential metadata cannot fit, the
+original inference view is preserved.
 The summary and retained inference view commit atomically with
 `context_compacted`.
 Public history remains complete; maintenance summaries are available through
@@ -145,6 +158,9 @@ Already oversized transcripts are processed as bounded historical pages.
 
 Only a complete, smaller summary replaces context. Failure, refusal, truncated
 summary, cancellation or interrupted compaction preserves the prior view.
+Size comparisons accept a smaller serialized view without mixing its byte
+estimate with a lower provider token measurement; reported dense reasoning can
+also establish that compaction reduces context.
 Maintenance requests consume aggregate budgets and workspace per-turn caps;
 plain chats have eight bounded compaction attempts in addition to the initial
 request and two output-limit continuations. A context-window rejection triggers
@@ -170,7 +186,7 @@ detached worktrees with frozen bases and lazy allocation after turn admission.
 
 | Tool | Behavior |
 | --- | --- |
-| `read` | Read UTF-8 text with a 1-based line `offset` (default 1), line `limit` (default 2000), and a continuation `next_offset` |
+| `read` | Read complete JSON pages of UTF-8 text with a 1-based line `offset` (default 1), line `limit` (default 2000), and a continuation `next_offset` |
 | `write` | Create or overwrite a UTF-8 file, create missing parent directories, preserve existing permissions, and rename atomically |
 | `edit` | Apply unique, non-overlapping exact text replacements against the original file; reject stale/ambiguous matches, preserve permissions, and rename atomically |
 | `bash` | Supervised Bash command with bounded output, timeout, cancellation, and process-group/Job Object cleanup |
@@ -196,6 +212,12 @@ path, with a shared four-slot tool limit. Once a file operation starts,
 cancellation waits for its actual outcome; dropping an awaiter cannot free its
 slot while the blocking operation continues.
 
+Read pages retain their complete text and JSON metadata in the model-visible
+result, including when larger than the shell preview cap. JSON escaping and
+metadata count toward the workspace output budget; a smaller budget returns
+fewer complete lines with a valid continuation offset. Empty files report zero
+lines, and a final newline does not create a phantom empty line.
+
 Bash uses `/bin/bash` on Unix and requires `bash.exe` on PATH on Windows
 (for example, Git for Windows). It runs without startup profiles, from the
 workspace root; commands can `cd` to a subdirectory. Optional `timeout` is in
@@ -208,7 +230,10 @@ and other actual tools; there are no dedicated Git/browser/orchestration tools.
 
 Normal cancellation/timeout targets the process group on Unix or Job Object on
 Windows and waits a bounded time for cleanup. Background descendants have no
-independent lifetime. Hard daemon death on Unix can leave subprocesses running;
+independent lifetime: Bash exit triggers cleanup even when descendants still
+hold stdout/stderr open. Output is then drained under a two-second cleanup
+deadline. Streaming retains UTF-8 characters split across pipe reads. Hard
+daemon death on Unix can leave subprocesses running;
 restart reports unknown effects and does not assume cleanup or retry execution.
 Process groups do not constrain a command that deliberately escapes supervision.
 
@@ -279,17 +304,21 @@ upstream payloads.
 
 Context is at most 8,192 messages/16 MiB; individual files at most 1 MiB; a read
 returns at most 2000 complete lines/256 KiB. A single line exceeding the read
-byte cap returns `read_line_limit`; Bash can inspect a smaller byte range. Each model
-response proposes at most 16 tools, with at most 64 KiB of arguments per call.
+byte cap or the encoded workspace output budget returns `read_line_limit`;
+Bash can inspect a smaller byte range. Each model response proposes at most 16
+tools, with at most 64 KiB of arguments per call.
 Visible assistant output is at most 1 MiB and encoded history pages at most
 16 MiB (text and blocks coexist for compatibility).
 
 Default workspace policy allows 32 calls and 16 model requests per turn, a
 30-second shell timeout, and 1 MiB of raw combined tool output. Policy maxima
-are 128 calls, 64 requests, 300 seconds, and 8 MiB. Tool previews are 16 KiB;
-larger output is an artifact. Shell JSON encoding can expand capped raw output;
-the client artifact bound is 64 MiB. There are four tool slots and the existing
-configurable turn admission limit (default four). These are bounds, not a
+are 128 calls, 64 requests, 300 seconds, and 8 MiB. Shell previews are valid JSON
+within 16 KiB, preserving exit status and both stdout/stderr with head/tail
+excerpts, byte counts, and explicit truncation flags. Larger output is an artifact;
+read results retain their complete bounded JSON page. Shell JSON encoding can
+expand capped raw output; the client artifact bound is 64 MiB. There are four
+tool slots and the existing configurable turn admission limit (default four).
+These are bounds, not a
 memory/performance benchmark.
 
 ```sh
@@ -325,6 +354,11 @@ capability set and restricted allowlists, canonical client rendering,
 authentication on new routes, restart without tool replay, per-turn selection,
 all delivery modes, tool cancellation/replanning, provider snapshot rotation,
 and paused-turn restart/resume.
+Tool regressions also cover complete large read results, encoded-budget
+pagination without lost lines, accurate EOF line counts, valid shell previews
+with stderr/exit status/tails, split UTF-8 pipe output, and background-pipe cleanup
+on Bash exit. The offline real-binary workflow checks large read text and shell
+preview metadata in the actual next provider request.
 All provider traffic in these checks is offline.
 [Recorded native validation](native-validation.md) passes on Linux and Windows,
 including process-tree cancellation. No new live tool call or paid model test

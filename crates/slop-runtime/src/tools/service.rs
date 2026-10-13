@@ -9,6 +9,97 @@ impl Drop for SupervisedChild {
     }
 }
 
+// Pipe reads can split a UTF-8 character at any byte. Retain incomplete
+// characters across chunks so streamed text agrees with the canonical output.
+#[derive(Default)]
+struct StreamText {
+    pending: Vec<u8>,
+}
+
+impl StreamText {
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut text = String::new();
+        let mut consumed = 0;
+        loop {
+            match std::str::from_utf8(&self.pending[consumed..]) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    consumed = self.pending.len();
+                    break;
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    text.push_str(
+                        std::str::from_utf8(&self.pending[consumed..consumed + valid]).unwrap(),
+                    );
+                    consumed += valid;
+                    if let Some(invalid) = error.error_len() {
+                        text.push('\u{fffd}');
+                        consumed += invalid;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        self.pending.drain(..consumed);
+        text
+    }
+
+    fn finish(&mut self) -> String {
+        let text = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending.clear();
+        text
+    }
+}
+
+fn excerpt(text: &str, budget: usize) -> String {
+    if text.len() <= budget {
+        return text.to_owned();
+    }
+    let mut head = budget / 2;
+    let mut tail = text.len() - (budget - head);
+    while !text.is_char_boundary(head) {
+        head -= 1;
+    }
+    while !text.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!("{}\n… output omitted …\n{}", &text[..head], &text[tail..])
+}
+
+fn bash_preview(stdout: &str, stderr: &str, exit_code: Option<i32>) -> String {
+    let preview = |budget: usize| {
+        let stdout_budget = (budget / 2)
+            .max(budget.saturating_sub(stderr.len()))
+            .min(stdout.len());
+        let stderr_budget = budget.saturating_sub(stdout_budget).min(stderr.len());
+        json!({
+            "exit_code":exit_code,
+            "stdout":excerpt(stdout, stdout_budget),
+            "stderr":excerpt(stderr, stderr_budget),
+            "stdout_bytes":stdout.len(),
+            "stderr_bytes":stderr.len(),
+            "stdout_truncated":stdout.len()>stdout_budget,
+            "stderr_truncated":stderr.len()>stderr_budget,
+        })
+        .to_string()
+    };
+    // JSON escaping may expand a byte sixfold. Search the encoded budget
+    // instead of cutting serialized JSON or a Unicode character in half.
+    let (mut low, mut high) = (0, PREVIEW_BYTES);
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+        if preview(middle).len() <= PREVIEW_BYTES {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    preview(low)
+}
+
 pub struct ToolService {
     artifact_dir: Option<PathBuf>,
     slots: Arc<tokio::sync::Semaphore>,
@@ -90,20 +181,11 @@ impl ToolService {
         .await;
         match result {
             Ok(Ok(output)) => {
-                let mut bytes = output.into_bytes();
-                let exceeded = bytes.len() > output_limit;
-                bytes.truncate(output_limit);
-                self.complete_output(
-                    bytes,
-                    "text/plain; charset=utf-8",
-                    if exceeded {
-                        Some("tool_output_limit")
-                    } else {
-                        None
-                    },
-                    false,
-                )
-                .await
+                if output.len() > output_limit {
+                    return ToolOutcome::failed("tool_output_limit", false);
+                }
+                self.complete_output(output, None, "application/json", None, false)
+                    .await
             }
             Ok(Err(code)) => ToolOutcome::failed(
                 code,
@@ -122,16 +204,15 @@ impl ToolService {
 
     async fn complete_output(
         &self,
-        bytes: Vec<u8>,
+        output: String,
+        preview: Option<String>,
         media_type: &str,
         error_code: Option<&str>,
         effects_unknown: bool,
     ) -> ToolOutcome {
-        let preview =
-            String::from_utf8_lossy(&bytes[..bytes.len().min(PREVIEW_BYTES)]).into_owned();
         let mut artifacts = Vec::new();
-        if bytes.len() > PREVIEW_BYTES {
-            match self.save_artifact(&bytes, media_type).await {
+        if output.len() > PREVIEW_BYTES {
+            match self.save_artifact(output.as_bytes(), media_type).await {
                 Ok(artifact) => artifacts.push(artifact),
                 Err(_) => return ToolOutcome::failed("artifact_storage_failed", effects_unknown),
             }
@@ -143,7 +224,7 @@ impl ToolService {
                 "completed"
             }
             .into(),
-            output: preview,
+            output: preview.unwrap_or(output),
             artifacts,
             error_code: error_code.map(str::to_owned),
             effects_unknown,
@@ -256,11 +337,32 @@ impl ToolService {
         let mut err_open = true;
         let mut out_buffer = [0u8; 4096];
         let mut err_buffer = [0u8; 4096];
+        let mut out_text = StreamText::default();
+        let mut err_text = StreamText::default();
+        let mut status = None;
         let mut failure = None;
-        while out_open || err_open {
+        let cleanup = tokio::time::sleep(Duration::from_secs(2));
+        tokio::pin!(cleanup);
+        while out_open || err_open || status.is_none() {
             let (stream, read) = tokio::select! {
                 read=stdout.read(&mut out_buffer),if out_open=>("stdout",read),
                 read=stderr.read(&mut err_buffer),if err_open=>("stderr",read),
+                // The outer process-group/Job Object wait includes descendants.
+                // Observe the wrapped Bash leader so background processes cannot
+                // postpone the cleanup that is responsible for terminating them.
+                result=child.inner_mut().wait(),if status.is_none()=>{
+                    match result {
+                        Ok(result)=>status=Some(result),
+                        Err(_)=>{failure=Some("process_wait_failed");break;},
+                    }
+                    // A background descendant may keep the pipes open after
+                    // Bash exits. End its lifetime now, then drain buffered
+                    // output under a separate bounded cleanup deadline.
+                    let _=child.start_kill();
+                    cleanup.as_mut().reset(tokio::time::Instant::now()+Duration::from_secs(2));
+                    continue;
+                },
+                _=&mut cleanup,if status.is_some()=>{failure=Some("process_output_failed");break;},
                 _=&mut deadline=>{failure=Some("tool_timeout");break;},
                 _=cancel.changed()=>{failure=Some("cancelled");break;},
             };
@@ -276,6 +378,14 @@ impl ToolService {
                     out_open = false;
                 } else {
                     err_open = false;
+                }
+                let text = if stream == "stdout" {
+                    out_text.finish()
+                } else {
+                    err_text.finish()
+                };
+                if !text.is_empty() {
+                    on_output(stream, &text);
                 }
                 continue;
             }
@@ -293,28 +403,36 @@ impl ToolService {
             } else {
                 err.extend_from_slice(chunk);
             }
-            on_output(stream, &String::from_utf8_lossy(chunk));
+            let text = if stream == "stdout" {
+                out_text.push(chunk)
+            } else {
+                err_text.push(chunk)
+            };
+            if !text.is_empty() {
+                on_output(stream, &text);
+            }
             if chunk.len() != buffer.len() {
                 failure = Some("tool_output_limit");
                 break;
             }
         }
+        for (stream, text) in [("stdout", out_text.finish()), ("stderr", err_text.finish())] {
+            if !text.is_empty() {
+                on_output(stream, &text);
+            }
+        }
         let mut effects_unknown = failure.is_some();
-        let status = if failure.is_some() {
+        if failure.is_some() {
             if child.start_kill().is_err() {
                 effects_unknown = true;
             }
-            tokio::time::timeout(Duration::from_secs(2), child.wait())
-                .await
-                .ok()
-                .and_then(std::result::Result::ok)
-        } else {
-            tokio::select! {
-                status=child.wait()=>status.ok(),
-                _=&mut deadline=>{failure=Some("tool_timeout");effects_unknown=true;let _=child.start_kill();tokio::time::timeout(Duration::from_secs(2),child.wait()).await.ok().and_then(std::result::Result::ok)},
-                _=cancel.changed()=>{failure=Some("cancelled");effects_unknown=true;let _=child.start_kill();tokio::time::timeout(Duration::from_secs(2),child.wait()).await.ok().and_then(std::result::Result::ok)},
+            if status.is_none() {
+                status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+                    .await
+                    .ok()
+                    .and_then(std::result::Result::ok);
             }
-        };
+        }
         // Even a successful leader may leave descendants with closed pipes.
         // Supervised shell invocations do not grant background-process lifetime.
         let _ = child.start_kill();
@@ -324,13 +442,56 @@ impl ToolService {
         } else if status.is_some_and(|status| !status.success()) && failure.is_none() {
             failure = Some("process_exit_failed");
         }
-        let output=json!({"exit_code":status.and_then(|s|s.code()),"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err)}).to_string();
+        let stdout = String::from_utf8_lossy(&out);
+        let stderr = String::from_utf8_lossy(&err);
+        let exit_code = status.and_then(|status| status.code());
+        let output = json!({"exit_code":exit_code,"stdout":stdout,"stderr":stderr}).to_string();
+        let preview = if output.len() > PREVIEW_BYTES {
+            Some(bash_preview(&stdout, &stderr, exit_code))
+        } else {
+            None
+        };
         self.complete_output(
-            output.into_bytes(),
+            output,
+            preview,
             "application/json",
             failure,
             effects_unknown,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streamed_unicode_and_invalid_bytes_match_canonical_lossy_text() {
+        for bytes in ["a🦀b€c".as_bytes(), b"a\xf0\x9f\xa6\x80\xff\xc0b\xe2\x82"] {
+            for chunk_size in 1..=5 {
+                let mut stream = StreamText::default();
+                let mut text = String::new();
+                for chunk in bytes.chunks(chunk_size) {
+                    text.push_str(&stream.push(chunk));
+                    assert!(stream.pending.len() <= 3);
+                }
+                text.push_str(&stream.finish());
+                assert_eq!(text, String::from_utf8_lossy(bytes));
+            }
+        }
+    }
+
+    #[test]
+    fn previews_bound_json_escaping_and_preserve_unicode_boundaries() {
+        for stdout in ["\u{0001}".repeat(40000), "🦀".repeat(10000)] {
+            let preview = bash_preview(&stdout, "failure €", Some(23));
+            assert!(preview.len() <= PREVIEW_BYTES);
+            let value: Value = serde_json::from_str(&preview).unwrap();
+            assert_eq!(value["exit_code"], 23);
+            assert_eq!(value["stderr"], "failure €");
+            assert_eq!(value["stdout_truncated"], true);
+            assert!(!value["stdout"].as_str().unwrap().contains('\u{fffd}'));
+        }
     }
 }

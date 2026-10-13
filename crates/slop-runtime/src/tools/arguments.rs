@@ -132,19 +132,34 @@ pub(super) fn file_tool(
                 return Err("invalid_arguments");
             }
             let text = read_bounded(&dir, relative_path(&args.path)?)?;
-            let total_lines = text.split('\n').count();
-            if args.offset > total_lines {
+            let total_lines = text.split_terminator('\n').count();
+            if args.offset > total_lines && !(total_lines == 0 && args.offset == 1) {
                 return Err("invalid_offset");
             }
+            // Account for JSON escaping and metadata before selecting complete
+            // lines. The returned page must fit the workspace output budget so
+            // its text and continuation offset are never cut in half later.
+            let overhead = json!({"path":args.path,"offset":args.offset,"next_offset":total_lines,"total_lines":total_lines,"text":""})
+                .to_string()
+                .len()
+                + 4;
+            let encoded_limit = policy
+                .max_output_bytes
+                .checked_sub(overhead)
+                .ok_or("tool_output_limit")?;
             let mut selected = String::new();
             let mut count = 0;
+            let mut encoded_bytes = 0;
             for line in text
-                .split('\n')
+                .split_terminator('\n')
                 .skip(args.offset - 1)
                 .take(args.limit.min(MAX_READ_LINES))
             {
                 let separator = usize::from(count > 0);
-                if selected.len() + separator + line.len() > MAX_READ_BYTES {
+                let line_bytes = serde_json::to_string(line).unwrap().len() - 2;
+                if selected.len() + separator + line.len() > MAX_READ_BYTES
+                    || encoded_bytes + separator * 2 + line_bytes > encoded_limit
+                {
                     if count == 0 {
                         return Err("read_line_limit");
                     }
@@ -154,6 +169,7 @@ pub(super) fn file_tool(
                     selected.push('\n');
                 }
                 selected.push_str(line);
+                encoded_bytes += separator * 2 + line_bytes;
                 count += 1;
             }
             let next = args.offset + count;
@@ -290,7 +306,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
     vec![
         tool(
             "read",
-            "Read a UTF-8 workspace-relative file up to 1 MiB. Offset is a 1-based line number (default 1); limit is a line count (default 2000). Returns at most 2000 complete lines and 256 KiB, with next_offset to continue. A single oversized line fails with read_line_limit. Absolute paths, parent traversal, and escapes are rejected. Images are not supported.",
+            "Read a UTF-8 workspace-relative file up to 1 MiB. Offset is a 1-based line number (default 1); limit is a line count (default 2000). Returns complete JSON containing at most 2000 complete lines and 256 KiB of text, with next_offset to continue. A smaller workspace output budget can shorten the page. A single line that cannot fit fails with read_line_limit. Empty files have zero lines; a final newline does not add an empty line. Absolute paths, parent traversal, and escapes are rejected. Images are not supported.",
             json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}}),
             vec!["path"],
         ),
@@ -308,7 +324,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
         ),
         tool(
             "bash",
-            "Execute a Bash command from the workspace root with no startup profiles, a filtered environment, and bounded stdout/stderr. Optional timeout is in seconds and can shorten the workspace deadline. Linux uses /bin/bash; Windows requires bash.exe on PATH. Commands may use cd for subdirectories. Bash is not sandboxed and may cause external changes. Background descendants are terminated when the invocation ends.",
+            "Execute a Bash command from the workspace root with no startup profiles, a filtered environment, and bounded stdout/stderr. Returns JSON with exit_code, stdout, and stderr. Large outputs use head/tail previews with truncation flags and full bounded artifacts. Optional timeout is in seconds and can shorten the workspace deadline. Linux uses /bin/bash; Windows requires bash.exe on PATH. Commands may use cd for subdirectories. Bash is not sandboxed and may cause external changes. Background descendants are terminated when Bash exits.",
             json!({"command":{"type":"string","minLength":1,"maxLength":65536},"timeout":{"type":"number","minimum":0.001,"maximum":300}}),
             vec!["command"],
         ),

@@ -28,7 +28,14 @@ pub async fn follow_turn(
     let mut attempts = 0_u32;
     let mut display = StreamDisplay::default();
     loop {
-        match client.events(session_id, cursor, true).await {
+        // A reconnect cursor can already include the terminal event (for
+        // example, when a turn finishes while interactive history is loaded).
+        // Replay its remaining records without opening an endless live stream.
+        let turn = client.turn(turn_id).await?;
+        match client
+            .events(session_id, cursor, !is_terminal(&turn.status))
+            .await
+        {
             Ok(mut stream) => {
                 match consume_stream(
                     &mut stream,

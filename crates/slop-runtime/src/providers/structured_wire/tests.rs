@@ -428,3 +428,190 @@ fn streamed_visible_limit_applies_across_content_blocks() {
         ));
     }
 }
+
+#[test]
+fn repeated_provider_call_ids_keep_distinct_results_with_and_without_private_replay() {
+    for wire in [
+        WireProtocol::OpenAiChatCompletions,
+        WireProtocol::OpenAiResponses,
+        WireProtocol::AnthropicMessages,
+    ] {
+        for private_replay in [false, true] {
+            let mut input = request(wire);
+            for index in 0..2 {
+                input.request_id = format!("request-{index}");
+                let mut message = decode(&terminal(wire), wire, &input, ProviderId::OpencodeGo)
+                    .unwrap()
+                    .message;
+                if !private_replay {
+                    message.continuation = None;
+                }
+                let (call_id, provider_call_id) = message
+                    .blocks
+                    .iter()
+                    .find_map(|block| match &block.content {
+                        BlockContent::ToolCall {
+                            call_id,
+                            provider_call_id,
+                            ..
+                        } => Some((call_id.clone(), provider_call_id.clone())),
+                        _ => None,
+                    })
+                    .unwrap();
+                input.messages.push(message);
+                input.messages.push(InferenceMessage {
+                    role: MessageRole::Tool,
+                    continuation: None,
+                    blocks: vec![ContentBlock {
+                        id: format!("result-{index}"),
+                        content: BlockContent::ToolResult {
+                            call_id,
+                            provider_call_id,
+                            output: format!("result-{index}"),
+                            is_error: false,
+                            artifact_ids: vec![],
+                            effects_unknown: false,
+                        },
+                    }],
+                });
+            }
+            input
+                .validate(
+                    OpencodeGoProvider::instance(),
+                    &inference::capabilities(OpencodeGoProvider::instance(), &input.model),
+                )
+                .unwrap();
+            let stored = input.messages.clone();
+            let body = encode(&input, wire, ProviderId::OpencodeGo, "").unwrap();
+            assert_eq!(input.messages, stored);
+            assert_eq!(
+                body,
+                encode(&input, wire, ProviderId::OpencodeGo, "").unwrap()
+            );
+            let (calls, results) = encoded_call_ids(&body, wire);
+            assert_eq!(calls.len(), 2);
+            assert_eq!(results, calls);
+            assert_eq!(calls[0], "provider-call");
+            assert_ne!(calls[0], calls[1]);
+            assert!(calls[1].len() <= 64);
+            assert_eq!(body.to_string().contains("private"), private_replay);
+        }
+    }
+}
+
+fn encoded_call_ids(body: &Value, wire: WireProtocol) -> (Vec<String>, Vec<String>) {
+    let mut calls = Vec::new();
+    let mut results = Vec::new();
+    match wire {
+        WireProtocol::OpenAiChatCompletions => {
+            for message in body["messages"].as_array().unwrap() {
+                if let Some(items) = message["tool_calls"].as_array() {
+                    calls.extend(
+                        items
+                            .iter()
+                            .map(|item| item["id"].as_str().unwrap().to_owned()),
+                    );
+                }
+                if message["role"] == "tool" {
+                    results.push(message["tool_call_id"].as_str().unwrap().to_owned());
+                }
+            }
+        }
+        WireProtocol::OpenAiResponses => {
+            for item in body["input"].as_array().unwrap() {
+                if item["type"] == "function_call" {
+                    calls.push(item["call_id"].as_str().unwrap().to_owned());
+                } else if item["type"] == "function_call_output" {
+                    results.push(item["call_id"].as_str().unwrap().to_owned());
+                }
+            }
+        }
+        WireProtocol::AnthropicMessages => {
+            for message in body["messages"].as_array().unwrap() {
+                for item in message["content"].as_array().unwrap() {
+                    if item["type"] == "tool_use" {
+                        calls.push(item["id"].as_str().unwrap().to_owned());
+                    } else if item["type"] == "tool_result" {
+                        results.push(item["tool_use_id"].as_str().unwrap().to_owned());
+                    }
+                }
+            }
+        }
+    }
+    (calls, results)
+}
+
+#[test]
+fn streamed_chat_refusals_are_visible_and_replayed_as_refusals() {
+    let mut input = request(WireProtocol::OpenAiChatCompletions);
+    let mut fold = StructuredFold::new(WireProtocol::OpenAiChatCompletions);
+    let mut deltas = Vec::new();
+    for delta in [
+        json!({"content":"I checked. "}),
+        json!({"refusal":"Cannot "}),
+        json!({"refusal":"comply ☃"}),
+    ] {
+        fold.feed(
+            &format!("data: {}\n\n", json!({"choices":[{"delta":delta}]})),
+            &mut |event| deltas.push(event),
+        )
+        .unwrap();
+    }
+    fold.feed(
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        &mut |_| {},
+    )
+    .unwrap();
+    let response = fold.finish(&input, ProviderId::OpencodeGo).unwrap();
+    assert_eq!(response.finish_reason, FinishReason::Refusal);
+    let visible: String = deltas
+        .iter()
+        .filter_map(|event| match event {
+            ProviderEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(visible, response.message.visible_text());
+    assert_eq!(visible, "I checked. Cannot comply ☃");
+    assert!(
+        matches!(deltas[1], ProviderEvent::TextDelta { block_index, .. } if block_index == MAX_TOOL_CALLS + 1)
+    );
+    assert!(
+        matches!(deltas[2], ProviderEvent::TextDelta { block_index, .. } if block_index == MAX_TOOL_CALLS + 1)
+    );
+    input.messages.push(response.message);
+    let body = encode(
+        &input,
+        WireProtocol::OpenAiChatCompletions,
+        ProviderId::OpencodeGo,
+        "",
+    )
+    .unwrap();
+    assert_eq!(body["messages"][1]["content"], "I checked. ");
+    assert_eq!(body["messages"][1]["refusal"], "Cannot comply ☃");
+}
+
+#[test]
+fn streamed_chat_refusals_share_the_visible_output_byte_limit() {
+    use crate::providers::opencode::{DecodeError, MAX_STREAM_TEXT_BYTES};
+
+    let mut fold = StructuredFold::new(WireProtocol::OpenAiChatCompletions);
+    fold.feed(
+        &format!(
+            "data: {}\n\n",
+            json!({"choices":[{"delta":{"content":"x".repeat(MAX_STREAM_TEXT_BYTES / 2)}}]})
+        ),
+        &mut |_| {},
+    )
+    .unwrap();
+    let mut emitted = false;
+    let result = fold.feed(
+        &format!(
+            "data: {}\n\n",
+            json!({"choices":[{"delta":{"refusal":"x".repeat(MAX_STREAM_TEXT_BYTES / 2 + 1)}}]})
+        ),
+        &mut |_| emitted = true,
+    );
+    assert!(matches!(result, Err(DecodeError::LimitExceeded { .. })));
+    assert!(!emitted);
+}

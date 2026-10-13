@@ -590,10 +590,8 @@ pub(crate) async fn execute<R: ChatRepository>(
                     .iter()
                     .any(|b| !matches!(b.content, BlockContent::Text { .. }));
             let compacted = usable.then(|| plan.finish(&request_id, summary));
-            let compacted = compacted.filter(|next| {
-                context::estimated_tokens(context::input_bytes(next, &[]), None)
-                    < context::estimated_tokens(context::input_bytes(&messages, &[]), context_usage)
-            });
+            let compacted =
+                compacted.filter(|next| context::is_reduced(&messages, next, context_usage));
             if repository
                 .complete_request(
                     &work.turn_id,
@@ -632,14 +630,14 @@ pub(crate) async fn execute<R: ChatRepository>(
             }
             continue;
         }
-        context_usage = response
-            .usage
-            .input_tokens
-            .map(|input_tokens| context::ContextUsage {
+        context_usage = response.usage.input_tokens.map(|input_tokens| {
+            context::ContextUsage::after_response(
                 input_tokens,
-                output_tokens: response.usage.output_tokens,
-                input_bytes: request_input_bytes,
-            });
+                response.usage.output_tokens,
+                request_input_bytes,
+                &response.message,
+            )
+        });
         context_frontier = None;
         transient_retries = 0;
         let mut invocations = Vec::new();

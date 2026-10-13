@@ -103,6 +103,21 @@ impl StructuredFold {
         text: &str,
         on_event: &mut (dyn FnMut(ProviderEvent) + Send),
     ) -> Result<()> {
+        self.visible_delta(index, text, on_event)?;
+        // Responses and Messages already retain text by content block. Chat
+        // Completions alone needs this aggregate buffer for its final message.
+        if self.wire == WireProtocol::OpenAiChatCompletions {
+            self.text.push_str(text);
+        }
+        Ok(())
+    }
+
+    fn visible_delta(
+        &mut self,
+        index: usize,
+        text: &str,
+        on_event: &mut (dyn FnMut(ProviderEvent) + Send),
+    ) -> Result<()> {
         if self.terminal.is_some() {
             return Err(invalid("content after terminal outcome"));
         }
@@ -113,11 +128,6 @@ impl StructuredFold {
             });
         }
         self.visible_bytes = bytes;
-        // Responses and Messages already retain text by content block. Chat
-        // Completions alone needs this aggregate buffer for its final message.
-        if self.wire == WireProtocol::OpenAiChatCompletions {
-            self.text.push_str(text);
-        }
         if !text.is_empty() {
             on_event(ProviderEvent::TextDelta {
                 block_index: index,
@@ -170,12 +180,11 @@ impl StructuredFold {
                 self.text_delta(0, text.as_str().ok_or_else(unsupported)?, on_event)?;
             }
             if let Some(text) = delta.get("refusal").filter(|v| !v.is_null()) {
-                if self.terminal.is_some() {
-                    return Err(invalid("refusal after terminal"));
-                }
+                let text = text.as_str().ok_or_else(unsupported)?;
+                self.visible_delta(MAX_TOOL_CALLS + 1, text, on_event)?;
                 append(
                     &mut self.refusal,
-                    text.as_str().ok_or_else(unsupported)?,
+                    text,
                     super::super::opencode::MAX_STREAM_TEXT_BYTES,
                 )?;
             }

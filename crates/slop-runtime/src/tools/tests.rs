@@ -150,7 +150,17 @@ fn reads_page_complete_utf8_lines_with_one_based_offsets_and_bounds() {
     let output = file_tool(&policy, "read", json!({"path":"file"})).unwrap();
     let value: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["text"], "");
+    assert_eq!(value["total_lines"], 0);
     assert!(value["next_offset"].is_null());
+    std::fs::write(root.path().join("file"), "first\nsecond\n").unwrap();
+    let output = file_tool(&policy, "read", json!({"path":"file"})).unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["total_lines"], 2);
+    assert!(value["next_offset"].is_null());
+    assert_eq!(
+        file_tool(&policy, "read", json!({"path":"file","offset":3})),
+        Err("invalid_offset")
+    );
     assert!(!validate_arguments(
         "read",
         &json!({"path":"file","offset":0})
@@ -236,7 +246,7 @@ fn directory_handles_prevent_symlink_escapes_and_mutations_preserve_permissions(
     );
 }
 #[tokio::test]
-async fn oversized_tool_output_is_capped_and_referenced_by_a_durable_artifact() {
+async fn large_reads_remain_complete_json_and_have_a_durable_artifact() {
     let root = tempfile::tempdir().unwrap();
     let service = ToolService::new(root.path().join("artifacts")).unwrap();
     std::fs::write(root.path().join("large"), "x".repeat(32 * 1024)).unwrap();
@@ -251,12 +261,158 @@ async fn oversized_tool_output_is_capped_and_referenced_by_a_durable_artifact() 
         )
         .await;
     assert_eq!(result.status, "completed");
-    assert!(result.output.len() <= PREVIEW_BYTES);
+    let page: Value = serde_json::from_str(&result.output).unwrap();
+    assert_eq!(page["text"].as_str().unwrap().len(), 32 * 1024);
+    assert!(page["next_offset"].is_null());
     assert_eq!(result.artifacts.len(), 1);
     let artifact = &result.artifacts[0];
     let bytes = std::fs::read(service.artifact_path(&artifact.id).unwrap()).unwrap();
     assert_eq!(bytes.len() as u64, artifact.size_bytes);
     assert_eq!(format!("{:x}", Sha256::digest(bytes)), artifact.sha256);
+}
+#[tokio::test]
+async fn read_pages_respect_encoded_output_budgets_without_losing_lines() {
+    let root = tempfile::tempdir().unwrap();
+    let service = ToolService::new(root.path().join("artifacts")).unwrap();
+    let lines = (0..100)
+        .map(|index| format!("{index}: \"\\\t\r🦀{}", "\u{0001}".repeat(20)))
+        .collect::<Vec<_>>();
+    std::fs::write(root.path().join("file"), lines.join("\n") + "\n").unwrap();
+    let mut offset = 1;
+    let mut received = Vec::new();
+    loop {
+        let mut policy = policy(root.path());
+        policy.max_output_bytes = 1024;
+        let (_sender, cancel) = tokio::sync::watch::channel(false);
+        let result = service
+            .run(
+                policy,
+                "read",
+                json!({"path":"file","offset":offset}),
+                cancel,
+                &mut |_, _| {},
+            )
+            .await;
+        assert_eq!(result.status, "completed", "{result:?}");
+        assert!(result.output.len() <= 1024);
+        let page: Value = serde_json::from_str(&result.output).unwrap();
+        received.extend(
+            page["text"]
+                .as_str()
+                .unwrap()
+                .split('\n')
+                .map(str::to_owned),
+        );
+        match page["next_offset"].as_u64() {
+            Some(next) => {
+                assert!(next > offset);
+                offset = next;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(received, lines);
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_large_previews_preserve_json_stderr_exit_code_and_output_tail() {
+    let root = tempfile::tempdir().unwrap();
+    let service = ToolService::new(root.path().join("artifacts")).unwrap();
+    let (_sender, cancel) = tokio::sync::watch::channel(false);
+    let result = service
+        .run(
+            policy(root.path()),
+            "bash",
+            json!({"command":"printf 'HEAD'; printf '%040000d' 0; printf 'TAIL'; printf 'compiler failed 🦀' >&2; exit 7"}),
+            cancel,
+            &mut |_, _| {},
+        )
+        .await;
+    assert_eq!(result.error_code.as_deref(), Some("process_exit_failed"));
+    assert!(result.output.len() <= PREVIEW_BYTES);
+    let preview: Value = serde_json::from_str(&result.output).unwrap();
+    assert_eq!(preview["exit_code"], 7);
+    assert_eq!(preview["stderr"], "compiler failed 🦀");
+    assert_eq!(preview["stdout_truncated"], true);
+    assert_eq!(preview["stderr_truncated"], false);
+    let stdout = preview["stdout"].as_str().unwrap();
+    assert!(stdout.starts_with("HEAD"));
+    assert!(stdout.ends_with("TAIL"));
+    assert_eq!(result.artifacts.len(), 1);
+    let full: Value = serde_json::from_slice(
+        &std::fs::read(service.artifact_path(&result.artifacts[0].id).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(full["stdout"].as_str().unwrap().len(), 40008);
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_streams_characters_split_across_pipe_reads() {
+    let root = tempfile::tempdir().unwrap();
+    let service = ToolService::new(root.path().join("artifacts")).unwrap();
+    let (_sender, cancel) = tokio::sync::watch::channel(false);
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let result = service
+        .run(
+            policy(root.path()),
+            "bash",
+            json!({"command":"printf '\\360\\237'; printf '\\360\\237' >&2; sleep 0.05; printf '\\246\\200'; printf '\\246\\200' >&2"}),
+            cancel,
+            &mut |stream, text| {
+                if stream == "stdout" {
+                    stdout.push_str(text);
+                } else {
+                    stderr.push_str(text);
+                }
+            },
+        )
+        .await;
+    assert_eq!(result.status, "completed");
+    assert_eq!(stdout, "🦀");
+    assert_eq!(stderr, "🦀");
+    let canonical: Value = serde_json::from_str(&result.output).unwrap();
+    assert_eq!(canonical["stdout"], stdout);
+    assert_eq!(canonical["stderr"], stderr);
+}
+#[tokio::test]
+async fn bash_leader_exit_ends_background_lifetime_without_waiting_for_pipe_eof() {
+    let root = tempfile::tempdir().unwrap();
+    let service = ToolService::new(root.path().join("artifacts")).unwrap();
+    let mut policy = policy(root.path());
+    policy.shell_timeout_ms = 30_000;
+    let (_sender, cancel) = tokio::sync::watch::channel(false);
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        service.run(
+            policy,
+            "bash",
+            json!({"command":"sleep 30 & echo $! > background.pid; printf done"}),
+            cancel,
+            &mut |_, _| {},
+        ),
+    )
+    .await
+    .expect("background pipes must not delay shell completion");
+    assert_eq!(result.status, "completed", "{result:?}");
+    let output: Value = serde_json::from_str(&result.output).unwrap();
+    assert_eq!(output["stdout"], "done");
+    assert_eq!(output["exit_code"], 0);
+    #[cfg(target_os = "linux")]
+    {
+        let pid = std::fs::read_to_string(root.path().join("background.pid")).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid.trim()));
+                if stat.is_err() || stat.unwrap().split_once(") ").unwrap().1.starts_with('Z') {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 }
 #[cfg(unix)]
 #[tokio::test]

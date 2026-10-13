@@ -18,10 +18,32 @@ pub struct RequestContext {
 pub struct ContextUsage {
     pub input_tokens: u64,
     pub output_tokens: Option<u64>,
+    /// Bytes covered by the token measurement, including its completed response
+    /// when output usage is known.
     pub input_bytes: u64,
 }
 
 impl ContextUsage {
+    pub fn after_response(
+        input_tokens: u64,
+        output_tokens: Option<u64>,
+        request_input_bytes: u64,
+        message: &InferenceMessage,
+    ) -> Self {
+        // Reported output already covers the assistant response. Advance the
+        // byte baseline past it so only later tool results/instructions count
+        // as growth; without output usage, estimate the response from bytes.
+        let response_bytes = output_tokens.map_or(0, |_| {
+            crate::json::encoded_len(message)
+                .map_or(u64::MAX, |bytes| (bytes as u64).saturating_add(1))
+        });
+        Self {
+            input_tokens,
+            output_tokens,
+            input_bytes: request_input_bytes.saturating_add(response_bytes),
+        }
+    }
+
     pub fn tokens(self) -> u64 {
         self.input_tokens
             .saturating_add(self.output_tokens.unwrap_or(0))
@@ -56,6 +78,21 @@ pub fn estimated_tokens(bytes: u64, reported: Option<ContextUsage>) -> u64 {
             .tokens()
             .saturating_add(bytes.saturating_sub(usage.input_bytes).div_ceil(3))
     })
+}
+
+pub fn is_reduced(
+    original: &[InferenceMessage],
+    compacted: &[InferenceMessage],
+    reported: Option<ContextUsage>,
+) -> bool {
+    let original_bytes = input_bytes(original, &[]);
+    let compacted_bytes = input_bytes(compacted, &[]);
+    // A byte estimate for a new summary is not directly comparable to reported
+    // usage from the original conversation. Always accept a smaller serialized
+    // view. Dense private reasoning can also shrink in tokens even when its
+    // replacement text occupies more bytes than the opaque continuation did.
+    compacted_bytes < original_bytes
+        || estimated_tokens(compacted_bytes, None) < estimated_tokens(original_bytes, reported)
 }
 
 pub fn needs_compaction(
@@ -193,7 +230,7 @@ pub fn plan(
             .or_else(|| (substantive..=end).find(|&n| boundaries[n]))
             .unwrap_or(end);
     }
-    let block_cap = if sizes[end] > prompt_cap as u64 {
+    let mut block_cap = if sizes[end] > prompt_cap as u64 {
         let blocks = messages[..end]
             .iter()
             .map(|m| m.blocks.len())
@@ -203,6 +240,26 @@ pub fn plan(
     } else {
         8192
     };
+    // Encoding, excerpt markers and tool metadata also consume prompt space.
+    // Tighten visible excerpts until the whole selected exchange fits. Cutting
+    // the serialized transcript would drop later outcomes while removing their
+    // original records from the inference view.
+    let transcript = loop {
+        if let Some(transcript) =
+            compaction_transcript(&messages[..end], block_cap, prompt_cap).ok()?
+        {
+            break transcript;
+        }
+        if block_cap <= 64 {
+            // Keep readable excerpts as well as essential metadata. If they
+            // cannot fit together, preserve the original context.
+            return None;
+        }
+        block_cap = (block_cap / 2).max(64);
+    };
+    if transcript.is_empty() {
+        return None;
+    }
     let mut retained = Vec::new();
     if !overflow && let Some(user) = last_user.filter(|&n| n < end) {
         retained.push(messages[user].clone());
@@ -213,45 +270,6 @@ pub fn plan(
             .filter(|m| !matches!(m.role, MessageRole::System | MessageRole::Developer))
             .cloned(),
     );
-    let mut transcript = String::new();
-    for message in &messages[..end] {
-        if matches!(message.role, MessageRole::System | MessageRole::Developer) {
-            continue;
-        }
-        // Opaque provider reasoning is never converted into public summary text.
-        let mut blocks = message.blocks.clone();
-        for block in &mut blocks {
-            match &mut block.content {
-                BlockContent::Text { text } | BlockContent::Refusal { text } => {
-                    *text = excerpt(text, block_cap)
-                }
-                BlockContent::ToolCall { arguments, .. } => {
-                    let encoded = serde_json::to_string(arguments).ok()?;
-                    if encoded.len() > block_cap.min(4096) {
-                        *arguments = serde_json::json!({"historical_arguments_excerpt": excerpt(&encoded,block_cap.min(4096)),"abbreviated":true});
-                    }
-                }
-                BlockContent::ToolResult { output, .. } => *output = excerpt(output, block_cap),
-            }
-        }
-        let visible = serde_json::to_string(&(&message.role, &blocks)).ok()?;
-        let room = prompt_cap.saturating_sub(transcript.len());
-        if room == 0 {
-            break;
-        }
-        let mut n = visible.len().min(room);
-        while !visible.is_char_boundary(n) {
-            n -= 1;
-        }
-        transcript.push_str(&visible[..n]);
-        transcript.push('\n');
-        if n < visible.len() {
-            transcript.push_str("[Oversized historical content abbreviated; full records remain in session history.]\n");
-        }
-    }
-    if transcript.is_empty() {
-        return None;
-    }
     let prompt = vec![InferenceMessage::text(
         MessageRole::User,
         "context-compaction-input".into(),
@@ -264,6 +282,42 @@ pub fn plan(
         retained,
         instructions,
     })
+}
+
+fn compaction_transcript(
+    messages: &[InferenceMessage],
+    block_cap: usize,
+    prompt_cap: usize,
+) -> Result<Option<String>, serde_json::Error> {
+    let mut transcript = String::new();
+    for message in messages {
+        if matches!(message.role, MessageRole::System | MessageRole::Developer) {
+            continue;
+        }
+        // Opaque provider reasoning is never converted into public summary text.
+        let mut blocks = message.blocks.clone();
+        for block in &mut blocks {
+            match &mut block.content {
+                BlockContent::Text { text } | BlockContent::Refusal { text } => {
+                    *text = excerpt(text, block_cap)
+                }
+                BlockContent::ToolCall { arguments, .. } => {
+                    let encoded = serde_json::to_string(arguments)?;
+                    if encoded.len() > block_cap.min(4096) {
+                        *arguments = serde_json::json!({"historical_arguments_excerpt": excerpt(&encoded,block_cap.min(4096)),"abbreviated":true});
+                    }
+                }
+                BlockContent::ToolResult { output, .. } => *output = excerpt(output, block_cap),
+            }
+        }
+        let visible = serde_json::to_string(&(&message.role, &blocks))?;
+        if visible.len().saturating_add(1) > prompt_cap.saturating_sub(transcript.len()) {
+            return Ok(None);
+        }
+        transcript.push_str(&visible);
+        transcript.push('\n');
+    }
+    Ok(Some(transcript))
 }
 
 fn excerpt(text: &str, cap: usize) -> String {
@@ -345,6 +399,220 @@ mod tests {
         settings.full_context = Some(false);
         assert_eq!(token_budget(0, &settings, &large), Some(275_000));
         assert_eq!(token_budget(0, &settings, &zen), Some(262_144));
+    }
+
+    #[test]
+    fn reported_output_is_counted_once_and_later_messages_count_as_growth() {
+        let mut messages = vec![InferenceMessage::text(
+            MessageRole::User,
+            "goal".into(),
+            "Produce a detailed answer".into(),
+        )];
+        let request_bytes = input_bytes(&messages, &[]);
+        let response =
+            InferenceMessage::text(MessageRole::Assistant, "answer".into(), "x".repeat(60_000));
+        let usage = ContextUsage::after_response(10_000, Some(20_000), request_bytes, &response);
+        let unknown_output = ContextUsage::after_response(10_000, None, request_bytes, &response);
+        messages.push(response);
+        assert_eq!(
+            estimated_tokens(input_bytes(&messages, &[]), Some(usage)),
+            30_000
+        );
+        assert!(!needs_compaction(
+            &messages,
+            &[],
+            Some(usage),
+            40_000,
+            Some(4096)
+        ));
+        assert!(estimated_tokens(input_bytes(&messages, &[]), Some(unknown_output)) >= 30_000);
+        messages.push(InferenceMessage::text(
+            MessageRole::User,
+            "next".into(),
+            "x".repeat(30_000),
+        ));
+        assert!(needs_compaction(
+            &messages,
+            &[],
+            Some(usage),
+            40_000,
+            Some(4096)
+        ));
+    }
+
+    #[test]
+    fn smaller_context_summary_survives_low_reported_usage_after_context_stop() {
+        let mut messages = vec![InferenceMessage::text(
+            MessageRole::User,
+            "goal".into(),
+            "Continue fixing the project".into(),
+        )];
+        let request_bytes = input_bytes(&messages, &[]);
+        let response = InferenceMessage::text(
+            MessageRole::Assistant,
+            "partial".into(),
+            "Recorded result. ".to_owned() + &"r".repeat(1800),
+        );
+        let usage = ContextUsage::after_response(42, Some(10), request_bytes, &response);
+        messages.push(response);
+        messages.push(super::super::output_limit::context_continuation_prompt(
+            "request",
+        ));
+        let compacted = plan(&messages, 8192, false, true).unwrap().finish(
+            "summary",
+            "Preserve the user's project goal and constraints; recorded steps completed; continue the latest instruction.".into(),
+        );
+        assert!(
+            estimated_tokens(input_bytes(&compacted, &[]), None)
+                >= estimated_tokens(input_bytes(&messages, &[]), Some(usage))
+        );
+        assert!(is_reduced(&messages, &compacted, Some(usage)));
+    }
+
+    #[test]
+    fn context_reduction_handles_dense_reasoning_and_rejects_oversized_summaries() {
+        let messages = vec![
+            InferenceMessage::text(
+                MessageRole::User,
+                "goal".into(),
+                "Preserve the project goal".into(),
+            ),
+            InferenceMessage::text(
+                MessageRole::Assistant,
+                "reasoning-result".into(),
+                "Completed a step".into(),
+            ),
+        ];
+        let compacted = plan(&messages, 8192, false, true).unwrap().finish(
+            "summary",
+            "Dense completed reasoning established the next steps; preserve them and continue the project goal.".into(),
+        );
+        assert!(input_bytes(&compacted, &[]) > input_bytes(&messages, &[]));
+        assert!(!is_reduced(&messages, &compacted, None));
+        assert!(is_reduced(
+            &messages,
+            &compacted,
+            Some(ContextUsage {
+                input_tokens: 270_000,
+                output_tokens: Some(5000),
+                input_bytes: input_bytes(&messages, &[]),
+            })
+        ));
+    }
+
+    #[test]
+    fn oversized_tool_exchange_never_omits_later_result_metadata() {
+        let mut messages = vec![InferenceMessage::text(
+            MessageRole::User,
+            "goal".into(),
+            "Check every command's outcome before continuing".into(),
+        )];
+        messages.push(InferenceMessage {
+            role: MessageRole::Assistant,
+            continuation: None,
+            blocks: (0..16)
+                .map(|index| ContentBlock {
+                    id: format!("call-block-{index}"),
+                    content: BlockContent::ToolCall {
+                        call_id: format!("call-{index}"),
+                        provider_call_id: format!("provider-call-{index}"),
+                        name: "bash".into(),
+                        arguments: serde_json::json!({"command":"x".repeat(30_000)}),
+                    },
+                })
+                .collect(),
+        });
+        for index in 0..16 {
+            messages.push(InferenceMessage {
+                role: MessageRole::Tool,
+                continuation: None,
+                blocks: vec![ContentBlock {
+                    id: format!("result-block-{index}"),
+                    content: BlockContent::ToolResult {
+                        call_id: format!("call-{index}"),
+                        provider_call_id: format!("provider-call-{index}"),
+                        is_error: index == 15,
+                        output: format!("{} final outcome {index}", "x".repeat(30_000)),
+                        artifact_ids: vec![format!("artifact-{index}")],
+                        effects_unknown: index == 15,
+                    },
+                }],
+            });
+        }
+        let plan = plan(&messages, 8192, false, true).unwrap();
+        let transcript = plan.prompt[0].visible_text();
+        assert!(
+            transcript.contains("artifact-15"),
+            "the last tool result was discarded"
+        );
+        assert!(transcript.contains("\"effects_unknown\":true"));
+        assert!(transcript.contains("final outcome 15"));
+        let (_, transcript_data) = transcript.split_once("\n\n").unwrap();
+        assert!(transcript_data.len() <= 16_384);
+        assert_eq!(transcript_data.lines().count(), messages.len());
+        for line in transcript_data.lines() {
+            serde_json::from_str::<serde_json::Value>(line).unwrap();
+        }
+        assert_eq!(plan.retained.len(), 1);
+    }
+
+    #[test]
+    fn oversized_tool_metadata_cannot_be_silently_removed() {
+        let calls: Vec<_> = (0..16)
+            .map(|index| ContentBlock {
+                id: format!("call-block-{index}"),
+                content: BlockContent::ToolCall {
+                    call_id: format!("{}{index}", "c".repeat(240)),
+                    provider_call_id: format!("{}{index}", "p".repeat(240)),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command":"inspect"}),
+                },
+            })
+            .collect();
+        let results: Vec<_> = calls
+            .iter()
+            .map(|block| {
+                let BlockContent::ToolCall {
+                    call_id,
+                    provider_call_id,
+                    ..
+                } = &block.content
+                else {
+                    unreachable!()
+                };
+                InferenceMessage {
+                    role: MessageRole::Tool,
+                    continuation: None,
+                    blocks: vec![ContentBlock {
+                        id: format!("{call_id}:result"),
+                        content: BlockContent::ToolResult {
+                            call_id: call_id.clone(),
+                            provider_call_id: provider_call_id.clone(),
+                            is_error: true,
+                            output: "Interrupted after launch; inspect effects before continuing"
+                                .into(),
+                            artifact_ids: vec!["a".repeat(64)],
+                            effects_unknown: true,
+                        },
+                    }],
+                }
+            })
+            .collect();
+        let mut messages = vec![
+            InferenceMessage::text(
+                MessageRole::User,
+                "goal".into(),
+                "Inspect the workspace".into(),
+            ),
+            InferenceMessage {
+                role: MessageRole::Assistant,
+                continuation: None,
+                blocks: calls,
+            },
+        ];
+        messages.extend(results);
+        assert!(safe_boundary(&messages, messages.len()));
+        assert!(plan(&messages, 4096, false, true).is_none());
     }
 
     #[test]

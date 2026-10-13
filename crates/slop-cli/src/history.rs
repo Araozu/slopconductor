@@ -1,4 +1,4 @@
-use slop_client::DaemonClient;
+use slop_client::{ClientError, DaemonClient};
 use slop_protocol::chat::MessageResponse;
 
 use crate::Result;
@@ -35,15 +35,9 @@ pub async fn find_message(
     session_id: &str,
     id: &str,
 ) -> Result<Option<MessageResponse>> {
-    let mut after = None;
-    loop {
-        let page = client.history(session_id, after, Some(100)).await?;
-        if let Some(message) = page.items.into_iter().find(|message| message.id == id) {
-            return Ok(Some(message));
-        }
-        match page.next_after {
-            Some(next) => after = Some(next),
-            None => return Ok(None),
-        }
+    match client.message(id).await {
+        Ok(message) if message.session_id == session_id => Ok(Some(message)),
+        Ok(_) | Err(ClientError::Api { status: 404, .. }) => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }

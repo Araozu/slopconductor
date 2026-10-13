@@ -218,6 +218,10 @@ Event replay reads committed facts after the cursor. Streaming subscribers have
 bounded buffering and can reconnect using the last durable sequence. Losing
 provisional deltas does not lose committed messages or stop execution. Clients
 reconcile display against canonical message records when a turn ends.
+CLI turn following uses a finite replay when the turn is already terminal,
+including when the reconnect cursor has passed its completion event. Canonical
+replies are fetched by message ID without paging through the full conversation;
+deleted replies remain absent.
 
 Every message stores and exposes `provider` and `model`. User messages, including
 applied steering, record the turn's selected provider/model. Assistant messages

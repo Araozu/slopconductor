@@ -1,10 +1,13 @@
 """Check CLI commands against the existing offline chat lifecycle fixture."""
 
+import http.server
 import json
 import os
 import signal
 import subprocess
+import threading
 import time
+import urllib.parse
 
 
 def check_cli_commands(cli_binary, endpoint, token_path, env, root,
@@ -42,6 +45,8 @@ def check_cli_commands(cli_binary, endpoint, token_path, env, root,
     turn, = invoke(["turn", "show", turn_id])
     if session["id"] != session_id or turn["status"] != "completed":
         raise RuntimeError(f"CLI inspection did not report the completed turn: {session} {turn}")
+    check_completed_turn_cursor(cli_binary, token_path, env, message_receipt,
+                                turn, second_page["items"][0], session["last_event_sequence"])
 
     # Reuse an accepted command, so all prompt sources and turn following can
     # be checked without dispatching additional provider requests.
@@ -86,6 +91,83 @@ def check_cli_commands(cli_binary, endpoint, token_path, env, root,
 
     if os.name == "posix":
         check_session_follow(prefix, env, root, session_id, message_receipt, reply)
+
+
+def check_completed_turn_cursor(cli_binary, token_path, env, receipt, turn,
+                                message, final_sequence):
+    """A cursor already past completion must finish without scanning history."""
+    seen = []
+    receipt = {**receipt, "event_sequence": final_sequence}
+    message_available = True
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def respond(self, status, value):
+            body = json.dumps(value).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.respond(202, receipt)
+
+        def do_GET(self):
+            target = urllib.parse.urlsplit(self.path)
+            if target.path == "/v1/health":
+                self.respond(200, {"service": "slopconductor-daemon", "version": "test",
+                                   "api_version": 1, "capabilities": []})
+                return
+            seen.append(self.path)
+            if target.path == f'/v1/turns/{turn["id"]}':
+                self.respond(200, turn)
+            elif target.path == f'/v1/messages/{message["id"]}':
+                if message_available:
+                    self.respond(200, message)
+                else:
+                    self.respond(404, {"code": "not_found", "message": "Message was deleted."})
+            elif target.path.endswith("/events"):
+                query = urllib.parse.parse_qs(target.query)
+                if query.get("follow") != ["false"]:
+                    self.respond(400, {"code": "unexpected_follow", "message": "Turn is terminal."})
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+            else:
+                self.respond(500, {"code": "unexpected_history_scan", "message": self.path})
+
+        def log_message(self, *_):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for message_available in (True, False):
+            seen.clear()
+            result = subprocess.run([
+                str(cli_binary), "--daemon", f"http://127.0.0.1:{server.server_port}",
+                "--token-file", str(token_path), "--json", "session", "send",
+                receipt["session_id"], "--text", "retry", "--command-id", receipt["command_id"],
+            ], env=env, check=True, capture_output=True, text=True, timeout=5)
+            frames = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            terminal = next(value for value in frames if value.get("type") == "terminal")
+            expected_message = message if message_available else None
+            if (terminal["message"] != expected_message
+                    or terminal["turn"]["id"] != turn["id"]
+                    or terminal["turn"]["status"] != "completed"):
+                raise RuntimeError(f"CLI missed completed/deleted canonical message: {frames}")
+            if not any("follow=false" in path for path in seen):
+                raise RuntimeError(f"CLI opened a live stream after terminal cursor: {seen}")
+            if any("/messages?" in path for path in seen):
+                raise RuntimeError(f"CLI scanned conversation history to fetch one reply: {seen}")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def check_session_follow(prefix, env, root, session_id, message_receipt, reply):

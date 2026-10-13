@@ -41,9 +41,9 @@ class ToolFixture:
                     self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
                     self.wfile.flush()
 
-                if prompt in {"workflow", "workflow incomplete", "cancel shell", "crash shell", "malformed", "limited", "restricted"} and not completed_tools:
+                if prompt in {"workflow", "workflow incomplete", "large read", "cancel shell", "crash shell", "malformed", "limited", "restricted"} and not completed_tools:
                     if prompt in {"workflow", "workflow incomplete"}:
-                        command = "if [ -n \"${OPENCODE_GO_API_KEY+x}\" ]; then exit 9; fi; printf '%024000d' 0"
+                        command = "if [ -n \"${OPENCODE_GO_API_KEY+x}\" ]; then exit 9; fi; printf '%024000d' 0; printf 'stderr remains visible' >&2"
                         calls = [
                             ("read", {"path": "file.txt", "offset": 2, "limit": 1}),
                             ("write", {"path": "nested/new.txt", "content": "created"}),
@@ -51,6 +51,8 @@ class ToolFixture:
                             ("edit", {"path": "file.txt", "edits": [{"oldText": "before", "newText": "after"}]}),
                             ("bash", {"command": command, "timeout": 5}),
                         ]
+                    elif prompt == "large read":
+                        calls = [("read", {"path": "large.txt"})]
                     elif prompt in {"cancel shell", "crash shell"}:
                         seconds = 25 if prompt == "cancel shell" else 2
                         # Native Python PIDs work on Windows too, where Bash's $$
@@ -178,6 +180,9 @@ def check_tools(daemon_binary, cli_binary, root):
         assert len(wire_tools) == 5
         read_result = json.loads(json.loads(wire_tools[0]["content"])["output"])
         assert read_result["text"] == "before" and read_result["next_offset"] == 3, read_result
+        bash_result = json.loads(json.loads(wire_tools[4]["content"])["output"])
+        assert bash_result["exit_code"] == 0 and bash_result["stderr"] == "stderr remains visible", bash_result
+        assert bash_result["stdout_truncated"] and not bash_result["stderr_truncated"], bash_result
         assert {tool["function"]["name"] for tool in wire["tools"]} == {"read", "write", "edit", "bash"}
         artifact = tools[4]["artifact_ids"][0]
         metadata = get(f"/v1/artifacts/{artifact}")
@@ -192,6 +197,17 @@ def check_tools(daemon_binary, cli_binary, root):
         count = len(fixture.snapshot())
         cli("chat", "--workspace", str(workspace), "--prompt", "workflow", "--command-id", "tool-cli", "--detach")
         assert len(fixture.snapshot()) == count
+        # A source file larger than the shell preview cap must reach the model
+        # intact, with a parseable continuation offset and no phantom last line.
+        large_text = "\n".join(f"line {index}: " + "🦀" * 40 for index in range(256))
+        (workspace / "large.txt").write_text(large_text + "\n", encoding="utf-8", newline="\n")
+        large_session = create("create-large-read")
+        large_receipt, _ = send(large_session, "large read", "send-large-read")
+        wait_turn(endpoint, token, large_receipt["turn_id"], {"completed"})
+        large_wire = next(m for m in fixture.snapshot()[-1]["messages"] if m["role"] == "tool")
+        large_read = json.loads(json.loads(large_wire["content"])["output"])
+        assert large_read["text"] == large_text, large_read
+        assert large_read["total_lines"] == 256 and large_read["next_offset"] is None, large_read
         result = cli("chat", "--workspace", str(workspace), "--tool", "read", "--prompt", "restricted", "--command-id", "read-only-cli")
         frames_restricted = [json.loads(line) for line in result.stdout.splitlines()]
         restricted_receipt = next(f["receipt"] for f in frames_restricted if f["type"] == "receipt")
