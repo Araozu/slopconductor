@@ -379,7 +379,7 @@ async fn bash_streams_characters_split_across_pipe_reads() {
 async fn bash_leader_exit_ends_background_lifetime_without_waiting_for_pipe_eof() {
     let root = tempfile::tempdir().unwrap();
     let service = ToolService::new(root.path().join("artifacts")).unwrap();
-    let mut policy = policy(root.path());
+    let mut policy = policy(root.path()).canonicalize().unwrap();
     policy.shell_timeout_ms = 30_000;
     let (_sender, cancel) = tokio::sync::watch::channel(false);
     let result = tokio::time::timeout(
