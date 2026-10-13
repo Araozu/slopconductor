@@ -171,10 +171,21 @@ pub(crate) async fn execute<R: ChatRepository>(
     let mut ordinal = work.next_request_ordinal.max(1);
     let mut output_limits_seen = work.output_limits_seen;
     let mut context_usage = work.context_usage;
-    let mut context_budget = if work.context_token_budget == 0 {
-        context::DEFAULT_TOKEN_BUDGET
-    } else {
-        work.context_token_budget
+    let Some(mut context_budget) = context::token_budget(
+        work.context_token_budget,
+        &work.settings,
+        &provider.capabilities(model.model()),
+    ) else {
+        return stop(
+            repository.as_ref(),
+            &work.turn_id,
+            failed(
+                "unsupported_capability",
+                "The model's full context window is unknown.",
+            ),
+            total,
+        )
+        .await;
     };
     let mut compactions_seen = work.compactions_seen;
     let mut force_compaction = work.context_overflow;

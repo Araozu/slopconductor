@@ -380,6 +380,7 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
                 settings: Some(GenerationSettings {
                     max_output_tokens: Some(512),
                     reasoning_effort: None,
+                    full_context: None,
                 }),
                 ..Default::default()
             },
@@ -438,6 +439,7 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
                 settings: Some(GenerationSettings {
                     max_output_tokens: None,
                     reasoning_effort: Some("high".into()),
+                    full_context: None,
                 }),
                 ..Default::default()
             },
@@ -940,6 +942,7 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
                 settings: GenerationSettings {
                     max_output_tokens: Some(1024),
                     reasoning_effort: None,
+                    full_context: None,
                 },
             },
         )
@@ -1542,7 +1545,7 @@ async fn oversized_context_is_claimed_as_a_bounded_compaction_page() {
         .create_session(create_request("context-create", None))
         .await
         .expect("create");
-    for index in 0..128 {
+    for index in 0..18 {
         let sent = client
             .send_message(
                 &created.session_id,
@@ -1566,7 +1569,7 @@ async fn oversized_context_is_claimed_as_a_bounded_compaction_page() {
             .finish_chat_turn(
                 &work.turn_id,
                 slop_runtime::chat::ChatOutcome {
-                    text: "answer".into(),
+                    text: "a".repeat(MAX_OUTPUT_BYTES),
                     resolved_model: None,
                     usage: slop_runtime::providers::Usage::default(),
                     status: slop_runtime::chat::ChatStatus::Completed,
@@ -2108,7 +2111,7 @@ async fn message_pages_bound_escaped_json_and_resume_without_loss() {
                 rusqlite::params![turn_id,created.session_id,index,user_id],
             )
             .expect("fixture turn");
-        let escaped_text = "\u{0001}".repeat(MAX_CONTEXT_BYTES);
+        let escaped_text = "\u{0001}".repeat(MAX_OUTPUT_BYTES);
         conn.execute(
                 "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status) VALUES(?1,?2,?3,?4,'assistant',?5,'completed')",
                 rusqlite::params![assistant_id,created.session_id,turn_id,index*2+1,escaped_text],
@@ -2134,7 +2137,7 @@ async fn message_pages_bound_escaped_json_and_resume_without_loss() {
     assert_eq!(second.next_after, None);
     assert!(serde_json::to_vec(&second).expect("encode page").len() <= MAX_MESSAGE_PAGE_BYTES);
     assert_eq!(first.items[0].text, second.items[0].text);
-    assert_eq!(first.items[0].text.len(), MAX_CONTEXT_BYTES);
+    assert_eq!(first.items[0].text.len(), MAX_OUTPUT_BYTES);
     store.shutdown().await.expect("shutdown");
 }
 

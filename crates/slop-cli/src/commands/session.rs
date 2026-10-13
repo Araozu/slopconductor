@@ -73,6 +73,7 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
             model,
             effort,
             max_output_tokens,
+            full_context,
             delivery,
         } => {
             let text = prompt_value(text, prompt_file).await?;
@@ -85,10 +86,14 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
                     "immediate" => slop_protocol::chat::DeliveryMode::Immediate,
                     _ => unreachable!("CLI validates delivery mode"),
                 }),
-                settings: if effort.is_some() || max_output_tokens.is_some() {
+                settings: if effort.is_some()
+                    || max_output_tokens.is_some()
+                    || full_context.is_some()
+                {
                     Some(slop_protocol::execution::GenerationSettings {
                         max_output_tokens,
                         reasoning_effort: effort,
+                        full_context,
                     })
                 } else {
                     None

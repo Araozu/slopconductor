@@ -7,8 +7,12 @@ pub fn capabilities(provider: &dyn Provider, model: &str) -> ModelCapabilities {
     }
     // Gateway adapters implement all three wire formats. Gateway-specific
     // reasoning settings remain unadvertised until verified for each model.
+    let (context_window_tokens, max_input_tokens) =
+        super::super::context_limits::limits(provider.id(), model);
     ModelCapabilities {
         tools: true,
         reasoning_efforts: Vec::new(),
+        context_window_tokens,
+        max_input_tokens,
     }
 }

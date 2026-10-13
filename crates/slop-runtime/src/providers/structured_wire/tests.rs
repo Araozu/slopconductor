@@ -22,6 +22,7 @@ fn request(wire: WireProtocol) -> InferenceRequest {
         settings: GenerationSettings {
             max_output_tokens: Some(512),
             reasoning_effort: None,
+            full_context: None,
         },
         messages: vec![InferenceMessage::text(
             MessageRole::User,

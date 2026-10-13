@@ -23,6 +23,7 @@ mod wire;
 
 mod wire_protocol;
 pub use wire_protocol::WireProtocol;
+mod context_limits;
 mod provider_model;
 pub use provider_model::ProviderModel;
 mod provider_error;

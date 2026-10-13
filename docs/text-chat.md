@@ -125,7 +125,9 @@ configured cap. `default_model`,
 set in the daemon TOML configuration; session defaults and accepted per-turn overrides are frozen
 for execution. The execution
 queue allows 32 queued turns per session and 1,024 globally. Provider context is
-limited to 256 messages and 1 MiB. Automatic compaction keeps the inference view
+limited to 8,192 messages and 16 MiB. The default cost cap is 275,000 tokens;
+`settings.full_context: true` / `--full-context` opts in to the model's verified
+full window. Automatic compaction keeps the inference view
 within these bounds while retaining the full transcript. Historical sessions
 already beyond the cap are summarized in bounded pages instead of rejected.
 An individual input that cannot be reduced still records `context_limit`.

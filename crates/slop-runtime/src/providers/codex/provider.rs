@@ -13,9 +13,13 @@ pub fn model_capabilities(model: &str) -> ModelCapabilities {
         "gpt-6.1-sol" | "gpt-6-astra" => &["low", "medium", "high", "xhigh", "max"],
         _ => &[],
     };
+    let (context_window_tokens, max_input_tokens) =
+        super::super::context_limits::limits(ProviderId::Codex, model);
     ModelCapabilities {
         tools: !efforts.is_empty(),
         reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
+        context_window_tokens,
+        max_input_tokens,
     }
 }
 

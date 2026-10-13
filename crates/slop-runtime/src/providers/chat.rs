@@ -64,9 +64,9 @@ impl ChatRequest {
     pub const MAX_TOKENS_LIMIT: u32 = 65_536;
     /// Cap on turns per request so one oversized context cannot exhaust the
     /// shared daemon's memory.
-    pub const MAX_MESSAGES: usize = 256;
+    pub const MAX_MESSAGES: usize = 8192;
     /// Cap on aggregate UTF-8 input bytes per request.
-    pub const MAX_REQUEST_BYTES: usize = 1_000_000;
+    pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
     pub fn validate(&self) -> Result<(), ProviderError> {
         if !is_valid_model_id(&self.model) {

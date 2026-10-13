@@ -151,9 +151,9 @@ pub fn load_with_environment_and_name(
     let context_token_budget = file
         .context_token_budget
         .unwrap_or(slop_runtime::agent::context::DEFAULT_TOKEN_BUDGET);
-    if !(8_192..=1_000_000).contains(&context_token_budget) {
+    if !(8_192..=2_000_000).contains(&context_token_budget) {
         return Err(ConfigError::Invalid(
-            "context_token_budget must be between 8192 and 1000000".into(),
+            "context_token_budget must be between 8192 and 2000000".into(),
         ));
     }
     if !(1..=64).contains(&execution_concurrency) {

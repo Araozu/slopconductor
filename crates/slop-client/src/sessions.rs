@@ -27,6 +27,13 @@ impl DaemonClient {
         if request.settings.is_some() {
             self.require_feature("per-turn-settings").await?;
         }
+        if request
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.full_context.is_some())
+        {
+            self.require_feature("full-context").await?;
+        }
         self.require_feature("persistent-conversations").await?;
         self.post_json(self.endpoint.join("/v1/sessions")?, request)
             .await
@@ -70,6 +77,13 @@ impl DaemonClient {
     ) -> Result<CommandReceipt, ClientError> {
         if request.model.is_some() || request.settings.is_some() {
             self.require_feature("per-turn-settings").await?;
+        }
+        if request
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.full_context.is_some())
+        {
+            self.require_feature("full-context").await?;
         }
         if request.delivery.is_some() {
             self.require_feature("execution-steering").await?;

@@ -40,16 +40,18 @@ def check_context(daemon_binary, root, start_daemon, stop_daemon, isolated_env):
             if self.path.endswith("/messages"):
                 usage = {"input_tokens": 42, "output_tokens": 10}
                 if last == "cached-usage":
-                    usage.update(cache_read_input_tokens=30000, cache_creation_input_tokens=1000)
+                    usage.update(cache_read_input_tokens=300000, cache_creation_input_tokens=1000)
                 body = {"model": payload["model"], "stop_reason": "end_turn", "content": [{"type": "text", "text": reply}], "usage": usage}
                 if last == "context-stop" and first:
                     body["stop_reason"] = "model_context_window_exceeded"
                     body["content"].append({"type": "tool_use", "id": "truncated-call", "name": "write", "input": "unfinished"})
             else:
-                usage = {"prompt_tokens": 29000 if last == "reported-usage" else 100, "completion_tokens": 10}
+                usage = {"prompt_tokens": 270000 if last == "reported-usage" else 100, "completion_tokens": 10}
                 body = {"model": payload["model"], "choices": [{"finish_reason": "stop", "message": {"content": reply}}], "usage": usage}
                 if last == "bad-summary":
-                    body["usage"]["prompt_tokens"] = 29000
+                    body["usage"]["prompt_tokens"] = 270000
+                if last.startswith("long-turn-"):
+                    body.pop("usage")  # Exercise the unreported-usage fallback.
                 if last == "output-once" and first:
                     body["choices"][0]["finish_reason"] = "length"
                 original = next(text(m["content"]) for m in reversed(messages) if m["role"] == "user" and not text(m["content"]).startswith("Your previous response reached its output-token limit."))
@@ -104,7 +106,7 @@ def check_context(daemon_binary, root, start_daemon, stop_daemon, isolated_env):
         def records(turn):
             return api("GET", f"/v1/turns/{turn['id']}/requests")["items"]
 
-        for model, prompt, tokens in [("glm-5.3-flash", "reported-usage", 29000), ("claude-haiku-5-5", "cached-usage", 31042)]:
+        for model, prompt, tokens in [("glm-5.3-flash", "reported-usage", 270000), ("claude-haiku-5-5", "cached-usage", 301042)]:
             session = create(model)
             first = send(session, prompt)
             assert first["usage"]["input_tokens"] == tokens, (model, first)
@@ -113,15 +115,17 @@ def check_context(daemon_binary, root, start_daemon, stop_daemon, isolated_env):
             assert second["usage"]["input_tokens"] == (200 if model == "glm-5.3-flash" else 84)
 
         session = create()
-        for i in range(140):
-            send(session, f"long-turn-{i} Preserve project goal. " + "q" * 1200)
+        for i in range(300):
+            turn = send(session, f"long-turn-{i} Preserve project goal. " + "q" * 1200)
+            if i < 200:
+                assert not any(r["compaction"] for r in records(turn))
         # History remains complete and paginated; internal summaries stay out.
         page = api("GET", f"/v1/sessions/{session}/messages?limit=200")
         history = page["items"]
         while page["next_after"] is not None:
             page = api("GET", f"/v1/sessions/{session}/messages?limit=200&after={page['next_after']}")
             history.extend(page["items"])
-        assert len(history) == 280
+        assert len(history) == 600
         assert not any("Working memory" in m["text"] or "Earlier work:" in m["text"] for m in history)
         with lock:
             before_restart = len(calls)
@@ -140,6 +144,8 @@ def check_context(daemon_binary, root, start_daemon, stop_daemon, isolated_env):
         daemon = log = None
         with sqlite3.connect(data / "state.sqlite3") as db:
             db.execute("DELETE FROM session_context WHERE session_id=?", (session,))
+            # Pre-compaction releases had neither a checkpoint nor byte anchors.
+            db.execute("UPDATE model_requests SET context='{}' WHERE turn_id IN(SELECT id FROM turns WHERE session_id=?)", (session,))
         daemon, endpoint, log = start_daemon(daemon_binary, root / "historical", data_dir=data, env=env)
         repaired = send(session, "after-historical-overflow")
         assert any(r["compaction"] for r in records(repaired))

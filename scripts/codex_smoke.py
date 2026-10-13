@@ -121,7 +121,7 @@ class CodexFixture:
                         for index, proposal in enumerate(calls, 2):
                             emit({"type": "response.function_call_arguments.delta", "output_index": index, "delta": proposal["arguments"]})
                     response = {"status": status, "model": payload["model"], "output": output,
-                                "usage": {"input_tokens": 29000 if prompt == "reported-usage" else 7, "output_tokens": 29000 if prompt == "reported-output" else 3}}
+                                "usage": {"input_tokens": {"reported-usage":270000, "reported-output":200000, "full-window-limit":1045000}.get(prompt, 7), "output_tokens": 70000 if prompt == "reported-output" else 3}}
                     if status == "incomplete":
                         response["incomplete_details"] = {"reason": "max_output_tokens"}
                     emit({"type": "response." + status, "response": response})
@@ -238,6 +238,7 @@ def check_codex(daemon_binary, cli_binary, root):
         assert len(catalog["models"]) == 2 and catalog["models"][0]["ready"] and not catalog["models"][1]["ready"]
         assert catalog["models"][0]["capabilities"]["tools"]
         assert catalog["models"][0]["capabilities"]["reasoning_efforts"] == ["low", "medium", "high", "xhigh", "max"]
+        assert catalog["models"][0]["capabilities"]["context_window_tokens"] == 1050000
         # A Go conversation can switch to subscription Codex's Responses wire
         # after tool execution, without inheriting Go's unsupported output cap.
         switch_workspace = root / "switch-workspace"
@@ -272,6 +273,20 @@ def check_codex(daemon_binary, cli_binary, root):
             context_requests = api(f"/v1/turns/{continued['turn_id']}/requests")["items"]
             assert any(r["compaction"] and r["effective_settings"]["max_output_tokens"] is None for r in context_requests)
             assert "private-hidden-reasoning-fixture" not in json.dumps(fixture.snapshot()[-1][1])
+        full = chat("reported-usage", "codex-full-start", "--full-context")
+        assert api(f"/v1/sessions/{full['session_id']}")["settings"]["full_context"] is True
+        continued = chat("continue full context", "codex-full-continue", "--session", full["session_id"], "--effort", "high")
+        full_requests = api(f"/v1/turns/{continued['turn_id']}/requests")["items"]
+        assert len(full_requests) == 1 and not full_requests[0]["compaction"]
+        assert full_requests[0]["effective_settings"]["full_context"] is True
+        restored = chat("reported-usage", "codex-full-reset-start", "--full-context")
+        limited = chat("restore the cost cap", "codex-full-reset", "--session", restored["session_id"], "--full-context=false")
+        reset_requests = api(f"/v1/turns/{limited['turn_id']}/requests")["items"]
+        assert any(r["compaction"] for r in reset_requests)
+        assert reset_requests[-1]["effective_settings"]["full_context"] is False
+        near_limit = chat("full-window-limit", "codex-full-limit-start", "--full-context")
+        recovered = chat("continue at the full window", "codex-full-limit-continue", "--session", near_limit["session_id"])
+        assert any(r["compaction"] for r in api(f"/v1/turns/{recovered['turn_id']}/requests")["items"])
         receipt = chat("workflow", "codex-workflow", "--workspace", str(workspace), "--effort", "high")
         state = api(f"/v1/turns/{receipt['turn_id']}")
         assert state["status"] == "completed" and state["usage"]["total_tokens"] == 20

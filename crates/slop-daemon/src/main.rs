@@ -230,6 +230,7 @@ async fn health() -> Json<HealthResponse> {
             "provider-accounts".to_owned(),
             "structured-messages".to_owned(),
             "context-compaction".to_owned(),
+            "full-context".to_owned(),
             "tools".to_owned(),
             "per-turn-settings".to_owned(),
             "execution-steering".to_owned(),

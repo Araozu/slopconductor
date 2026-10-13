@@ -18,10 +18,14 @@ pub type ProviderFuture<'a, T> =
 pub trait ProviderClient: Send + Sync {
     fn descriptor(&self) -> &dyn Provider;
 
-    fn capabilities(&self, _model: &str) -> inference::ModelCapabilities {
+    fn capabilities(&self, model: &str) -> inference::ModelCapabilities {
+        let (context_window_tokens, max_input_tokens) =
+            super::context_limits::limits(self.descriptor().id(), model);
         inference::ModelCapabilities {
             tools: false,
             reasoning_efforts: Vec::new(),
+            context_window_tokens,
+            max_input_tokens,
         }
     }
 

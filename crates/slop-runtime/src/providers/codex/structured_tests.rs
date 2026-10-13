@@ -22,6 +22,7 @@ fn request() -> InferenceRequest {
         settings: GenerationSettings {
             max_output_tokens: None,
             reasoning_effort: Some("high".into()),
+            full_context: None,
         },
         messages: vec![
             InferenceMessage::text(
