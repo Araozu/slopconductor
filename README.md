@@ -58,15 +58,20 @@ Implemented:
 - Separately authorized native child creation, inspection, waits, results, and
   cancellation with isolated workspaces and restart-safe links. See
   [child tasks](docs/child-tasks.md).
+- Scoped daemon peering for inspecting and controlling existing sessions over
+  Tailscale HTTPS, with explicit owner registration, read/control grants, and
+  revocation. See [connection setup](#connect-over-tailscale).
 
-Planned: more daemon provider options, remote
-control, additional clients, browser tools, and session migration. See the
+Planned: more daemon provider options, aggregate views, history mirroring,
+additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
 
 The [recommended next steps](docs/roadmap.md#recommended-next-delivery-order) are
-Windows and capacity validation, then trusted remote CLI access. Scheduling/batch
-controls and child tasks now have an implemented local slice; the daemon accepts
-loopback connections only.
+Windows and capacity validation, plus deployed Tailscale validation.
+Scheduling/batch controls, child tasks, and scoped daemon peering have
+implemented local slices.
+Both daemon listeners bind to loopback; Tailscale Serve exposes the peer listener
+over private HTTPS.
 
 ## Run local text chat
 
@@ -193,6 +198,98 @@ The bootstrap accepts loopback listeners only. The optional
 [peer listener and gateway](docs/daemon-peering.md) add scoped inspection/control
 of existing owner sessions over explicitly configured private HTTPS forwarding.
 Deployed Tailscale validation remains open.
+
+## Connect over Tailscale
+
+Assume both machines are already on your tailnet. The **owner** runs the sessions;
+the **connecting machine** runs its own local daemon as a gateway. Connections
+are directional: configure the reverse direction separately if you need it.
+The following Linux shell examples run from the repository on each machine.
+If the binaries are on your PATH, replace `cargo run -p slop-daemon --` with
+`slopd` and `cargo run --` with `slop`. On Windows, use credential paths beneath
+`%LOCALAPPDATA%` and your shell's equivalent commands.
+
+### On the owner
+
+Start the daemon with its separate peer listener, or restart your existing daemon
+with this flag:
+
+```sh
+cargo run -p slop-daemon -- --peer-listen 127.0.0.1:7332
+```
+
+In another terminal, expose port **7332** through
+[Tailscale Serve](https://tailscale.com/docs/reference/examples/serve#expose-a-development-server-to-your-tailnet).
+Keep the administrator API on port 7331 local:
+
+```sh
+tailscale serve --bg http://127.0.0.1:7332
+```
+
+Save the HTTPS origin printed by Serve, such as `https://home.example.ts.net`.
+Remote peer registration requires HTTPS. Create a grant for the connecting
+machine:
+
+```sh
+mkdir -p ~/.config/slopconductor
+cargo run -- peer grant --label work --scope control \
+  --token-output ~/.config/slopconductor/work-peer-token \
+  --command-id work-grant-1
+```
+
+Save the owner node ID printed by the grant command. Transfer `work-peer-token`
+privately to the connecting machine; the file contains the peer credential.
+Use `--scope read` for inspection only. A control grant permits sending messages
+and controlling turns across all public conversations on this owner, including
+tool execution allowed by each session's existing policy.
+
+### On the connecting machine
+
+Start your local daemon if it is not already running. It needs no peer listener
+or provider credentials to inspect and control the owner:
+
+```sh
+cargo run -p slop-daemon
+```
+
+In another terminal, put the transferred token at
+`~/.config/slopconductor/work-peer-token` (create the directory if needed), then
+register the owner. Replace the example HTTPS origin and `OWNER_NODE_ID` with
+the values saved above:
+
+```sh
+chmod 600 ~/.config/slopconductor/work-peer-token
+cargo run -- peer add home --origin https://home.example.ts.net \
+  --owner-node-id OWNER_NODE_ID \
+  --credential-file ~/.config/slopconductor/work-peer-token
+cargo run -- peer probe home
+cargo run -- --peer home session list
+```
+
+Use session IDs from the owner to inspect or steer existing work:
+
+```sh
+cargo run -- --peer home session history SESSION_ID
+cargo run -- --peer home session follow SESSION_ID --after 0
+cargo run -- --peer home session send SESSION_ID --text "Focus on the failing test" \
+  --delivery next-boundary --detach --command-id correction-1
+cargo run -- --peer home turn pause TURN_ID --command-id pause-1
+cargo run -- --peer home turn resume TURN_ID --command-id resume-1
+cargo run -- --peer home turn cancel TURN_ID --command-id cancel-1
+```
+
+Keep `--daemon` and `--token-file` pointed at your local gateway and its local
+administrator credential if you override their defaults; `--peer home` selects
+the remote owner. Ctrl-C while following detaches, and accepted work continues
+on the owner if the client or gateway disconnects.
+
+To revoke access, run `cargo run -- peer revoke work-grant-1` on the owner.
+To remove the local registration, run `cargo run -- peer remove home` on the
+connecting machine. Peering currently operates on existing conversations;
+remote task creation, history mirroring, and aggregate views remain planned.
+See [daemon peering](docs/daemon-peering.md) for configuration, limits, and
+recovery. Offline two-daemon checks pass; deployed two-machine Tailscale
+validation remains open.
 
 ## Build and check
 
