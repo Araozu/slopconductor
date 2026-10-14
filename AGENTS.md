@@ -33,6 +33,27 @@ Clients must not depend on `slop-runtime` or `slop-daemon`. Domain and protocol
 crates must not acquire presentation, networking, or persistence dependencies.
 Do not make generated web assets a prerequisite for compiling the daemon or CLI.
 
+## OpenAPI documentation (utoipa)
+
+The daemon publishes a compile-time OpenAPI document via `utoipa`:
+`GET /api-docs/openapi.json` and interactive Swagger UI at `GET /docs`.
+Source of truth is `crates/slop-daemon/src/api/openapi.rs` (`ApiDoc`).
+
+When you touch the public HTTP API, keep the annotations in sync:
+
+- Derive `utoipa::ToSchema` on every new or changed `slop-protocol`
+  request/response type. `utoipa` is the only presentation-adjacent
+  dependency allowed in `slop-protocol`, solely for schema generation.
+- Annotate every new or changed handler with `#[utoipa::path(...)]`
+  (method, `path = "..."`, `tag`, `security` for authenticated routes,
+  and all `responses` with `body = ...`). See `health`/`node` in
+  `crates/slop-daemon/src/main.rs` for the pattern.
+- Register the handler in `paths(...)` and every new schema in
+  `components(schemas(...))` in `ApiDoc`. Unregistered handlers/types
+  silently disappear from the published document.
+- Run `cargo test -p slop-daemon api::openapi` and manually check
+  `/api-docs/openapi.json` + `/docs` when routes change.
+
 ## Validation
 
 Run `cargo fmt --all -- --check` and Clippy with warnings denied. Run relevant

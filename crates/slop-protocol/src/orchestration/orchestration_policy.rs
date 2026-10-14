@@ -4,7 +4,7 @@ fn default_concurrent_children() -> u32 {
     4
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OrchestrationPolicy {
     /// Maximum concurrently outstanding direct children (queued, active, or paused).

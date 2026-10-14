@@ -1,7 +1,7 @@
 use super::{BatchSpec, BudgetUsage};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct BatchResponse {
     pub id: String,
     pub owner_node_id: String,

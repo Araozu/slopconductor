@@ -1,7 +1,7 @@
 use crate::chat::TurnResponse;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct RunResponse {
     pub id: String,
     pub task_id: String,

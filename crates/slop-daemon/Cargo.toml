@@ -26,6 +26,8 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 toml.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
 
 [lints]
 workspace = true

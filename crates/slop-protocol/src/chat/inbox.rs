@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Shared, daemon-owned conversation organization. Trash is restorable retention.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct SessionInbox {
     pub starred: bool,
     pub archived: bool,
@@ -9,7 +9,7 @@ pub struct SessionInbox {
     pub read_sequence: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSessionInboxRequest {
     pub command_id: String,
@@ -22,7 +22,7 @@ pub struct UpdateSessionInboxRequest {
     pub only_if_unset: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationDraft {
     pub id: String,
@@ -35,7 +35,7 @@ pub struct ConversationDraft {
     pub allowed_tools: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SaveConversationDraftRequest {
     pub draft: ConversationDraft,

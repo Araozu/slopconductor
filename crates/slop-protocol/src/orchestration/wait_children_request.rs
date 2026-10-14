@@ -4,7 +4,7 @@ fn default_mode() -> String {
     "all".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WaitChildrenRequest {
     pub command_id: String,

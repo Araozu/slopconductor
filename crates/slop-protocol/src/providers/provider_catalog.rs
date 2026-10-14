@@ -1,7 +1,7 @@
 use crate::chat::ModelResponse;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProviderCatalog {
     pub provider: String,
     pub auth_mode: String,

@@ -1,7 +1,7 @@
 use super::ChildContext;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct ChildLink {
     pub parent_task_id: String,
     pub parent_run_id: String,

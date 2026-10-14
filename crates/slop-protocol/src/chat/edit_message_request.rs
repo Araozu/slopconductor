@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Replace a user or assistant message in a new fork, discarding its suffix.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct EditMessageRequest {
     pub command_id: String,
     pub text: String,

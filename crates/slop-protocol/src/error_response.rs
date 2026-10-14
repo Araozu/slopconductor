@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Safe structured error returned by public API endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct ErrorResponse {
     pub code: String,
     pub message: String,

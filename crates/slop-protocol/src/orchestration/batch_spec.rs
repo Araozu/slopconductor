@@ -2,7 +2,7 @@ use super::{OperationBudget, OrchestrationPolicy};
 use crate::{execution::GenerationSettings, projects::ProjectWorkspaceRequest};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchSpec {
     pub name: String,

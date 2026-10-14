@@ -5,7 +5,7 @@ fn default_notification() -> String {
     "completion".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateChildRequest {
     pub command_id: String,

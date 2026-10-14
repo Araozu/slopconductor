@@ -23,7 +23,7 @@ use axum::{
 use clap::Parser;
 use config::StartupArgs;
 use slop_protocol::{
-    API_VERSION, ErrorResponse, HEALTH_PATH, HealthResponse, NODE_PATH, SERVICE_NAME,
+    API_VERSION, ErrorResponse, HEALTH_PATH, HealthResponse, NODE_PATH, NodeResponse, SERVICE_NAME,
 };
 use tokio::{task::JoinHandle, time::timeout};
 
@@ -119,6 +119,8 @@ async fn run(args: Args) -> Result<()> {
     // Config validation, exclusive ownership, database initialization,
     // credential publication, runtime startup, and binding complete before
     // the listener begins serving requests.
+    // Docs routes carry no state and merge after `with_state` so Swagger UI
+    // and openapi.json stay unauthenticated without touching API auth layers.
     let app = Router::new()
         .route(HEALTH_PATH, get(health))
         .route(NODE_PATH, get(node))
@@ -126,7 +128,8 @@ async fn run(args: Args) -> Result<()> {
         .merge(api::providers::router(Arc::clone(&state.token)))
         .merge(api::projects::router(Arc::clone(&state.token)))
         .merge(api::orchestration::router(Arc::clone(&state.token)))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .merge(api::openapi::router());
     eprintln!("Listening on http://{address}");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -215,7 +218,16 @@ fn remaining(deadline: Instant) -> std::time::Duration {
     deadline.saturating_duration_since(Instant::now())
 }
 
-async fn health() -> Json<HealthResponse> {
+/// Anonymous daemon identity and capability advertisement.
+#[utoipa::path(
+    get,
+    path = "/v1/health",
+    tag = "system",
+    responses(
+        (status = 200, description = "Daemon identity and capabilities", body = HealthResponse)
+    )
+)]
+pub(crate) async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         service: SERVICE_NAME.to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -248,7 +260,19 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-async fn node(
+/// Authenticated stable node identity for the selected daemon.
+#[utoipa::path(
+    get,
+    path = "/v1/node",
+    tag = "system",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Stable node identity", body = NodeResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = ErrorResponse),
+        (status = 503, description = "Node storage temporarily unavailable", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn node(
     State(state): State<Arc<api::chat::AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
