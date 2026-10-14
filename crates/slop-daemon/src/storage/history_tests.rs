@@ -227,7 +227,7 @@ async fn deletion_invalidates_summaries_preserves_cursors_and_rejects_busy_or_st
     let turn = last.turn_id.clone().unwrap();
     c.submit(move |db| {
         db.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status) VALUES('summary-request',?1,?2,1,'opencode-go/glm-5.3-flash','{}','{}','completed')", rusqlite::params![turn,last.message_id.unwrap()]).unwrap();
-        db.execute("INSERT INTO session_context(session_id,through_ordinal,messages,request_id) VALUES(?1,2049,?2,'summary-request')", rusqlite::params![session, canonical(&vec![InferenceMessage::text(MessageRole::User,"summary".into(),"remove prompt and remove reply".into())])?]).unwrap();
+        db.execute("INSERT INTO session_context(session_id,through_ordinal,messages,request_id) VALUES(?1,?3,?2,'summary-request')", rusqlite::params![session, canonical(&vec![InferenceMessage::text(MessageRole::User,"summary".into(),"remove prompt and remove reply".into())])?, MESSAGE_ORDER_STRIDE*2+1]).unwrap();
         Ok(())
     }).await.unwrap();
     assert!(matches!(
@@ -270,10 +270,13 @@ async fn deletion_invalidates_summaries_preserves_cursors_and_rejects_busy_or_st
     );
     assert_eq!(
         c.messages(&source, None, 1).await.unwrap().next_after,
-        Some(1024)
+        Some(MESSAGE_ORDER_STRIDE as u64)
     );
     assert_eq!(
-        c.messages(&source, Some(1024), 200).await.unwrap().items,
+        c.messages(&source, Some(MESSAGE_ORDER_STRIDE as u64), 200)
+            .await
+            .unwrap()
+            .items,
         vec![messages[1].clone()]
     );
     assert_eq!(c.session(&source).await.unwrap().spec.prompt, "keep prompt");
@@ -342,12 +345,12 @@ async fn cuts_inside_tool_exchanges_never_replay_unpaired_tools_or_private_conti
         })
         .collect::<Vec<_>>();
     c.submit(move |db| {
-        db.execute("UPDATE messages SET ordinal=1028 WHERE turn_id=?1 AND role='assistant'",[&turn]).unwrap();
-        db.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,continuation,request_id) VALUES('calls',?1,?2,1025,'assistant','','completed',?3,?4,'request')",rusqlite::params![session,turn,canonical(&blocks)?,canonical(&Continuation{scope:"scope".into(),provider:"codex".into(),model:"gpt-6.1-sol".into(),wire:"responses".into(),required:true,items:vec![serde_json::json!({"secret":"opaque"})]})?]).unwrap();
+        db.execute("UPDATE messages SET ordinal=?2 WHERE turn_id=?1 AND role='assistant'",rusqlite::params![turn,MESSAGE_ORDER_STRIDE+4]).unwrap();
+        db.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,continuation,request_id) VALUES('calls',?1,?2,?5,'assistant','','completed',?3,?4,'request')",rusqlite::params![session,turn,canonical(&blocks)?,canonical(&Continuation{scope:"scope".into(),provider:"codex".into(),model:"gpt-6.1-sol".into(),wire:"responses".into(),required:true,items:vec![serde_json::json!({"secret":"opaque"})]})?,MESSAGE_ORDER_STRIDE+1]).unwrap();
         db.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status) VALUES('request',?1,'calls',1,'opencode-go/glm-5.3-flash','{}','{}','completed')",[&turn]).unwrap();
         for (offset,id) in ["a","b"].into_iter().enumerate() {
             let blocks=vec![ContentBlock{id:format!("result-{id}"),content:BlockContent::ToolResult{call_id:id.into(),provider_call_id:format!("private-{id}"),is_error:false,output:format!("result {id}"),artifact_ids:vec![],effects_unknown:false}}];
-            db.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,request_id) VALUES(?1,?2,?3,?4,'tool',?5,'completed',?6,'request')",rusqlite::params![format!("result-{id}"),session,turn,1026+offset as i64,format!("result {id}"),canonical(&blocks)?]).unwrap();
+            db.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,request_id) VALUES(?1,?2,?3,?4,'tool',?5,'completed',?6,'request')",rusqlite::params![format!("result-{id}"),session,turn,MESSAGE_ORDER_STRIDE+2+offset as i64,format!("result {id}"),canonical(&blocks)?]).unwrap();
         }
         Ok(())
     }).await.unwrap();

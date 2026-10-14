@@ -25,9 +25,9 @@ fn default_output() -> usize {
 }
 
 fn default_calls() -> u32 {
-    32
+    u32::MAX
 }
 
 fn default_requests() -> u32 {
-    16
+    u32::MAX
 }

@@ -104,8 +104,8 @@ pub(super) fn create_session_tx(
             allowed_tools: selection.allowed_tools.clone(),
             shell_timeout_ms: 30_000,
             max_output_bytes: 1024 * 1024,
-            max_tool_calls: 32,
-            max_model_requests: 16,
+            max_tool_calls: u32::MAX,
+            max_model_requests: u32::MAX,
         };
         Some(policy.canonicalize().map_err(|_| StoreError::Invalid)?)
     } else {

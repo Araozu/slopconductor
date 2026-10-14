@@ -35,6 +35,11 @@ and inference exclusions for cuts inside tool exchanges. Forks copy the selected
 prefix without inheriting execution or compacted summaries. Suffix deletion
 invalidates summaries while retaining execution/audit records and spent budgets.
 See [chat history operations](text-chat.md#forking-editing-and-deleting-history).
+Schema 14 expands message ordering from 1,024 to `2^32` slots per turn so long
+interactive tool loops do not hit a hidden storage limit. Migration preserves
+within-turn order, queued messages, forks, tombstones and compaction frontiers.
+Message IDs and durable event sequences remain unchanged; history pagination
+cursors are reloaded when clients reconnect.
 Schema 9 unifies all work in `sessions` and all execution in `turns`.
 Conversation rows hold policy, requested/effective inputs, batch membership, and
 lineage; turn rows hold retry links. It removes the separate `tasks`, `runs`, and

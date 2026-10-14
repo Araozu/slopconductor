@@ -194,8 +194,8 @@ Read with [clients](clients.md).
   CLI, no per-chat OS process.
 - Representative bounds: 4 concurrent turns; 32 queued/session, 1024 global;
   8,192 messages / 16 MiB context (275k token cost cap, opt-in full model window);
-  1 MiB visible output; 32 calls / 16 model
-  requests per workspace turn (max 128/64); 30 s shell default (max 300 s);
+  1 MiB visible output; workspace call/request limits default to `u32::MAX`
+  with explicit smaller caps supported; 30 s shell default (max 300 s);
   200 rows/page; 256 projects/workspaces global, 32 workspaces/project; 1024
   active attempts; 8 attempts/task; batch 1–256 members, concurrency 1–16.
 

@@ -161,6 +161,8 @@ summary, cancellation or interrupted compaction preserves the prior view.
 Size comparisons accept a smaller serialized view without mixing its byte
 estimate with a lower provider token measurement; reported dense reasoning can
 also establish that compaction reduces context.
+The eight-attempt repair allowance resets after successful normal inference;
+it is not a lifetime compaction limit for long-running tool-enabled agents.
 Maintenance requests consume aggregate budgets and workspace per-turn caps;
 plain chats have eight bounded compaction attempts in addition to the initial
 request and two output-limit continuations. A context-window rejection triggers
@@ -310,9 +312,15 @@ tools, with at most 64 KiB of arguments per call.
 Visible assistant output is at most 1 MiB and encoded history pages at most
 16 MiB (text and blocks coexist for compatibility).
 
-Default workspace policy allows 32 calls and 16 model requests per turn, a
+Default workspace policy allows up to `u32::MAX` calls and model requests per
+turn, so interactive coding continues until the model finishes, fails, or the
+user cancels. Explicit smaller workspace caps are honored; child authority and
+aggregate task/tree/batch budgets keep their separate bounds. Existing stored
+workspace policies retain their configured limits. Per-tool execution still has a
 30-second shell timeout, and 1 MiB of raw combined tool output. Policy maxima
-are 128 calls, 64 requests, 300 seconds, and 8 MiB. Shell previews are valid JSON
+are `u32::MAX` calls/requests, 300 seconds, and 8 MiB. Message ordering reserves
+over four billion records per turn, including when later turns are queued.
+Shell previews are valid JSON
 within 16 KiB, preserving exit status and both stdout/stderr with head/tail
 excerpts, byte counts, and explicit truncation flags. Larger output is an artifact;
 read results retain their complete bounded JSON page. Shell JSON encoding can

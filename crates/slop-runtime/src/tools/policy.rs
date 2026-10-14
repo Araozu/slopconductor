@@ -28,8 +28,8 @@ impl WorkspacePolicy {
                 != self.allowed_tools.len()
             || !(1..=300_000).contains(&self.shell_timeout_ms)
             || !(1024..=8 * 1024 * 1024).contains(&self.max_output_bytes)
-            || !(1..=128).contains(&self.max_tool_calls)
-            || !(1..=64).contains(&self.max_model_requests)
+            || self.max_tool_calls == 0
+            || self.max_model_requests == 0
         {
             return Err(std::io::Error::other("invalid workspace policy"));
         }

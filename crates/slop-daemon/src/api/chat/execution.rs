@@ -14,8 +14,8 @@ pub(super) async fn capabilities() -> Json<slop_protocol::execution::Capabilitie
                 parameters: d.parameters,
             })
             .collect(),
-        max_model_requests_per_turn: 64,
-        max_tool_calls_per_turn: 128,
+        max_model_requests_per_turn: u32::MAX,
+        max_tool_calls_per_turn: u32::MAX,
         execution_steering: true,
         turn_pause_resume: true,
     })

@@ -18,6 +18,7 @@ class ToolFixture:
         self.lock = threading.Lock()
         self.requests = []
         self.authorizations = []
+        self.progress = {}
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -30,6 +31,11 @@ class ToolFixture:
                     fixture.requests.append(payload)
                     fixture.authorizations.append(self.headers.get("Authorization"))
                 prompt = next(m["content"] for m in reversed(payload["messages"]) if m["role"] == "user")
+                session_key = self.headers.get("x-opencode-session")
+                with fixture.lock:
+                    progress = fixture.progress.get(session_key, 0)
+                    if prompt == "many compactions":
+                        fixture.progress[session_key] = progress + 1
                 current = payload["messages"][next(i for i in reversed(range(len(payload["messages"]))) if payload["messages"][i]["role"] == "user") + 1:]
                 completed_tools = any(m["role"] == "tool" for m in current)
                 self.send_response(200)
@@ -41,8 +47,12 @@ class ToolFixture:
                     self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
                     self.wfile.flush()
 
-                if prompt in {"workflow", "workflow incomplete", "large read", "cancel shell", "crash shell", "malformed", "limited", "restricted"} and not completed_tools:
-                    if prompt in {"workflow", "workflow incomplete"}:
+                long_loop = prompt == "many reads" and sum(m["role"] == "tool" for m in current) < 70
+                long_compaction_loop = prompt == "many compactions" and progress < 12
+                if long_loop or long_compaction_loop or prompt in {"workflow", "workflow incomplete", "large read", "cancel shell", "crash shell", "malformed", "limited", "restricted"} and not completed_tools:
+                    if long_loop or long_compaction_loop:
+                        calls = [("read", {"path": "memory.txt" if long_compaction_loop else "file.txt", "limit": 1})]
+                    elif prompt in {"workflow", "workflow incomplete"}:
                         command = "if [ -n \"${OPENCODE_GO_API_KEY+x}\" ]; then exit 9; fi; printf '%024000d' 0; printf 'stderr remains visible' >&2"
                         calls = [
                             ("read", {"path": "file.txt", "offset": 2, "limit": 1}),
@@ -83,7 +93,9 @@ class ToolFixture:
                     original_prompt = next(m["content"] for m in reversed(payload["messages"]) if m.get("role") == "user" and not m["content"].startswith("Your previous response reached its output-token limit."))
                     keeps_limiting = original_prompt in {"limited", "workflow incomplete"}
                     emit({}, "length" if keeps_limiting else "stop")
-                self.wfile.write(b'data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}\n\n')
+                input_tokens = 270000 if long_compaction_loop else 7
+                usage = {"choices": [], "usage": {"prompt_tokens": input_tokens, "completion_tokens": 3, "total_tokens": input_tokens + 3}}
+                self.wfile.write(b"data: " + json.dumps(usage).encode() + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
 
@@ -141,10 +153,10 @@ def check_tools(daemon_binary, cli_binary, root):
             assert status == 202, (status, receipt)
             return receipt, payload
 
-        def create(command):
+        def create(command, **policy):
             status, receipt = request(endpoint, token, "POST", {
                 "command_id": command.replace(" ", "-"), "provider": "opencode-go", "model": "glm-5.3-flash",
-                "execution": {"root": str(workspace), "allowed_tools": ["read", "edit", "bash", "write"]},
+                "execution": {"root": str(workspace), "allowed_tools": ["read", "edit", "bash", "write"], **policy},
             }, "/v1/sessions")
             assert status == 202, (status, receipt)
             return receipt["session_id"]
@@ -197,6 +209,26 @@ def check_tools(daemon_binary, cli_binary, root):
         count = len(fixture.snapshot())
         cli("chat", "--workspace", str(workspace), "--prompt", "workflow", "--command-id", "tool-cli", "--detach")
         assert len(fixture.snapshot()) == count
+        # Default interactive work crosses the old 16/64 request and 32-tool
+        # operation cutoffs and still reaches a final answer. Explicit caps work.
+        result = cli("chat", "--workspace", str(workspace), "--prompt", "many reads", "--command-id", "long-tool-loop")
+        long_receipt = next(json.loads(line)["receipt"] for line in result.stdout.splitlines() if json.loads(line)["type"] == "receipt")
+        long_state = get(f"/v1/turns/{long_receipt['turn_id']}")
+        assert long_state["status"] == "completed", long_state
+        assert len(long_state["model_request_ids"]) == 71 and len(long_state["tool_invocation_ids"]) == 70, long_state
+        (workspace / "memory.txt").write_text("persistent task facts " * 1000, encoding="utf-8")
+        result = cli("chat", "--workspace", str(workspace), "--prompt", "many compactions", "--command-id", "long-compaction-loop")
+        compact_receipt = next(json.loads(line)["receipt"] for line in result.stdout.splitlines() if json.loads(line)["type"] == "receipt")
+        compact_state = get(f"/v1/turns/{compact_receipt['turn_id']}")
+        assert compact_state["status"] == "completed", compact_state
+        compact_requests = get(f"/v1/turns/{compact_state['id']}/requests?limit=200")["items"]
+        assert sum(r["compaction"] for r in compact_requests) >= 10, compact_requests
+        assert len(compact_state["tool_invocation_ids"]) == 12, compact_state
+        limited_session = create("create-request-cap", max_model_requests=4)
+        limited_receipt, _ = send(limited_session, "many reads", "send-request-cap")
+        limited_state = wait_turn(endpoint, token, limited_receipt["turn_id"], {"failed"})
+        assert limited_state["error_code"] == "model_request_budget_exhausted", limited_state
+        assert len(limited_state["model_request_ids"]) == 4, limited_state
         # A source file larger than the shell preview cap must reach the model
         # intact, with a parseable continuation offset and no phantom last line.
         large_text = "\n".join(f"line {index}: " + "🦀" * 40 for index in range(256))

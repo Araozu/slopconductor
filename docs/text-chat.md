@@ -185,7 +185,8 @@ The steering inbox is bounded to 32 pending instructions per logical turn.
 Plain-text turns allow an initial request, two output-limit continuations, and
 eight compaction requests, plus one request per steering instruction or resume,
 capped at 64 total requests. Workspace execution keeps its configured `max_model_requests`
-as a hard cumulative limit. `next-boundary` applies between completed inference
+as a hard cumulative limit; new interactive workspaces default to `u32::MAX`
+instead of stopping after 16 requests. `next-boundary` applies between completed inference
 and tool steps, never in the middle of a token stream.
 
 The default model is `opencode-go/glm-5.3-flash`, with a 4,096-token output cap

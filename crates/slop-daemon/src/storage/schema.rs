@@ -98,6 +98,9 @@ where
         if existing_version < 13 {
             history::migrate(&tx)?;
         }
+        if existing_version < 14 {
+            execution::expand_message_order(&tx)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

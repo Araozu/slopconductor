@@ -109,7 +109,7 @@ fn copy_prefix(
             [&turn],
         )
         .map_err(|_| StoreError::Database)?;
-        if through / 1024 == ordinal {
+        if through / MESSAGE_ORDER_STRIDE == ordinal {
             selected_copy = tx
                 .query_row(
                     "SELECT copy.id FROM messages copy JOIN messages original ON original.ordinal=copy.ordinal WHERE copy.session_id=?1 AND original.id=?2",

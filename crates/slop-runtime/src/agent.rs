@@ -156,13 +156,14 @@ pub(crate) async fn execute<R: ChatRepository>(
         definitions.extend(crate::orchestration::definitions(policy));
     }
     let max_requests = work.max_model_requests.max(1);
-    let max_tools = if work.orchestration.is_some() {
-        128
-    } else {
-        work.execution
-            .as_ref()
-            .map_or(0, |policy| policy.max_tool_calls)
-    };
+    let max_tools = work.execution.as_ref().map_or(
+        if work.orchestration.is_some() {
+            u32::MAX
+        } else {
+            0
+        },
+        |policy| policy.max_tool_calls,
+    );
     let mut tool_count = work.tool_calls_used;
     let mut ordinal = work.next_request_ordinal.max(1);
     let mut output_limits_seen = work.output_limits_seen;
@@ -640,6 +641,12 @@ pub(crate) async fn execute<R: ChatRepository>(
         });
         context_frontier = None;
         transient_retries = 0;
+        // A successful normal request starts a new context-growth cycle. The
+        // repair allowance bounds consecutive maintenance attempts, not the
+        // number of compactions a long-running agent can perform in its life.
+        if response.finish_reason != FinishReason::ContextLimit {
+            compactions_seen = 0;
+        }
         let mut invocations = Vec::new();
         for block in &response.message.blocks {
             if let BlockContent::ToolCall {

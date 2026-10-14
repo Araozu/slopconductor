@@ -200,7 +200,9 @@ pub(super) fn send_message_tx(
             |r| r.get(0),
         )
         .map_err(|_| StoreError::Database)?;
-    let user_order = ordinal.checked_mul(1024).ok_or(StoreError::Limit)?;
+    let user_order = ordinal
+        .checked_mul(MESSAGE_ORDER_STRIDE)
+        .ok_or(StoreError::Limit)?;
     let requested_model = request
         .model
         .clone()

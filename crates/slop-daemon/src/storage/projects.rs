@@ -176,8 +176,8 @@ pub(super) fn reserve(
         allowed_tools: request.allowed_tools.clone(),
         shell_timeout_ms: 30_000,
         max_output_bytes: 1024 * 1024,
-        max_tool_calls: 32,
-        max_model_requests: 16,
+        max_tool_calls: u32::MAX,
+        max_model_requests: u32::MAX,
     };
     policy.validate().map_err(|_| StoreError::Invalid)?;
     if request.project_id.len() > 128 {

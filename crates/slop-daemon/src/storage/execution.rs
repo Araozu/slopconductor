@@ -206,15 +206,42 @@ pub(super) fn public_blocks_from_row(
     Ok(blocks.into_iter().map(public_block).collect())
 }
 pub(super) fn next_message_ordinal(tx: &Transaction<'_>, turn: &str) -> StoreResult<i64> {
-    let (base,last):(i64,Option<i64>)=tx.query_row("SELECT t.ordinal*1024,(SELECT MAX(ordinal) FROM messages WHERE turn_id=t.id) FROM turns t WHERE id=?1",[turn],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|StoreError::Database)?;
+    let (turn_ordinal,last):(i64,Option<i64>)=tx.query_row("SELECT t.ordinal,(SELECT MAX(ordinal) FROM messages WHERE turn_id=t.id) FROM turns t WHERE id=?1",[turn],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|StoreError::Database)?;
+    let base = turn_ordinal
+        .checked_mul(MESSAGE_ORDER_STRIDE)
+        .ok_or(StoreError::Limit)?;
     let next = last
         .unwrap_or(base)
         .checked_add(1)
         .ok_or(StoreError::Limit)?;
-    if next >= base + 1024 {
+    if next
+        >= base
+            .checked_add(MESSAGE_ORDER_STRIDE)
+            .ok_or(StoreError::Limit)?
+    {
         return Err(StoreError::Limit);
     }
     Ok(next)
+}
+
+pub(super) fn expand_message_order(tx: &Transaction<'_>) -> StoreResult<()> {
+    // Keep turn order and within-turn offsets, including queued user messages,
+    // forks, tombstones, and compaction frontiers. Stage negative ordinals so
+    // the unique session/ordinal index cannot collide during the conversion.
+    tx.execute_batch(&format!(
+        "CREATE TEMP TABLE message_order_upgrade(id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL);
+         INSERT INTO message_order_upgrade
+         SELECT m.id,t.ordinal*{MESSAGE_ORDER_STRIDE}+(m.ordinal-t.ordinal*1024)
+         FROM messages m JOIN turns t ON t.id=m.turn_id
+         WHERE m.ordinal>=t.ordinal*1024 AND m.ordinal<t.ordinal*1024+1024;
+         UPDATE session_context SET through_ordinal=COALESCE(
+             (SELECT u.ordinal FROM message_order_upgrade u JOIN messages m ON m.id=u.id
+              WHERE m.session_id=session_context.session_id AND m.ordinal=session_context.through_ordinal),through_ordinal);
+         UPDATE messages SET ordinal=-ordinal WHERE id IN(SELECT id FROM message_order_upgrade);
+         UPDATE messages SET ordinal=(SELECT ordinal FROM message_order_upgrade WHERE id=messages.id)
+             WHERE id IN(SELECT id FROM message_order_upgrade);
+         DROP TABLE message_order_upgrade;"
+    )).map_err(|_| StoreError::Database)
 }
 fn running(tx: &Transaction<'_>, turn: &str) -> StoreResult<String> {
     let (session, status, cancel): (String, String, bool) = tx
@@ -838,13 +865,13 @@ pub(super) fn claim_next_turn(
             + i64::from(slop_runtime::agent::context::MAX_COMPACTIONS_PER_TURN),
         |policy| i64::from(policy.max_model_requests),
     );
-    // Delegation has a bounded continuation allowance under aggregate budgets.
-    // Other workspace turns retain their policy cap; plain text retains its
+    // Workspace and delegation loops are governed by explicit operation
+    // budgets rather than an additional small step ceiling. Plain text retains its
     // one initial request plus bounded output-limit/steering/resume recovery.
-    let max_model_requests = if orchestration.is_some() {
-        64
+    let max_model_requests = if orchestration.is_some() && execution.is_none() {
+        u32::MAX
     } else if execution.is_some() {
-        base_request_limit.clamp(1, 64) as u32
+        base_request_limit.max(1) as u32
     } else {
         base_request_limit
             .saturating_add(steering_count)
@@ -1013,7 +1040,7 @@ pub(super) fn claim_next_turn(
     ).optional().map_err(|_| StoreError::Database)?.and_then(|(usage,context,message)| {
         let usage = usage?; usage.input_tokens.filter(|_| context.input_bytes > 0).map(|input_tokens| slop_runtime::agent::context::ContextUsage::after_response(input_tokens, usage.output_tokens, context.input_bytes, &message))
     });
-    let compactions_seen = tx.query_row("SELECT count(*) FROM model_requests WHERE turn_id=?1 AND json_extract(context,'$.compaction')=1", [&turn_id], |r| r.get(0)).map_err(|_| StoreError::Database)?;
+    let compactions_seen = tx.query_row("SELECT count(*) FROM model_requests WHERE turn_id=?1 AND json_extract(context,'$.compaction')=1 AND rowid>COALESCE((SELECT MAX(rowid) FROM model_requests WHERE turn_id=?1 AND status='completed' AND COALESCE(json_extract(context,'$.compaction'),0)=0),0)", [&turn_id], |r| r.get(0)).map_err(|_| StoreError::Database)?;
     tx.execute(
         "UPDATE turns SET status='running' WHERE id=?1 AND status='queued'",
         [&turn_id],
