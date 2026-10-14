@@ -26,6 +26,9 @@ mode, detachment, and the deduplicated durable completion inbox (legacy links
 default to manual). Schema 16 adds all/any wait mode and timeout deadlines;
 schema 17 adds nullable child spawn times; schema 18 stores stable completed
 wait results. See [child tasks](child-tasks.md).
+Schema 19 adds inbound peer grant digests/revocations and immutable outbound
+peer registration metadata/tombstones. Outbound bearer secrets remain in private
+credential files, outside conversation records and SQLite.
 Schema 11 adds per-request context size/purpose and an atomic session inference
 checkpoint containing the summary, retained messages, and historical cursor.
 Compaction changes the inference view without deleting public history.

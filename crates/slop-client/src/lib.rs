@@ -27,6 +27,7 @@ use streams::MAX_EVENT_FRAME_BYTES;
 mod error;
 mod execution;
 mod orchestration;
+mod peers;
 mod projects;
 mod providers;
 mod sessions;
@@ -48,6 +49,8 @@ pub struct DaemonClient {
     stream_http: reqwest::Client,
     endpoint: Url,
     token: Option<HeaderValue>,
+    peer: Option<String>,
+    expected_owner: Option<HeaderValue>,
 }
 
 impl fmt::Debug for DaemonClient {
@@ -119,12 +122,37 @@ impl DaemonClient {
             stream_http,
             endpoint,
             token,
+            peer: None,
+            expected_owner: None,
         })
     }
 
     pub async fn health(&self) -> Result<HealthResponse, ClientError> {
-        let endpoint = self.endpoint.join(HEALTH_PATH)?;
-        let response = self.http.get(endpoint).send().await?;
+        // The selected peer's health route is protected by the gateway. Check
+        // that gateway anonymously before sending its administrator credential.
+        if self.peer.is_some() {
+            self.health_at(self.endpoint.join(HEALTH_PATH)?, false)
+                .await?;
+        }
+        self.health_at(
+            self.routed_url(self.endpoint.join(HEALTH_PATH)?)?,
+            self.peer.is_some(),
+        )
+        .await
+    }
+
+    async fn health_at(
+        &self,
+        endpoint: Url,
+        authenticated: bool,
+    ) -> Result<HealthResponse, ClientError> {
+        let request = self.http.get(endpoint);
+        let request = if authenticated {
+            self.authorized(request)
+        } else {
+            request
+        };
+        let response = request.send().await?;
         let status = response.status();
         let body = read_bounded(response).await?;
 
@@ -151,11 +179,8 @@ impl DaemonClient {
     /// so a token is never sent to an endpoint with an unknown identity/API.
     pub async fn node(&self) -> Result<NodeResponse, ClientError> {
         self.health().await?;
-        let endpoint = self.endpoint.join(NODE_PATH)?;
-        let mut request = self.http.get(endpoint);
-        if let Some(token) = &self.token {
-            request = request.header(AUTHORIZATION, token.clone());
-        }
+        let endpoint = self.routed_url(self.endpoint.join(NODE_PATH)?)?;
+        let request = self.authorized(self.http.get(endpoint));
         let response = request.send().await?;
         let status = response.status();
         let body = read_bounded(response).await?;
@@ -171,7 +196,10 @@ impl DaemonClient {
 
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, ClientError> {
         self.health().await?;
-        let response = self.authorized(self.http.get(url)).send().await?;
+        let response = self
+            .authorized(self.http.get(self.routed_url(url)?))
+            .send()
+            .await?;
         self.decode_json(response).await
     }
 
@@ -197,7 +225,7 @@ impl DaemonClient {
         let response = self
             .authorized(
                 self.http
-                    .request(method, url)
+                    .request(method, self.routed_url(url)?)
                     .header(reqwest::header::CONTENT_TYPE, "application/json")
                     .body(body),
             )
@@ -205,15 +233,13 @@ impl DaemonClient {
             .await
             .map_err(|error| ClientError::DeliveryUncertain(error.to_string()))?;
         let status = response.status();
-        let body =
-            read_bounded_to(response, MAX_JSON_BYTES)
-                .await
-                .map_err(|error| match error {
-                    ClientError::Request(request) => {
-                        ClientError::DeliveryUncertain(request.to_string())
-                    }
-                    other => other,
-                })?;
+        let body = read_bounded_to(response, MAX_JSON_BYTES)
+            .await
+            .map_err(|_| {
+                ClientError::DeliveryUncertain(
+                    "the mutation response was lost or invalid".to_owned(),
+                )
+            })?;
         if !status.is_success() {
             return Err(api_error(status.as_u16(), &body, self.token.as_ref()));
         }
@@ -238,6 +264,11 @@ impl DaemonClient {
     }
 
     fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let request = if let Some(owner) = &self.expected_owner {
+            request.header("x-slop-expected-owner-node-id", owner.clone())
+        } else {
+            request
+        };
         if let Some(token) = &self.token {
             request.header(AUTHORIZATION, token.clone())
         } else {
@@ -671,6 +702,21 @@ mod tests {
         let node = client.node().await.unwrap();
         assert_eq!(node.node_id, "node-1");
         assert_eq!(seen.lock().unwrap().as_slice(), [format!("Bearer {TOKEN}")]);
+    }
+
+    #[tokio::test]
+    async fn selected_peer_checks_gateway_compatibility_before_sending_its_token() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = server(API_VERSION + 1, seen.clone(), false).await;
+        let client = DaemonClient::with_token(&endpoint, Some(TOKEN.into()))
+            .unwrap()
+            .via_peer("home")
+            .unwrap();
+        assert!(matches!(
+            client.node().await,
+            Err(ClientError::IncompatibleApi { .. })
+        ));
+        assert!(seen.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

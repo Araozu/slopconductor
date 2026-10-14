@@ -7,6 +7,9 @@ pub struct StartupArgs {
     /// Local listen address. Only loopback listeners are supported.
     #[arg(long, env = "SLOP_LISTEN")]
     pub listen: Option<SocketAddr>,
+    /// Optional loopback peer API listener, for private HTTPS forwarding.
+    #[arg(long, env = "SLOP_PEER_LISTEN")]
+    pub peer_listen: Option<SocketAddr>,
     /// Configuration file (defaults to the platform config directory).
     #[arg(long, env = "SLOP_CONFIG")]
     pub config: Option<PathBuf>,

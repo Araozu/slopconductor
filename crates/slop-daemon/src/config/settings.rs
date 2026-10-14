@@ -3,6 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen: SocketAddr,
+    pub peer_listen: Option<SocketAddr>,
     pub node_name: Option<String>,
     pub database_queue_capacity: usize,
     pub database_busy_timeout: Duration,

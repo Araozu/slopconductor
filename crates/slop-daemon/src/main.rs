@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod config;
 mod credentials;
+mod peers;
 mod storage;
 
 use std::{
@@ -102,6 +103,10 @@ async fn run(args: Args) -> Result<()> {
     // without a service that can acknowledge or observe it.
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
+    let peer_listener = match config.peer_listen {
+        Some(address) => Some(tokio::net::TcpListener::bind(address).await?),
+        None => None,
+    };
     let provider_clients = credentials
         .provider_clients(config.provider_base_url.as_deref())
         .await?;
@@ -119,6 +124,10 @@ async fn run(args: Args) -> Result<()> {
     );
     let accepting = Arc::new(AtomicBool::new(true));
     let state = Arc::new(api::chat::AppState {
+        peers: Arc::new(peers::PeerService::new(
+            store_client.clone(),
+            &config.data_dir,
+        )),
         store: store_client.clone(),
         token,
         runtime: chat_runtime.clone(),
@@ -136,6 +145,7 @@ async fn run(args: Args) -> Result<()> {
         .route(HEALTH_PATH, get(health))
         .route(NODE_PATH, get(node))
         .merge(api::chat::router(Arc::clone(&state.token)))
+        .merge(api::peers::router(Arc::clone(&state.token)))
         .merge(api::providers::router(Arc::clone(&state.token)))
         .merge(api::projects::router(Arc::clone(&state.token)))
         .merge(api::orchestration::router(Arc::clone(&state.token)))
@@ -143,6 +153,20 @@ async fn run(args: Args) -> Result<()> {
         .merge(api::openapi::router());
     eprintln!("Listening on http://{address}");
 
+    let (peer_stop_tx, peer_stop_rx) = tokio::sync::oneshot::channel();
+    let mut peer_server = if let Some(listener) = peer_listener {
+        eprintln!("Peer API listening on http://{}", listener.local_addr()?);
+        let app = api::peers::inbound_router(state.clone());
+        Some(tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = peer_stop_rx.await;
+                })
+                .await
+        }))
+    } else {
+        None
+    };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let mut server: JoinHandle<std::io::Result<()>> = tokio::spawn(async move {
         axum::serve(listener, app)
@@ -152,6 +176,7 @@ async fn run(args: Args) -> Result<()> {
             .await
     });
     let mut failure = None;
+    let mut peer_ended = false;
     let server_ended = tokio::select! {
         result = &mut server => {
             match result {
@@ -161,12 +186,19 @@ async fn run(args: Args) -> Result<()> {
             }
             true
         }
+        _ = async {match peer_server.as_mut() {Some(server)=>{let _=server.await;},None=>std::future::pending::<()>().await}} => {
+            peer_ended = true;
+            failure=Some("Peer HTTP server stopped unexpectedly".to_owned());
+            false
+        },
         signal_result = signals.wait() => {
             if signal_result.is_err() { failure = Some("shutdown signal handler failed".to_owned()); }
             false
         },
     };
     accepting.store(false, Ordering::Release);
+    state.peers.shutdown();
+    let _ = peer_stop_tx.send(());
     if !server_ended {
         let _ = shutdown_tx.send(());
     }
@@ -192,10 +224,25 @@ async fn run(args: Args) -> Result<()> {
         }
     }
 
+    if let Some(mut peer_server) = peer_server.filter(|_| !peer_ended) {
+        match timeout(remaining(deadline), &mut peer_server).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(_) => {
+                failure = Some("Peer HTTP server failed during shutdown".into());
+                complete = false;
+            }
+            Err(_) => {
+                peer_server.abort();
+                let _ = peer_server.await;
+                complete = false;
+            }
+        }
+    }
     // Keep directory ownership until secret writes, login, active turns, and
     // finally the DB worker have drained, even if the shared deadline expires.
     let shutdown_state = Arc::clone(&state);
     let shutdown = tokio::spawn(async move {
+        shutdown_state.peers.drain().await;
         shutdown_state.credentials.shutdown().await;
         shutdown_state.runtime.shutdown().await;
         shutdown_state.store.drain_workspace_jobs().await;
@@ -245,6 +292,7 @@ pub(crate) async fn health() -> Json<HealthResponse> {
         api_version: API_VERSION,
         capabilities: vec![
             "health".to_owned(),
+            "daemon-peering".to_owned(),
             "node".to_owned(),
             "sessions".to_owned(),
             "text-chat".to_owned(),

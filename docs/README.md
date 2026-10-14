@@ -34,7 +34,8 @@ schemas, and workflows marked proposed describe future work.
 
 The [recommended next delivery order](roadmap.md#recommended-next-delivery-order)
 now moves from implemented scheduling/batch controls and native children to
-platform/capacity validation, then trusted remote CLI access. Linux/native Windows
+the implemented local [daemon-peering slice](daemon-peering.md), with
+platform/capacity validation still open. Linux/native Windows
 CI is configured for the required checks and offline real-binary workflows.
 [Recorded offline validation](native-validation.md) passes on both platforms.
 M1/M2 remain partial; live-provider and broader release-build capacity validation
@@ -67,6 +68,8 @@ today, then read in this order:
 | [Storage](storage.md) | Durable local records, events, artifacts, and recovery |
 | [Daemon startup](daemon-startup-plan.md) | Startup foundation and accepted future chat durability contract |
 | [Connectivity and sync](connectivity-sync.md) | Tailscale, peer access, caching, and optional aggregation |
+| [Daemon peering](daemon-peering.md) | Implemented scoped trust, one-hop session inspection/control, setup, and failure semantics |
+| [Daemon peering plan](daemon-peering-plan.md) | Proposed first peer connection, scoped access, one-hop inspection/control, and delivery choices |
 | [Migration](migration.md) | Future portable-session and workspace handoff design |
 | [Roadmap](roadmap.md) | Delivery milestones, dependencies, and acceptance criteria |
 | [Implementation](implementation.md) | Concrete engineering tasks and suggested module layouts |

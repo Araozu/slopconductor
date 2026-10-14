@@ -25,6 +25,7 @@ from orchestration_smoke import check_orchestration
 from delegation_smoke import check_delegation
 from context_smoke import check_context
 from history_smoke import check_history
+from peers_smoke import check_peers
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,6 +69,7 @@ def isolated_env(root, **overrides):
     env.pop("SLOP_CONFIG", None)
     env.pop("SLOP_DATA_DIR", None)
     env.pop("SLOP_LISTEN", None)
+    env.pop("SLOP_PEER_LISTEN", None)
     env.pop("SLOP_NODE_NAME", None)
     env.pop("SLOP_TOKEN_FILE", None)
     if os.name == "nt":
@@ -197,7 +199,7 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
             stored_id = database.execute(
                 "SELECT node_id FROM node_identity WHERE singleton = 1"
             ).fetchone()[0]
-        if journal != "wal" or schema_version != 18 or stored_id != node["node_id"]:
+        if journal != "wal" or schema_version != 19 or stored_id != node["node_id"]:
             raise RuntimeError(
                 f"unexpected SQLite state: journal={journal}, schema={schema_version}, node={stored_id}"
             )
@@ -398,6 +400,7 @@ def main():
 
         check_chat_lifecycle(daemon_binary, cli_binary, root / "durable-chat")
         check_history(daemon_binary, cli_binary, root / "history")
+        check_peers(daemon_binary, cli_binary, root / "peers")
         check_context(daemon_binary, root / "context", start_daemon, stop_daemon, isolated_env)
         check_tools(daemon_binary, cli_binary, root / "structured-tools")
         check_projects(daemon_binary, cli_binary, root / "projects")
@@ -408,7 +411,7 @@ def main():
         check_codex(daemon_binary, cli_binary, root / "codex")
 
     print("Smoke check passed: bootstrap ownership/authentication, runtime credentials/login, chat durability/replay, "
-          "chat forks/edits/suffix deletion, after-turn/next-boundary/immediate steering, provider snapshot rotation, pause/resume recovery, "
+          "scoped daemon peering/events/control/revocation, chat forks/edits/suffix deletion, after-turn/next-boundary/immediate steering, provider snapshot rotation, pause/resume recovery, "
           "structured tools/artifacts/recovery, managed worktree isolation/frozen bases/cleanup, tasks/runs, deterministic matrices/selective retries/export, fair admission, aggregate budgets, batch cancellation, native children/waits/recovery, command idempotency, client boundaries, and offline provider execution.")
 
 

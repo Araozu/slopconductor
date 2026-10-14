@@ -2,6 +2,7 @@ mod artifact;
 mod chat;
 mod discovery;
 mod orchestration;
+mod peers;
 mod projects;
 mod provider;
 mod session;
@@ -32,14 +33,23 @@ pub async fn run(args: Args) -> Result<()> {
         daemon,
         json,
         token_file,
+        peer,
         command,
     } = args;
     let context = Context {
-        connection: ConnectionOptions { daemon, token_file },
+        connection: ConnectionOptions {
+            daemon,
+            token_file,
+            peer,
+        },
         output: Output::new(json),
     };
 
+    if let Some(peer) = &context.connection.peer {
+        eprintln!("Peer: {peer}");
+    }
     match command {
+        Command::Peer { command } => peers::run(command, &context).await,
         Command::Task { command } => orchestration::task(command, &context).await,
         Command::Run { command } => orchestration::run(command, &context).await,
         Command::Batch { command } => orchestration::batch(command, &context).await,

@@ -90,3 +90,38 @@ The combined build repeated at 41.20 MiB active and 13.25 MiB baseline RSS, with
 seven threads throughout. This validates the specific offline workload; broader
 capacity, live-heap, supervised-tool, live-provider, and native Windows resource
 measurements remain outstanding. These latest checks were not run on Windows.
+
+
+## Scoped daemon peering, 2026-10-14
+
+The local M3 peer slice passed on Linux x86_64 with Rust 1.99.0:
+
+```sh
+cargo build -p slop-cli --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+python3 scripts/smoke.py
+cargo test -p slop-client --locked
+cargo test -p slop-daemon api::openapi --locked
+```
+
+The full offline workspace run passed 237 tests; thirteen credentialed live tests
+were ignored. The complete real-binary smoke suite passed, including the new
+[single-hop peer workflow](daemon-peering.md). Final client tests, OpenAPI coverage,
+and a separate run of the complete two-daemon peer scenario also passed after
+adding the destination-enforced owner precondition.
+
+Peer coverage includes immutable grants/registrations, token separation and
+redaction, duplicate authorization rejection, HTTPS-origin validation,
+read-only denial, canonical history/events, active next-boundary steering,
+pause/resume/cancel, subscriber bounds, idle-stream revocation/removal, gateway
+shutdown while owner execution continues, restart, identity replacement, and
+lost-response recovery with one accepted message. The gateway creates no local
+copy of the owner's sessions. Forwarded requests carry the expected owner ID,
+which the destination checks before dispatch. OpenAPI covers 81 versioned paths.
+
+These checks use isolated localhost services and synthetic credentials. The
+current peer changes have not been run on native Windows here, and a deployed
+two-machine Tailscale HTTPS/event-reconnect run remains outstanding. Live model
+providers and broader release capacity remain separate open validation gates.

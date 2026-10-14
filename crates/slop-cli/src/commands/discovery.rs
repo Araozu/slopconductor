@@ -5,7 +5,11 @@ use crate::Result;
 use super::Context;
 
 pub(super) async fn status(context: &Context) -> Result<()> {
-    let client = DaemonClient::new(&context.connection.daemon)?;
+    let client = if context.connection.peer.is_some() {
+        context.client()?
+    } else {
+        DaemonClient::new(&context.connection.daemon)?
+    };
     let health = client.health().await?;
     context.output.value(&health, || {
         println!("{} {}", health.service, health.version);

@@ -20,6 +20,10 @@ pub struct Args {
     #[arg(long, global = true)]
     pub token_file: Option<PathBuf>,
 
+    /// Select an explicitly registered owner through the local daemon.
+    #[arg(long, global = true)]
+    pub peer: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }

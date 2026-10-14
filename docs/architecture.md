@@ -73,7 +73,8 @@ flowchart TD
     CLI[slop-cli] --> Client[slop-client]
     CLI --> Protocol[slop-protocol]
     Client --> Protocol
-    Daemon[slop-daemon] --> Protocol
+    Daemon[slop-daemon] --> Client[slop-client]
+    Daemon --> Protocol
     Daemon --> Runtime[slop-runtime]
     Daemon --> Core[slop-core]
     Runtime --> Core[slop-core]
@@ -81,6 +82,11 @@ flowchart TD
 
 Arrows denote dependencies. Future native TUI code follows the CLI path.
 A browser/Electron client consumes the HTTP contract, not Rust runtime internals.
+
+The optional [peer listener and gateway](daemon-peering.md) share this daemon's
+application services, storage, and runtime. Outbound peer requests use
+`slop-client`; no execution crosses into a client or changes owner. Scoped peer
+credentials and an allowlisted listener keep local administration separate.
 
 ## How code can grow
 

@@ -161,11 +161,10 @@ impl DaemonClient {
         url.query_pairs_mut()
             .append_pair("after", &after.to_string())
             .append_pair("follow", if follow { "true" } else { "false" });
-        let mut request = self.stream_http.get(url);
-        if let Some(token) = &self.token {
-            request = request.header(AUTHORIZATION, token.clone());
-        }
-        let response = request.send().await?;
+        let request = self.authorized(self.stream_http.get(self.routed_url(url)?));
+        let response = tokio::time::timeout(Duration::from_secs(10), request.send())
+            .await
+            .map_err(|_| ClientError::StreamTimeout)??;
         let status = response.status();
         if !status.is_success() {
             let body = read_bounded(response).await?;

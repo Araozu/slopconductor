@@ -48,12 +48,33 @@ impl utoipa::Modify for BearerSecurity {
     info(
         title = "Slop Conductor Daemon API",
         version = "1.0",
-        description = "Machine-local Slop Conductor service. Health is anonymous; every other route requires `Authorization: Bearer <local-api-token>`."
+        description = "Local administrator API, including the explicit peer gateway. Health is anonymous; protected routes require the local administrator bearer. The optional separate peer listener accepts scoped peer bearers and exposes only the session/turn inspection and control subset documented in docs/daemon-peering.md."
     ),
     servers(
         (url = "http://127.0.0.1:7331", description = "Local daemon default")
     ),
     paths(
+        super::peers::grants,
+        super::peers::create_grant,
+        super::peers::revoke_grant,
+        super::peers::list_peers,
+        super::peers::register_peer,
+        super::peers::remove_peer,
+        super::peers::probe,
+        super::peers::remote_health,
+        super::peers::remote_node,
+        super::peers::remote_sessions,
+        super::peers::remote_session,
+        super::peers::remote_history,
+        super::peers::remote_instructions,
+        super::peers::remote_turn,
+        super::peers::remote_message,
+        super::peers::remote_tool,
+        super::peers::remote_send,
+        super::peers::remote_cancel,
+        super::peers::remote_pause,
+        super::peers::remote_resume,
+        super::peers::remote_events,
         crate::health,
         crate::node,
         // Chat: durable sessions, text chat, history, drafts, inbox, events,
@@ -134,6 +155,13 @@ impl utoipa::Modify for BearerSecurity {
     components(
         schemas(
             slop_protocol::HealthResponse,
+            slop_protocol::peers::PeerScope,
+            slop_protocol::peers::CreatePeerGrantRequest,
+            slop_protocol::peers::PeerGrantResponse,
+            slop_protocol::peers::RegisterPeerRequest,
+            slop_protocol::peers::PeerResponse,
+            slop_protocol::peers::PeerProbeResponse,
+
             slop_protocol::NodeResponse,
             slop_protocol::ErrorResponse,
             slop_protocol::filesystem::DirectoryEntry,
@@ -215,6 +243,7 @@ impl utoipa::Modify for BearerSecurity {
     ),
     modifiers(&BearerSecurity),
     tags(
+        (name = "peers", description = "Local peer administration and scoped owner access"),
         (name = "system", description = "Health and node identity"),
         (name = "chat", description = "Durable sessions and text chat"),
         (name = "orchestration", description = "Tasks, run attempts, and batch matrices"),
@@ -250,6 +279,25 @@ mod tests {
     /// with `#[utoipa::path]`, register it in `ApiDoc::paths`, and extend
     /// this list.
     const EXPECTED_API_PATHS: &[&str] = &[
+        "/v1/peer-grants",
+        "/v1/peer-grants/{id}",
+        "/v1/peer-grants/{id}/revoke",
+        "/v1/peers",
+        "/v1/peers/{id}",
+        "/v1/peers/{id}/probe",
+        "/v1/peers/{peer_id}/health",
+        "/v1/peers/{peer_id}/node",
+        "/v1/peers/{peer_id}/sessions",
+        "/v1/peers/{peer_id}/sessions/{session_id}",
+        "/v1/peers/{peer_id}/sessions/{session_id}/messages",
+        "/v1/peers/{peer_id}/sessions/{session_id}/instructions",
+        "/v1/peers/{peer_id}/sessions/{session_id}/events",
+        "/v1/peers/{peer_id}/turns/{turn_id}",
+        "/v1/peers/{peer_id}/turns/{turn_id}/cancel",
+        "/v1/peers/{peer_id}/turns/{turn_id}/pause",
+        "/v1/peers/{peer_id}/turns/{turn_id}/resume",
+        "/v1/peers/{peer_id}/messages/{message_id}",
+        "/v1/peers/{peer_id}/tools/{tool_id}",
         "/v1/health",
         "/v1/node",
         // Chat.

@@ -27,6 +27,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     pub store: StoreClient,
+    pub peers: Arc<crate::peers::PeerService>,
     pub token: Arc<LocalToken>,
     pub runtime: slop_runtime::chat::ChatRuntime,
     pub accepting: Arc<std::sync::atomic::AtomicBool>,
@@ -85,8 +86,8 @@ pub struct PageQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct EventQuery {
-    after: Option<u64>,
-    follow: Option<bool>,
+    pub(crate) after: Option<u64>,
+    pub(crate) follow: Option<bool>,
 }
 
 pub(crate) mod events;
@@ -105,4 +106,4 @@ pub(in crate::api) use support::error;
 pub(in crate::api) use support::{
     accepted, authorize_request, checked_limit, normalize_rejections, storage_response, store_error,
 };
-use turns::*;
+pub(crate) use turns::*;

@@ -10,6 +10,11 @@ The first remote milestone requires Tailscale on the participating machines and
 client devices. The application still defines its own node identities, trust,
 API authorization, and session ownership.
 
+The [first daemon-peering plan](daemon-peering-plan.md) narrows this design into
+the implemented local [two-daemon inspection/control slice](daemon-peering.md).
+It uses scoped grants, a separate loopback peer listener behind explicit HTTPS
+forwarding, and one-hop owner targeting. Deployed tailnet validation remains open.
+
 ## Separate four concerns
 
 | Concern | Responsibility |
@@ -40,9 +45,10 @@ a local HTTP service as private HTTPS. It is a possible deployment integration,
 not a substitute for application authorization. The initial remote deployment
 does not require a public Funnel endpoint.
 
-M0 listens on loopback only. Remote privileged API access must wait for pairing
-and capability enforcement. A private HTTPS proxy to the health/node service can
-be explored independently without implying task control exists.
+The administrator listener remains loopback-only. The optional peer listener
+is also loopback-only and exposes scoped inspection/control routes. Forward
+private HTTPS to that listener after issuing a peer grant; never publish the
+administrator listener as the peer service.
 
 ## Aggregate views
 

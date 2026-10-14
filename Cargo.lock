@@ -2101,6 +2101,8 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "sha2",
+ "slop-client",
  "slop-core",
  "slop-protocol",
  "slop-runtime",
@@ -2109,6 +2111,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "url",
  "utoipa",
  "utoipa-swagger-ui",
 ]

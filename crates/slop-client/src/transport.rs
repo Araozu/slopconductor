@@ -76,6 +76,9 @@ pub(super) fn api_error(status: u16, body: &[u8], token: Option<&HeaderValue>) -
             )
         })
         .unwrap_or((code, message));
+    if code == "peer_delivery_unknown" {
+        return ClientError::DeliveryUncertain(message);
+    }
     if status == 401 {
         ClientError::Unauthorized { code, message }
     } else {

@@ -8,7 +8,8 @@ Slop Conductor is a native Rust AI agent runtime: one daemon per OS installation
 owns sessions, agent execution, and local data. Clients (CLI first, TUI/web/
 Electron later) attach over a versioned HTTP API, then detach without stopping
 accepted work. The daemon calls model providers directly and supervises tools
-itself. Each node owns its data; remote access and mirroring are future tracks.
+itself. Each node owns its data. Scoped [daemon peering](daemon-peering.md) now
+adds explicit remote inspection/control; mirroring remains a future track.
 
 Implemented local slice: loopback daemon + authenticated API, durable text chat,
 structured Go/Zen/Codex tool execution, registered projects with
@@ -39,7 +40,8 @@ flowchart TD
     CLI[slop-cli] --> Client[slop-client]
     CLI --> Protocol[slop-protocol]
     Client --> Protocol
-    Daemon[slop-daemon] --> Protocol
+    Daemon[slop-daemon] --> Client
+    Daemon --> Protocol
     Daemon --> Runtime[slop-runtime]
     Daemon --> Core[slop-core]
     Runtime --> Core
