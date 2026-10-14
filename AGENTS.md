@@ -37,7 +37,16 @@ Do not make generated web assets a prerequisite for compiling the daemon or CLI.
 
 The daemon publishes a compile-time OpenAPI document via `utoipa`:
 `GET /api-docs/openapi.json` and interactive Swagger UI at `GET /docs`.
-Source of truth is `crates/slop-daemon/src/api/openapi.rs` (`ApiDoc`).
+Source of truth is `crates/slop-daemon/src/api/openapi.rs` (`ApiDoc`),
+which currently covers every route (62 paths). A coverage test fails if a
+route is added without registering it.
+
+Generate the document locally; never check the generated JSON into source
+control (it is git-ignored):
+
+- `cargo run -p slop-daemon -- --dump-openapi > /tmp/openapi.json` — no
+  storage, socket, or runtime needed; prints the document and exits.
+- Or, with a daemon running: `curl http://127.0.0.1:7331/api-docs/openapi.json`.
 
 When you touch the public HTTP API, keep the annotations in sync:
 
@@ -45,14 +54,16 @@ When you touch the public HTTP API, keep the annotations in sync:
   request/response type. `utoipa` is the only presentation-adjacent
   dependency allowed in `slop-protocol`, solely for schema generation.
 - Annotate every new or changed handler with `#[utoipa::path(...)]`
-  (method, `path = "..."`, `tag`, `security` for authenticated routes,
-  and all `responses` with `body = ...`). See `health`/`node` in
-  `crates/slop-daemon/src/main.rs` for the pattern.
+  (method, `path = "..."`, `tag`, `params` for path/query args,
+  `request_body` for JSON bodies, `security` for authenticated routes,
+  and all `responses` with `body = ...`). Any nearby handler shows the
+  pattern.
 - Register the handler in `paths(...)` and every new schema in
-  `components(schemas(...))` in `ApiDoc`. Unregistered handlers/types
-  silently disappear from the published document.
-- Run `cargo test -p slop-daemon api::openapi` and manually check
-  `/api-docs/openapi.json` + `/docs` when routes change.
+  `components(schemas(...))` in `ApiDoc`, and extend `EXPECTED_API_PATHS`
+  in the coverage test. Unregistered handlers/types silently disappear
+  from the published document.
+- Run `cargo test -p slop-daemon api::openapi` and regenerate the JSON
+  to eyeball the diff when routes change.
 
 ## Validation
 

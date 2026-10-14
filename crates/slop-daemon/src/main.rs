@@ -26,6 +26,7 @@ use slop_protocol::{
     API_VERSION, ErrorResponse, HEALTH_PATH, HealthResponse, NODE_PATH, NodeResponse, SERVICE_NAME,
 };
 use tokio::{task::JoinHandle, time::timeout};
+use utoipa::OpenApi;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -37,6 +38,10 @@ struct Args {
     /// Override the configured display name for this node.
     #[arg(long, env = "SLOP_NODE_NAME")]
     name: Option<String>,
+    /// Print the generated OpenAPI document to stdout and exit without
+    /// opening storage, binding a socket, or starting the runtime.
+    #[arg(long)]
+    dump_openapi: bool,
 }
 
 #[tokio::main]
@@ -51,6 +56,12 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<()> {
+    if args.dump_openapi {
+        let document = api::openapi::ApiDoc::openapi();
+        let json = serde_json::to_string_pretty(&document)?;
+        println!("{json}");
+        return Ok(());
+    }
     let config = config::load_with_environment_and_name(
         args.startup,
         args.name,

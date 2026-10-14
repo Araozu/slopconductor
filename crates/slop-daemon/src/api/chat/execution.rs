@@ -1,6 +1,16 @@
 use super::*;
 
-pub(super) async fn capabilities() -> Json<slop_protocol::execution::CapabilitiesResponse> {
+#[utoipa::path(
+    get,
+    path = "/v1/capabilities",
+    tag = "chat",
+    responses(
+        (status = 200, description = "Runtime capability advertisement", body = slop_protocol::execution::CapabilitiesResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn capabilities() -> Json<slop_protocol::execution::CapabilitiesResponse> {
     Json(slop_protocol::execution::CapabilitiesResponse {
         structured_messages: true,
         per_turn_model_selection: true,
@@ -21,7 +31,24 @@ pub(super) async fn capabilities() -> Json<slop_protocol::execution::Capabilitie
     })
 }
 
-pub(super) async fn steering_instructions(
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{session_id}/instructions",
+    tag = "chat",
+    params(
+        ("session_id" = String, Path, description = "Session id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Steering instructions", body = slop_protocol::chat::Page<slop_protocol::chat::SteeringInstructionResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Session not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn steering_instructions(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Query(query): Query<PageQuery>,
@@ -37,7 +64,24 @@ pub(super) async fn steering_instructions(
             .await,
     )
 }
-pub(super) async fn model_requests(
+#[utoipa::path(
+    get,
+    path = "/v1/turns/{turn_id}/requests",
+    tag = "chat",
+    params(
+        ("turn_id" = String, Path, description = "Turn id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Per-turn model requests", body = slop_protocol::chat::Page<slop_protocol::execution::ModelRequestResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Turn not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn model_requests(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(query): Query<PageQuery>,
@@ -48,7 +92,24 @@ pub(super) async fn model_requests(
     };
     storage_response(state.store.model_requests(&id, query.after, limit).await)
 }
-pub(super) async fn tool_invocations(
+#[utoipa::path(
+    get,
+    path = "/v1/turns/{turn_id}/tools",
+    tag = "chat",
+    params(
+        ("turn_id" = String, Path, description = "Turn id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Per-turn tool invocations", body = slop_protocol::chat::Page<slop_protocol::execution::ToolInvocationResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Turn not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn tool_invocations(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(query): Query<PageQuery>,
@@ -59,25 +120,74 @@ pub(super) async fn tool_invocations(
     };
     storage_response(state.store.tool_invocations(&id, query.after, limit).await)
 }
-pub(super) async fn tool_invocation(
+#[utoipa::path(
+    get,
+    path = "/v1/tools/{id}",
+    tag = "chat",
+    params(("id" = String, Path, description = "Tool invocation id")),
+    responses(
+        (status = 200, description = "Tool invocation record", body = slop_protocol::execution::ToolInvocationResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Tool invocation not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn tool_invocation(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
     storage_response(state.store.tool_invocation(&id).await)
 }
-pub(super) async fn message(
+#[utoipa::path(
+    get,
+    path = "/v1/messages/{id}",
+    tag = "chat",
+    params(("id" = String, Path, description = "Message id")),
+    responses(
+        (status = 200, description = "Message record", body = slop_protocol::chat::MessageResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Message not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
     storage_response(state.store.message(&id).await)
 }
-pub(super) async fn artifact(
+#[utoipa::path(
+    get,
+    path = "/v1/artifacts/{id}",
+    tag = "chat",
+    params(("id" = String, Path, description = "Artifact id")),
+    responses(
+        (status = 200, description = "Artifact metadata", body = slop_protocol::execution::ArtifactResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Artifact not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn artifact(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
     storage_response(state.store.artifact(&id).await)
 }
-pub(super) async fn artifact_content(
+#[utoipa::path(
+    get,
+    path = "/v1/artifacts/{id}/content",
+    tag = "chat",
+    params(("id" = String, Path, description = "Artifact id")),
+    responses(
+        (status = 200, description = "Artifact bytes", content_type = "application/octet-stream"),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Artifact unavailable", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Artifact data inconsistent", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn artifact_content(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
@@ -133,7 +243,17 @@ pub(super) async fn artifact_content(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-pub(super) async fn models(State(state): State<Arc<AppState>>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/models",
+    tag = "chat",
+    responses(
+        (status = 200, description = "Executable model catalog", body = Vec<ModelResponse>),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn models(State(state): State<Arc<AppState>>) -> Response {
     let mut items = Vec::new();
     for id in slop_core::provider::ProviderId::all() {
         let Some(provider) = slop_runtime::providers::provider(*id) else {

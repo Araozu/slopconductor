@@ -89,18 +89,18 @@ pub struct EventQuery {
     follow: Option<bool>,
 }
 
-mod events;
-mod execution;
-mod history;
-mod sessions;
+pub(crate) mod events;
+pub(crate) mod execution;
+pub(crate) mod history;
+pub(crate) mod sessions;
 mod support;
-mod turns;
+pub(crate) mod turns;
 
-use events::*;
-use execution::*;
-use history::*;
-pub(super) use sessions::send_message;
-use sessions::*;
+pub(crate) use events::*;
+pub(crate) use execution::*;
+pub(crate) use history::*;
+pub(crate) use sessions::send_message;
+pub(crate) use sessions::*;
 pub(in crate::api) use support::error;
 pub(in crate::api) use support::{
     accepted, authorize_request, checked_limit, normalize_rejections, storage_response, store_error,

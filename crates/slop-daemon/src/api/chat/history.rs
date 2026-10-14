@@ -1,7 +1,21 @@
 use super::*;
 use slop_protocol::chat::{DeleteMessageRequest, EditMessageRequest, ForkSessionRequest};
 
-pub(super) async fn fork_session(
+#[utoipa::path(
+    post,
+    path = "/v1/sessions/{session_id}/fork",
+    tag = "chat",
+    params(("session_id" = String, Path, description = "Source session id")),
+    request_body = ForkSessionRequest,
+    responses(
+        (status = 202, description = "Fork accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Session not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn fork_session(
     State(state): State<Arc<AppState>>,
     Path(session): Path<String>,
     Json(request): Json<ForkSessionRequest>,
@@ -9,7 +23,24 @@ pub(super) async fn fork_session(
     accepted(state.store.fork_session(&session, request).await)
 }
 
-pub(super) async fn edit_message(
+#[utoipa::path(
+    patch,
+    path = "/v1/sessions/{session_id}/messages/{message_id}",
+    tag = "chat",
+    params(
+        ("session_id" = String, Path, description = "Session id"),
+        ("message_id" = String, Path, description = "Message id")
+    ),
+    request_body = EditMessageRequest,
+    responses(
+        (status = 202, description = "Edit accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Message not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn edit_message(
     State(state): State<Arc<AppState>>,
     Path((session, message)): Path<(String, String)>,
     Json(request): Json<EditMessageRequest>,
@@ -66,7 +97,24 @@ pub(super) async fn edit_message(
     )
 }
 
-pub(super) async fn delete_message(
+#[utoipa::path(
+    delete,
+    path = "/v1/sessions/{session_id}/messages/{message_id}",
+    tag = "chat",
+    params(
+        ("session_id" = String, Path, description = "Session id"),
+        ("message_id" = String, Path, description = "Message id")
+    ),
+    request_body = DeleteMessageRequest,
+    responses(
+        (status = 202, description = "Delete accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request or history busy", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Message not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn delete_message(
     State(state): State<Arc<AppState>>,
     Path((session, message)): Path<(String, String)>,
     Json(request): Json<DeleteMessageRequest>,

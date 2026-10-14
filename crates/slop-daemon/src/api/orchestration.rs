@@ -96,7 +96,20 @@ pub(super) fn preflight(
     Ok(spec)
 }
 
-async fn create_task(
+#[utoipa::path(
+    post,
+    path = "/v1/tasks",
+    tag = "orchestration",
+    request_body = CreateTaskRequest,
+    responses(
+        (status = 202, description = "Task creation accepted", body = slop_protocol::orchestration::TaskReceipt),
+        (status = 400, description = "Invalid spec", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn create_task(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateTaskRequest>,
 ) -> Response {
@@ -121,28 +134,116 @@ async fn create_task(
     };
     accepted(state.store.create_task(request, effective).await)
 }
-async fn task(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Task id")),
+    responses(
+        (status = 200, description = "Task record", body = slop_protocol::chat::SessionResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Task not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn task(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     storage_response(state.store.task(&id).await)
 }
-async fn run(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/runs/{id}",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Run id")),
+    responses(
+        (status = 200, description = "Run record", body = slop_protocol::orchestration::RunResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn run(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     storage_response(state.store.run(&id).await)
 }
-async fn batch(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/batches/{id}",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Batch id")),
+    responses(
+        (status = 200, description = "Batch record", body = slop_protocol::orchestration::BatchResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Batch not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn batch(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     storage_response(state.store.batch(&id).await)
 }
-async fn tasks(State(state): State<Arc<AppState>>, Query(q): Query<PageQuery>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/tasks",
+    tag = "orchestration",
+    params(
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Tasks", body = slop_protocol::chat::Page<slop_protocol::chat::SessionResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn tasks(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<PageQuery>,
+) -> Response {
     match checked_limit(q.limit) {
         Ok(l) => storage_response(state.store.tasks(None, q.after, l).await),
         Err(e) => e.into_response(),
     }
 }
-async fn batches(State(state): State<Arc<AppState>>, Query(q): Query<PageQuery>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/batches",
+    tag = "orchestration",
+    params(
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Batches", body = slop_protocol::chat::Page<slop_protocol::orchestration::BatchResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn batches(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<PageQuery>,
+) -> Response {
     match checked_limit(q.limit) {
         Ok(l) => storage_response(state.store.batches(q.after, l).await),
         Err(e) => e.into_response(),
     }
 }
-async fn runs(
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/runs",
+    tag = "orchestration",
+    params(
+        ("id" = String, Path, description = "Task id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Task run attempts", body = slop_protocol::chat::Page<slop_protocol::orchestration::RunResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn runs(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<PageQuery>,
@@ -152,7 +253,23 @@ async fn runs(
         Err(e) => e.into_response(),
     }
 }
-async fn events(
+#[utoipa::path(
+    get,
+    path = "/v1/tasks/{id}/events",
+    tag = "orchestration",
+    params(
+        ("id" = String, Path, description = "Task id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Task events", body = slop_protocol::chat::Page<slop_protocol::orchestration::TaskEventResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn events(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<PageQuery>,
@@ -162,7 +279,23 @@ async fn events(
         Err(e) => e.into_response(),
     }
 }
-async fn members(
+#[utoipa::path(
+    get,
+    path = "/v1/batches/{id}/members",
+    tag = "orchestration",
+    params(
+        ("id" = String, Path, description = "Batch id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Batch member tasks", body = slop_protocol::chat::Page<slop_protocol::chat::SessionResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn members(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<PageQuery>,
@@ -172,7 +305,23 @@ async fn members(
         Err(e) => e.into_response(),
     }
 }
-async fn results(
+#[utoipa::path(
+    get,
+    path = "/v1/batches/{id}/results",
+    tag = "orchestration",
+    params(
+        ("id" = String, Path, description = "Batch id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Batch member results", body = slop_protocol::chat::Page<slop_protocol::orchestration::BatchResultResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn results(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<PageQuery>,
@@ -212,28 +361,88 @@ async fn control(
         }
     })
 }
-async fn pause(
+#[utoipa::path(
+    post,
+    path = "/v1/runs/{id}/pause",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Run id")),
+    request_body = TurnControlRequest,
+    responses(
+        (status = 202, description = "Run pause accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn pause(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(r): Json<TurnControlRequest>,
 ) -> Response {
     control(s, id, r, "pause").await
 }
-async fn resume(
+#[utoipa::path(
+    post,
+    path = "/v1/runs/{id}/resume",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Run id")),
+    request_body = TurnControlRequest,
+    responses(
+        (status = 202, description = "Run resume accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn resume(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(r): Json<TurnControlRequest>,
 ) -> Response {
     control(s, id, r, "resume").await
 }
-async fn cancel(
+#[utoipa::path(
+    post,
+    path = "/v1/runs/{id}/cancel",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Run id")),
+    request_body = TurnControlRequest,
+    responses(
+        (status = 202, description = "Run cancellation accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn cancel(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(r): Json<TurnControlRequest>,
 ) -> Response {
     control(s, id, r, "cancel").await
 }
-async fn retry(
+#[utoipa::path(
+    post,
+    path = "/v1/runs/{id}/retry",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Run id")),
+    request_body = RetryRunRequest,
+    responses(
+        (status = 202, description = "Run retry accepted", body = slop_protocol::orchestration::TaskReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn retry(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<RetryRunRequest>,
@@ -278,10 +487,38 @@ async fn prepare(
     }
     state.store.preview_batch(spec, cells).await
 }
-async fn preview(State(state): State<Arc<AppState>>, Json(spec): Json<BatchSpec>) -> Response {
+#[utoipa::path(
+    post,
+    path = "/v1/batches/preview",
+    tag = "orchestration",
+    request_body = BatchSpec,
+    responses(
+        (status = 200, description = "Batch matrix preview", body = slop_protocol::orchestration::BatchPreviewResponse),
+        (status = 400, description = "Invalid spec", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn preview(
+    State(state): State<Arc<AppState>>,
+    Json(spec): Json<BatchSpec>,
+) -> Response {
     storage_response(prepare(&state, spec).await)
 }
-async fn submit(
+#[utoipa::path(
+    post,
+    path = "/v1/batches",
+    tag = "orchestration",
+    request_body = CreateBatchRequest,
+    responses(
+        (status = 202, description = "Batch submission accepted", body = slop_protocol::orchestration::BatchReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn submit(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateBatchRequest>,
 ) -> Response {
@@ -302,7 +539,22 @@ async fn submit(
     };
     accepted(state.store.create_batch(request, prepared).await)
 }
-async fn retry_batch(
+#[utoipa::path(
+    post,
+    path = "/v1/batches/{id}/retry",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Batch id")),
+    request_body = RetryBatchRequest,
+    responses(
+        (status = 202, description = "Batch retry accepted", body = slop_protocol::orchestration::BatchReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Batch not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn retry_batch(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<RetryBatchRequest>,
@@ -340,7 +592,22 @@ async fn retry_batch(
     )
 }
 
-async fn instruction(
+#[utoipa::path(
+    post,
+    path = "/v1/tasks/{id}/instructions",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Task id")),
+    request_body = slop_protocol::chat::SendMessageRequest,
+    responses(
+        (status = 202, description = "Instruction accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Task not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn instruction(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<slop_protocol::chat::SendMessageRequest>,
@@ -351,7 +618,22 @@ async fn instruction(
     chat::send_message(State(state), Path(id), Json(request)).await
 }
 
-async fn cancel_batch(
+#[utoipa::path(
+    post,
+    path = "/v1/batches/{id}/cancel",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Batch id")),
+    request_body = TurnControlRequest,
+    responses(
+        (status = 202, description = "Batch cancellation accepted", body = slop_protocol::orchestration::BatchCancelReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Batch not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn cancel_batch(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<TurnControlRequest>,
@@ -362,7 +644,22 @@ async fn cancel_batch(
     accepted(state.store.cancel_batch(&id, request).await)
 }
 
-async fn create_child(
+#[utoipa::path(
+    post,
+    path = "/v1/runs/{id}/children",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Parent run id")),
+    request_body = CreateChildRequest,
+    responses(
+        (status = 202, description = "Child task creation accepted", body = slop_protocol::orchestration::TaskReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn create_child(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<CreateChildRequest>,
@@ -401,7 +698,23 @@ async fn create_child(
     };
     accepted(state.store.create_child(&id, request, effective).await)
 }
-async fn children(
+#[utoipa::path(
+    get,
+    path = "/v1/runs/{id}/children",
+    tag = "orchestration",
+    params(
+        ("id" = String, Path, description = "Parent run id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Child tasks", body = slop_protocol::chat::Page<slop_protocol::chat::SessionResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn children(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<PageQuery>,
@@ -411,7 +724,22 @@ async fn children(
         Err(e) => e.into_response(),
     }
 }
-async fn wait_children(
+#[utoipa::path(
+    post,
+    path = "/v1/runs/{id}/wait",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Run id")),
+    request_body = WaitChildrenRequest,
+    responses(
+        (status = 202, description = "Child wait accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Admission closed", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn wait_children(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<WaitChildrenRequest>,
@@ -421,6 +749,21 @@ async fn wait_children(
     }
     accepted(state.store.wait_children(&id, request).await)
 }
-async fn run_result(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/runs/{id}/result",
+    tag = "orchestration",
+    params(("id" = String, Path, description = "Run id")),
+    responses(
+        (status = 200, description = "Public run result", body = slop_protocol::orchestration::RunResultResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Run or result not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn run_result(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
     storage_response(state.store.run_result(&id).await)
 }

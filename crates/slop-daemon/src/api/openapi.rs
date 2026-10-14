@@ -1,9 +1,16 @@
 //! OpenAPI document and Swagger UI routes for the daemon HTTP API.
 //!
-//! The document is generated at compile time with `utoipa`. To keep it accurate:
+//! The document is generated at compile time with `utoipa` and served at
+//! `GET /api-docs/openapi.json` (plus Swagger UI at `GET /docs`). The
+//! generated JSON is deliberately *not* checked into source control: regenerate
+//! it locally with `cargo run -p slop-daemon -- --dump-openapi` (see
+//! `AGENTS.md`).
+//!
+//! To keep the document accurate:
 //! - Derive `utoipa::ToSchema` on every new `slop-protocol` request/response type.
 //! - Annotate every new handler with `#[utoipa::path(...)]`.
-//! - Register the handler and all new schemas in `ApiDoc` below.
+//! - Register the handler and all new schemas in `ApiDoc` below and extend
+//!   `EXPECTED_API_PATHS` in the coverage test.
 
 use utoipa::OpenApi;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -49,6 +56,80 @@ impl utoipa::Modify for BearerSecurity {
     paths(
         crate::health,
         crate::node,
+        // Chat: durable sessions, text chat, history, drafts, inbox, events,
+        // turns, tool invocations, messages, artifacts, models.
+        super::chat::execution::capabilities,
+        super::chat::execution::models,
+        super::chat::sessions::sessions,
+        super::chat::sessions::create_session,
+        super::chat::sessions::session,
+        super::chat::history::fork_session,
+        super::chat::history::edit_message,
+        super::chat::history::delete_message,
+        super::chat::sessions::update_session_inbox,
+        super::chat::sessions::drafts,
+        super::chat::sessions::save_draft,
+        super::chat::sessions::remove_draft,
+        super::chat::sessions::messages,
+        super::chat::sessions::send_message,
+        super::chat::execution::steering_instructions,
+        super::chat::events::events,
+        super::chat::turns::turn,
+        super::chat::execution::model_requests,
+        super::chat::execution::tool_invocations,
+        super::chat::execution::tool_invocation,
+        super::chat::execution::message,
+        super::chat::execution::artifact,
+        super::chat::execution::artifact_content,
+        super::chat::turns::cancel_turn,
+        super::chat::turns::pause_turn,
+        super::chat::turns::resume_turn,
+        // Orchestration: tasks, runs, batches, children, waits, results.
+        super::orchestration::create_task,
+        super::orchestration::tasks,
+        super::orchestration::task,
+        super::orchestration::runs,
+        super::orchestration::events,
+        super::orchestration::instruction,
+        super::orchestration::run,
+        super::orchestration::pause,
+        super::orchestration::resume,
+        super::orchestration::cancel,
+        super::orchestration::retry,
+        super::orchestration::children,
+        super::orchestration::create_child,
+        super::orchestration::wait_children,
+        super::orchestration::run_result,
+        super::orchestration::preview,
+        super::orchestration::submit,
+        super::orchestration::batches,
+        super::orchestration::batch,
+        super::orchestration::members,
+        super::orchestration::results,
+        super::orchestration::retry_batch,
+        super::orchestration::cancel_batch,
+        // Provider credentials: statuses, API keys, discovery, Codex login.
+        super::providers::statuses,
+        super::providers::set_api_key,
+        super::providers::remove_api_key,
+        super::providers::discover,
+        super::providers::accounts,
+        super::providers::select_auth,
+        super::providers::sign_out,
+        super::providers::start_login,
+        super::providers::login_status,
+        // Projects, workspaces, and local filesystem navigation.
+        super::filesystem::browse,
+        super::filesystem::create,
+        super::projects::projects,
+        super::projects::register,
+        super::projects::create,
+        super::projects::project,
+        super::projects::workspaces,
+        super::projects::events,
+        super::projects::workspace,
+        super::projects::diff,
+        super::projects::remove,
     ),
     components(
         schemas(
@@ -135,6 +216,10 @@ impl utoipa::Modify for BearerSecurity {
     modifiers(&BearerSecurity),
     tags(
         (name = "system", description = "Health and node identity"),
+        (name = "chat", description = "Durable sessions and text chat"),
+        (name = "orchestration", description = "Tasks, run attempts, and batch matrices"),
+        (name = "providers", description = "Provider credentials and discovery"),
+        (name = "projects", description = "Projects, workspaces, and filesystem navigation"),
     )
 )]
 pub struct ApiDoc;
@@ -160,22 +245,98 @@ pub fn router() -> axum::Router {
 mod tests {
     use super::*;
 
+    /// Every axum route registered in `main` and `api::*::router` must have a
+    /// matching OpenAPI path below. When adding a route, annotate the handler
+    /// with `#[utoipa::path]`, register it in `ApiDoc::paths`, and extend
+    /// this list.
+    const EXPECTED_API_PATHS: &[&str] = &[
+        "/v1/health",
+        "/v1/node",
+        // Chat.
+        "/v1/capabilities",
+        "/v1/models",
+        "/v1/sessions",
+        "/v1/sessions/{session_id}",
+        "/v1/sessions/{session_id}/fork",
+        "/v1/sessions/{session_id}/messages/{message_id}",
+        "/v1/sessions/{session_id}/inbox",
+        "/v1/drafts",
+        "/v1/drafts/{id}",
+        "/v1/sessions/{session_id}/messages",
+        "/v1/sessions/{session_id}/instructions",
+        "/v1/sessions/{session_id}/events",
+        "/v1/turns/{turn_id}",
+        "/v1/turns/{turn_id}/requests",
+        "/v1/turns/{turn_id}/tools",
+        "/v1/tools/{id}",
+        "/v1/messages/{id}",
+        "/v1/artifacts/{id}",
+        "/v1/artifacts/{id}/content",
+        "/v1/turns/{turn_id}/cancel",
+        "/v1/turns/{turn_id}/pause",
+        "/v1/turns/{turn_id}/resume",
+        // Orchestration.
+        "/v1/tasks",
+        "/v1/tasks/{id}",
+        "/v1/tasks/{id}/runs",
+        "/v1/tasks/{id}/events",
+        "/v1/tasks/{id}/instructions",
+        "/v1/runs/{id}",
+        "/v1/runs/{id}/pause",
+        "/v1/runs/{id}/resume",
+        "/v1/runs/{id}/cancel",
+        "/v1/runs/{id}/retry",
+        "/v1/runs/{id}/children",
+        "/v1/runs/{id}/wait",
+        "/v1/runs/{id}/result",
+        "/v1/batches/preview",
+        "/v1/batches",
+        "/v1/batches/{id}",
+        "/v1/batches/{id}/members",
+        "/v1/batches/{id}/results",
+        "/v1/batches/{id}/retry",
+        "/v1/batches/{id}/cancel",
+        // Providers.
+        "/v1/providers",
+        "/v1/providers/{provider}/api-key",
+        "/v1/providers/{provider}/models",
+        "/v1/providers/codex/accounts",
+        "/v1/providers/codex/auth",
+        "/v1/providers/codex/accounts/{account_id}/logout",
+        "/v1/providers/codex/login",
+        "/v1/providers/codex/login/{login_id}",
+        // Projects and filesystem.
+        "/v1/filesystem",
+        "/v1/filesystem/directories",
+        "/v1/projects",
+        "/v1/projects/create",
+        "/v1/projects/{id}",
+        "/v1/projects/{id}/workspaces",
+        "/v1/projects/{id}/events",
+        "/v1/workspaces/{id}",
+        "/v1/workspaces/{id}/diff",
+        "/v1/workspaces/{id}/remove",
+    ];
+
     #[test]
-    fn openapi_document_contains_registered_paths_and_schemas() {
+    fn openapi_document_covers_every_route() {
         let doc = ApiDoc::openapi();
         let json = serde_json::to_value(&doc).expect("OpenAPI document serializes to JSON");
         let paths = json
             .get("paths")
             .and_then(|paths| paths.as_object())
             .expect("document has paths");
-        assert!(
-            paths.contains_key("/v1/health"),
-            "health path missing from OpenAPI document"
+        assert_eq!(
+            paths.len(),
+            EXPECTED_API_PATHS.len(),
+            "OpenAPI path count drifted; register new routes in ApiDoc and EXPECTED_API_PATHS"
         );
-        assert!(
-            paths.contains_key("/v1/node"),
-            "node path missing from OpenAPI document"
-        );
+        for path in EXPECTED_API_PATHS {
+            assert!(
+                paths.contains_key(*path),
+                "route {path} missing from OpenAPI document"
+            );
+        }
         let schemas = json
             .pointer("/components/schemas")
             .and_then(|schemas| schemas.as_object())
@@ -186,6 +347,11 @@ mod tests {
             "ErrorResponse",
             "SessionResponse",
             "CreateSessionRequest",
+            "TaskReceipt",
+            "BatchResponse",
+            "ProjectResponse",
+            "ProviderStatus",
+            "DirectoryResponse",
         ] {
             assert!(schemas.contains_key(name), "schema {name} missing");
         }

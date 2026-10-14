@@ -229,6 +229,19 @@ for verified behavior and the remaining daemon/API work.
 For a walkthrough of daemon concepts and the implemented request, persistence,
 streaming, cancellation, and restart flows, see the [slop-daemon guide](crates/slop-daemon/slop-daemon-guide.md).
 
+## API reference (OpenAPI)
+
+A running daemon serves its full OpenAPI document at
+`GET /api-docs/openapi.json` with interactive Swagger UI at `GET /docs`.
+To regenerate the document without starting the daemon:
+
+```sh
+cargo run -p slop-daemon -- --dump-openapi > /tmp/openapi.json
+```
+
+The generated JSON is a local artifact and is git-ignored; the source of
+truth is the `utoipa` annotations in `crates/slop-daemon/src/api/`.
+
 Building the CLI does not build the daemon, its execution layer, or a frontend.
 Browser and Electron projects will have their own builds when introduced.
 

@@ -1,6 +1,19 @@
 use super::*;
 
-pub(super) async fn update_session_inbox(
+#[utoipa::path(
+    post,
+    path = "/v1/sessions/{session_id}/inbox",
+    tag = "chat",
+    params(("session_id" = String, Path, description = "Session id")),
+    request_body = slop_protocol::chat::UpdateSessionInboxRequest,
+    responses(
+        (status = 202, description = "Inbox update accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn update_session_inbox(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<slop_protocol::chat::UpdateSessionInboxRequest>,
@@ -8,7 +21,22 @@ pub(super) async fn update_session_inbox(
     accepted(state.store.update_session_inbox(&id, request).await)
 }
 
-pub(super) async fn drafts(
+#[utoipa::path(
+    get,
+    path = "/v1/drafts",
+    tag = "chat",
+    params(
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Saved compose drafts", body = slop_protocol::chat::Page<slop_protocol::chat::ConversationDraft>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn drafts(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PageQuery>,
 ) -> Response {
@@ -19,7 +47,20 @@ pub(super) async fn drafts(
     storage_response(state.store.drafts(query.after, limit).await)
 }
 
-pub(super) async fn save_draft(
+#[utoipa::path(
+    put,
+    path = "/v1/drafts/{id}",
+    tag = "chat",
+    params(("id" = String, Path, description = "Draft id")),
+    request_body = slop_protocol::chat::SaveConversationDraftRequest,
+    responses(
+        (status = 200, description = "Saved draft", body = slop_protocol::chat::ConversationDraft),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn save_draft(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(request): Json<slop_protocol::chat::SaveConversationDraftRequest>,
@@ -27,14 +68,41 @@ pub(super) async fn save_draft(
     storage_response(state.store.save_draft(&id, request).await)
 }
 
-pub(super) async fn remove_draft(
+#[utoipa::path(
+    delete,
+    path = "/v1/drafts/{id}",
+    tag = "chat",
+    params(("id" = String, Path, description = "Draft id")),
+    responses(
+        (status = 200, description = "Draft removed"),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Draft not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn remove_draft(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
     storage_response(state.store.remove_draft(&id).await)
 }
 
-pub(super) async fn sessions(
+#[utoipa::path(
+    get,
+    path = "/v1/sessions",
+    tag = "chat",
+    params(
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Durable sessions", body = slop_protocol::chat::Page<slop_protocol::chat::SessionResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn sessions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PageQuery>,
 ) -> Response {
@@ -45,7 +113,20 @@ pub(super) async fn sessions(
     storage_response(state.store.sessions(query.after, limit).await)
 }
 
-pub(super) async fn create_session(
+#[utoipa::path(
+    post,
+    path = "/v1/sessions",
+    tag = "chat",
+    request_body = CreateSessionRequest,
+    responses(
+        (status = 202, description = "Session creation accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request or unsupported model", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down or runtime unavailable", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Response {
@@ -145,14 +226,43 @@ pub(super) async fn create_session(
     )
 }
 
-pub(super) async fn session(
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{session_id}",
+    tag = "chat",
+    params(("session_id" = String, Path, description = "Session id")),
+    responses(
+        (status = 200, description = "Session record", body = slop_protocol::chat::SessionResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Session not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Response {
     storage_response(state.store.session(&session_id).await)
 }
 
-pub(super) async fn messages(
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{session_id}/messages",
+    tag = "chat",
+    params(
+        ("session_id" = String, Path, description = "Session id"),
+        ("after" = Option<u64>, Query, description = "Cursor after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Session messages", body = slop_protocol::chat::Page<slop_protocol::chat::MessageResponse>),
+        (status = 400, description = "Invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Session not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn messages(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Query(query): Query<PageQuery>,
@@ -164,6 +274,20 @@ pub(super) async fn messages(
     storage_response(state.store.messages(&session_id, query.after, limit).await)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/sessions/{session_id}/messages",
+    tag = "chat",
+    params(("session_id" = String, Path, description = "Session id")),
+    request_body = SendMessageRequest,
+    responses(
+        (status = 202, description = "Message accepted for execution", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request or unsupported model", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down or runtime unavailable", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub(crate) async fn send_message(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,

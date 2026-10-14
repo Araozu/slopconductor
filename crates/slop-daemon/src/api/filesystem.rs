@@ -105,6 +105,24 @@ fn io_response(result: std::io::Result<DirectoryResponse>) -> Response {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/filesystem",
+    tag = "projects",
+    params(
+        ("path" = Option<String>, Query, description = "Absolute directory path; defaults to the home directory"),
+        ("after" = Option<String>, Query, description = "Entry name after which to page"),
+        ("limit" = Option<usize>, Query, description = "Page limit, 1-200")
+    ),
+    responses(
+        (status = 200, description = "Directory listing", body = DirectoryResponse),
+        (status = 400, description = "Not a directory or invalid limit", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 403, description = "Permission denied", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Path not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn browse(Query(query): Query<DirectoryQuery>) -> Response {
     match tokio::task::spawn_blocking(move || listing(query)).await {
         Ok(result) => io_response(result),
@@ -116,6 +134,20 @@ pub async fn browse(Query(query): Query<DirectoryQuery>) -> Response {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/filesystem/directories",
+    tag = "projects",
+    request_body = CreateDirectoryRequest,
+    responses(
+        (status = 200, description = "Created directory listing", body = DirectoryResponse),
+        (status = 400, description = "Invalid folder name", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Parent not found", body = slop_protocol::ErrorResponse),
+        (status = 409, description = "Path already exists", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
 pub async fn create(Json(request): Json<CreateDirectoryRequest>) -> Response {
     match tokio::task::spawn_blocking(move || {
         let mut components = Path::new(&request.name).components();

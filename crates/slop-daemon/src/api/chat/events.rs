@@ -1,6 +1,24 @@
 use super::*;
 
-pub(super) async fn events(
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{session_id}/events",
+    tag = "chat",
+    params(
+        ("session_id" = String, Path, description = "Session id"),
+        ("after" = Option<u64>, Query, description = "Event sequence cursor to replay from"),
+        ("follow" = Option<bool>, Query, description = "Keep the stream open for live deltas")
+    ),
+    responses(
+        (status = 200, description = "NDJSON stream of event frames", body = EventFrame, content_type = "application/x-ndjson"),
+        (status = 400, description = "Cursor ahead of durable history", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Session not found", body = slop_protocol::ErrorResponse),
+        (status = 429, description = "Event subscriber limit reached", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn events(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Query(query): Query<EventQuery>,

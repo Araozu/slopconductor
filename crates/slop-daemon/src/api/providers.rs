@@ -37,11 +37,35 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route_layer(middleware::from_fn_with_state(token, authorize_request))
 }
 
-async fn statuses(State(state): State<Arc<AppState>>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/providers",
+    tag = "providers",
+    responses(
+        (status = 200, description = "Credential status for every provider", body = Vec<slop_protocol::providers::ProviderStatus>),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn statuses(State(state): State<Arc<AppState>>) -> Response {
     Json(state.credentials.statuses().await).into_response()
 }
 
-async fn set_api_key(
+#[utoipa::path(
+    put,
+    path = "/v1/providers/{provider}/api-key",
+    tag = "providers",
+    params(("provider" = String, Path, description = "Provider id")),
+    request_body = SetApiKeyRequest,
+    responses(
+        (status = 200, description = "Provider status after key replacement", body = slop_protocol::providers::ProviderStatus),
+        (status = 400, description = "Unsupported provider or invalid key", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down or storage unavailable", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn set_api_key(
     State(state): State<Arc<AppState>>,
     Path(provider): Path<String>,
     Json(request): Json<SetApiKeyRequest>,
@@ -57,7 +81,21 @@ async fn set_api_key(
     )
 }
 
-async fn start_login(
+#[utoipa::path(
+    post,
+    path = "/v1/providers/codex/login",
+    tag = "providers",
+    request_body = StartLoginRequest,
+    responses(
+        (status = 202, description = "Login flow started", body = slop_protocol::providers::LoginResponse),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 409, description = "Login already in progress", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down or login unavailable", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn start_login(
     State(state): State<Arc<AppState>>,
     Json(request): Json<StartLoginRequest>,
 ) -> Response {
@@ -78,15 +116,54 @@ async fn start_login(
     }
 }
 
-async fn login_status(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/providers/codex/login/{login_id}",
+    tag = "providers",
+    params(("login_id" = String, Path, description = "Login flow id")),
+    responses(
+        (status = 200, description = "Login flow status", body = slop_protocol::providers::LoginStatus),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Login flow not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn login_status(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
     respond(state.credentials.login_status(&id).await)
 }
 
-async fn accounts(State(state): State<Arc<AppState>>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/providers/codex/accounts",
+    tag = "providers",
+    responses(
+        (status = 200, description = "Known ChatGPT/Codex accounts", body = Vec<slop_protocol::providers::ProviderAccount>),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn accounts(State(state): State<Arc<AppState>>) -> Response {
     Json(state.credentials.accounts().await).into_response()
 }
 
-async fn select_auth(
+#[utoipa::path(
+    put,
+    path = "/v1/providers/codex/auth",
+    tag = "providers",
+    request_body = SelectAuthRequest,
+    responses(
+        (status = 200, description = "Provider status after auth selection", body = slop_protocol::providers::ProviderStatus),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Account not found", body = slop_protocol::ErrorResponse),
+        (status = 409, description = "Credentials unavailable or login in progress", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn select_auth(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SelectAuthRequest>,
 ) -> Response {
@@ -101,14 +178,44 @@ async fn select_auth(
     )
 }
 
-async fn sign_out(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+#[utoipa::path(
+    post,
+    path = "/v1/providers/codex/accounts/{account_id}/logout",
+    tag = "providers",
+    params(("account_id" = String, Path, description = "Account id")),
+    responses(
+        (status = 200, description = "Signed out", body = slop_protocol::providers::SignOutResponse),
+        (status = 400, description = "Invalid account id", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Account not found", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn sign_out(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
     if !state.accepting.load(Ordering::Acquire) {
         return credential_error(CredentialError::Stopping);
     }
     respond(state.credentials.sign_out(id, state.runtime.clone()).await)
 }
 
-async fn remove_api_key(
+#[utoipa::path(
+    delete,
+    path = "/v1/providers/{provider}/api-key",
+    tag = "providers",
+    params(("provider" = String, Path, description = "Provider id")),
+    responses(
+        (status = 200, description = "Provider status after key removal", body = slop_protocol::providers::ProviderStatus),
+        (status = 400, description = "Unsupported provider", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down or storage unavailable", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn remove_api_key(
     State(state): State<Arc<AppState>>,
     Path(provider): Path<String>,
 ) -> Response {
@@ -123,7 +230,22 @@ async fn remove_api_key(
     )
 }
 
-async fn discover(State(state): State<Arc<AppState>>, Path(provider): Path<String>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/v1/providers/{provider}/models",
+    tag = "providers",
+    params(("provider" = String, Path, description = "Provider id")),
+    responses(
+        (status = 200, description = "Live provider model catalog", body = ProviderCatalog),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 502, description = "Provider catalog could not be verified", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn discover(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+) -> Response {
     let (client, account_id) = match state
         .credentials
         .discovery_client(&provider, &state.runtime)
