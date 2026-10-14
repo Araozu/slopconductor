@@ -299,6 +299,12 @@ pub(super) fn begin_request(
         tx.commit().map_err(|_| StoreError::Database)?;
         return Ok(false);
     };
+    // Completion messages become model context only between provider requests;
+    // an in-flight call is never interrupted for child progress.
+    if super::children::deliver_notifications(&tx, turn)? {
+        tx.commit().map_err(|_| StoreError::Database)?;
+        return Ok(false);
+    }
     let yielding: bool = tx
         .query_row(
             "SELECT pause_requested!=0 OR EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted') OR EXISTS(SELECT 1 FROM child_waits w WHERE w.parent_turn_id=?1 AND w.completed=0) FROM turns WHERE id=?1",
@@ -794,6 +800,7 @@ pub(super) fn claim_next_turn(
     let tx = connection
         .unchecked_transaction()
         .map_err(|_| StoreError::Database)?;
+    super::children::wake(&tx)?;
     super::governance::prepare_groups(&tx)?;
     type Queued = (
         String,
@@ -815,6 +822,7 @@ pub(super) fn claim_next_turn(
         AND NOT EXISTS(SELECT 1 FROM turns earlier WHERE earlier.session_id=t.session_id AND earlier.ordinal<t.ordinal AND earlier.status IN('queued','running','paused','awaiting_children'))
         AND (s.workspace_root IS NULL OR NOT EXISTS(SELECT 1 FROM turns busy JOIN sessions bs ON bs.id=busy.session_id WHERE busy.status='running' AND bs.workspace_root=s.workspace_root))
         AND NOT EXISTS(SELECT 1 FROM turns r JOIN sessions k ON k.id=r.session_id JOIN batches b ON b.id=k.admission_batch_id WHERE r.id=t.id AND (SELECT count(*) FROM turns br JOIN sessions bk ON bk.id=br.session_id JOIN turns bt ON bt.id=br.id WHERE bk.admission_batch_id=b.id AND bt.status='running')>=b.max_concurrent_runs)
+        AND NOT EXISTS(SELECT 1 FROM child_links own JOIN sessions root ON root.id=own.root_task_id WHERE own.child_task_id=t.session_id AND (SELECT count(*) FROM child_links siblings JOIN turns running ON running.session_id=siblings.child_task_id WHERE siblings.parent_task_id=own.parent_task_id AND running.status='running')>=COALESCE(json_extract(root.spec,'$.orchestration.max_concurrent_children'),4))
         ORDER BY (SELECT last_admission FROM admission_groups WHERE id=COALESCE((SELECT 'batch:'||k.admission_batch_id FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=t.id),(SELECT 'session:'||k.root_task_id FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=t.id),'session:'||t.session_id)),t.rowid LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?,r.get(10)?,r.get(11)?,r.get(12)?))).optional().map_err(|_|StoreError::Database)?;
     let Some((
         turn_id,
@@ -859,7 +867,7 @@ pub(super) fn claim_next_turn(
             |row| row.get(0),
         )
         .map_err(|_| StoreError::Database)?;
-    let orchestration:Option<slop_runtime::orchestration::OrchestrationPolicy>=tx.query_row("SELECT json_extract(k.spec,'$.orchestration') FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=?1",[&turn_id],|r|r.get::<_,Option<String>>(0)).optional().map_err(|_|StoreError::Database)?.flatten().map(|s|decode(&s)).transpose()?;
+    let orchestration:Option<slop_runtime::orchestration::OrchestrationPolicy>=tx.query_row("SELECT json_extract(k.spec,'$.orchestration') FROM turns r JOIN sessions k ON k.id=r.session_id WHERE r.id=?1 AND NOT EXISTS(SELECT 1 FROM child_links l WHERE l.child_task_id=k.id)",[&turn_id],|r|r.get::<_,Option<String>>(0)).optional().map_err(|_|StoreError::Database)?.flatten().map(|s|decode(&s)).transpose()?;
     let base_request_limit = execution.as_ref().map_or(
         1 + i64::from(slop_runtime::agent::output_limit::MAX_CONTINUATIONS)
             + i64::from(slop_runtime::agent::context::MAX_COMPACTIONS_PER_TURN),

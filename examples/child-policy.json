@@ -1,6 +1,7 @@
 {
   "max_children": 4,
-  "max_depth": 2,
+  "max_concurrent_children": 4,
+  "max_depth": 1,
   "allowed_models": ["opencode-go/glm-5.3-flash"],
   "allowed_tools": ["write"]
 }

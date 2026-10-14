@@ -242,6 +242,7 @@ async fn health() -> Json<HealthResponse> {
             "chat-history-editing".to_owned(),
             "orchestration-controls".to_owned(),
             "child-tasks".to_owned(),
+            "subagent-v2".to_owned(),
             "batch-matrices".to_owned(),
         ],
     })

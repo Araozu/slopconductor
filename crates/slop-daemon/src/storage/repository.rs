@@ -128,6 +128,19 @@ impl slop_runtime::chat::ChatRepository for StoreClient {
                 .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
         })
     }
+    fn reconcile(&self) -> slop_runtime::chat::RepoFuture<'_, ()> {
+        Box::pin(async move {
+            self.submit(|connection| {
+                let tx = connection
+                    .unchecked_transaction()
+                    .map_err(|_| StoreError::Database)?;
+                children::wake(&tx)?;
+                tx.commit().map_err(|_| StoreError::Database)
+            })
+            .await
+            .map_err(|error| Box::new(error) as slop_runtime::chat::RepoError)
+        })
+    }
     fn checkpoint_visible<'a>(
         &'a self,
         turn_id: &'a str,

@@ -9,6 +9,7 @@ impl DaemonClient {
         self.require_feature("persistent-conversations").await?;
         if request.spec.orchestration.is_some() {
             self.require_feature("child-tasks").await?;
+            self.require_feature("subagent-v2").await?;
         }
         if request.spec.budget.is_some() {
             self.require_feature("orchestration-controls").await?;
@@ -91,6 +92,7 @@ impl DaemonClient {
         }
         if spec.orchestration.is_some() {
             self.require_feature("child-tasks").await?;
+            self.require_feature("subagent-v2").await?;
         }
         let body = serde_json::to_vec(spec).map_err(|_| ClientError::InvalidResponse)?;
         if body.len() > 2 * 1024 * 1024 {
@@ -114,6 +116,7 @@ impl DaemonClient {
         self.require_feature("batch-matrices").await?;
         if request.spec.orchestration.is_some() {
             self.require_feature("child-tasks").await?;
+            self.require_feature("subagent-v2").await?;
         }
         if request.spec.budget.is_some() {
             self.require_feature("orchestration-controls").await?;
@@ -187,6 +190,7 @@ impl DaemonClient {
         request: &CreateChildRequest,
     ) -> Result<TaskReceipt, ClientError> {
         self.require_feature("child-tasks").await?;
+        self.require_feature("subagent-v2").await?;
         self.post_json(
             id_url(&self.endpoint, "/v1/runs", id, Some("children"))?,
             request,
@@ -209,6 +213,7 @@ impl DaemonClient {
         request: &WaitChildrenRequest,
     ) -> Result<CommandReceipt, ClientError> {
         self.require_feature("child-tasks").await?;
+        self.require_feature("subagent-v2").await?;
         self.post_json(
             id_url(&self.endpoint, "/v1/runs", id, Some("wait"))?,
             request,

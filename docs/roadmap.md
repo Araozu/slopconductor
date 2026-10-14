@@ -31,11 +31,12 @@ remote control remain next; the complete milestone gates still apply.
    original receipt; restart cannot reset budgets or lose cancellation intent.
 
 2. **Native child tasks: implemented local slice.** Separately authorized
-   create/inspect/wait/result/cancel operations use the same application services
-   as public clients. Creation commits parent/run links and its native tool
-   result atomically. Context/artifact previews, model/tool subsets, frozen
-   project bases, finite budgets, depth/fan-out, and cancel propagation are
-   explicit. Fresh child sessions/workspaces share the applicable limits.
+   create/discover/inspect/send/wait/result/cancel operations use the same
+   application services as public clients. Creation commits parent/run links
+   and its native tool result atomically. Context/artifact previews, provider
+   model choice, frozen project bases, finite budgets, one-level authority,
+   outstanding/concurrent limits, completion inboxes, and cancel/detach policy
+   are explicit. Fresh child sessions/workspaces share the applicable limits.
    Waiting parents release execution slots; restart preserves dependencies and
    pauses the parent until explicit resume. See [child tasks](child-tasks.md).
 
@@ -160,15 +161,16 @@ detached workspaces. Real-binary offline checks exercise concurrent independent
 edits, frozen commits, diffs, cleanup refusals, and restart durability. Durable tasks/runs and deterministic
 prompt/model/settings matrices now cover
 preview, atomic submission, lazy admission, selective retries, and JSON Lines
-results. Native children now add selected context/artifact previews, bounded
-delegation, parent/run links, durable waits, cancellation propagation, and shared
-budgets/fair admission. Richer result artifacts, branch publishing, automated
+results. Native children now add selected context/artifact previews, one-level
+bounded delegation, parent/run links, completion notifications,
+all/any/time-bounded durable waits, child steering, cancellation propagation,
+and shared budgets/fair admission. Richer result artifacts, branch publishing, automated
 retention, and the remaining platform/capacity checks still precede the full M2
 exit gate.
 
-Implement native child-task creation with explicit context/tool/budget selection,
-bounded fan-out/depth, fair scheduling, and parent/child links. Waiting parents
-release scarce execution slots.
+The native child-task creation slice is implemented with explicit
+context/tool/budget selection, one-level authority, fair scheduling, and
+parent/child links. Attached waiting parents release scarce execution slots.
 
 Explicit live account-scoped catalog probes and Codex registration selection,
 sign-out, reasoning controls, and structured tool execution are now implemented.

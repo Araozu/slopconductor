@@ -179,12 +179,12 @@ diff/status, and conservative cleanup. These are daemon application operations;
 the coding-tool set stays at four. Dedicated model Git tools, merging, publishing,
 and richer result artifacts remain proposed.
 
-Native orchestration tools now create, inspect, wait for, read results from, and
-cancel direct children through the public API's application operations. Explicit
-delegation policies select context/artifact previews, model/tool subsets,
-depth/fan-out limits, and inherited aggregate budgets. Sending a model-authored
-instruction to a child remains future work; clients can use existing task
-instruction operations. See [child tasks](child-tasks.md).
+Native orchestration tools now create, discover models for, inspect, steer, wait
+for, read results from, and cancel direct children through the public API's
+application operations. Explicit delegation policies select context/artifact
+previews, optional model/tool subsets, one-level authority, concurrency and
+outstanding limits, and inherited aggregate budgets. See
+[child tasks](child-tasks.md).
 
 A browser tool service is later work. Its active context and displayed client
 view must have matching identity. Browser processes and contexts have separate
@@ -226,7 +226,8 @@ dispatch. Account-specific admission and browser contexts remain future work.
 
 Parents waiting for children must release scarce inference/tool execution slots.
 Otherwise a full pool of waiting parents can prevent their children from ever
-running. Bound child depth, count, budget, and outstanding waiting relationships.
+running. Enforce one delegation level, child count/concurrency, aggregate
+budgets, and outstanding waiting relationships.
 
 Cancel propagation is recorded at child creation. A child may be canceled with
 its parent or allowed to finish independently. Reconnection or parent restart

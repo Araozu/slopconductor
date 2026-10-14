@@ -1,6 +1,6 @@
 # Slop Conductor overview
 
-**Status as of 2026-10-11.** This is the master high-level map. Detailed design
+**Status as of 2026-10-14.** This is the master high-level map. Detailed design
 lives in the documents linked below; this file summarizes what exists today per
 crate so a new developer can get oriented without reading everything first.
 
@@ -14,8 +14,10 @@ Implemented local slice: loopback daemon + authenticated API, durable text chat,
 structured Go/Zen/Codex tool execution, registered projects with
 managed Git worktrees, durable tasks/run attempts, deterministic batch matrices,
 fair admission with aggregate budgets, batch cancellation, and bounded native
-child tasks with durable waits. Linux and native Windows offline CI pass; live-
-provider and release-build capacity validation remain outstanding. See
+child tasks with one-level delegation, completion notifications, steering, and
+durable all/any/timeout joins. Earlier Linux and native Windows offline CI passed;
+the subagent extension has local Linux validation. Live-provider and release-build
+capacity validation remain outstanding. See
 [native validation](native-validation.md).
 
 ## Workspace in one picture
@@ -178,9 +180,10 @@ Read with [clients](clients.md).
 5. **Scale jobs.** Preview a `BatchSpec` (prompts × models × settings, max 256
    members), submit atomically, admit lazily, retry selected indexes only, and
    export JSON Lines results.
-6. **Delegate.** An authorized parent creates children with explicit
-   models/tools/context/budgets/depth, waits on explicit child run IDs while
-   releasing its execution slot, and consumes bounded result previews.
+6. **Delegate.** An authorized parent asynchronously creates leaf children with
+   independent provider/model/effort and selected tools/context/budgets, inspects
+   progress, steers them, and receives bounded completion notices. All/any/timeout
+   joins release execution slots; attachment and detachment control finalization.
 
 ## Providers, tools, and limits (current defaults)
 
@@ -190,14 +193,16 @@ Read with [clients](clients.md).
   `provider login codex`. Saved keys beat stale env vars; active turns keep
   their snapshot.
 - Tools: only `read`, `write`, `edit`, `bash`, plus separately authorized
-  `child_create/inspect/wait/result/cancel`. No JS backend, no external agent
+  `child_create/discover/inspect/send/wait/result/cancel`. No JS backend, no external agent
   CLI, no per-chat OS process.
 - Representative bounds: 4 concurrent turns; 32 queued/session, 1024 global;
   8,192 messages / 16 MiB context (275k token cost cap, opt-in full model window);
   1 MiB visible output; workspace call/request limits default to `u32::MAX`
   with explicit smaller caps supported; 30 s shell default (max 300 s);
   200 rows/page; 256 projects/workspaces global, 32 workspaces/project; 1024
-  active attempts; 8 attempts/task; batch 1–256 members, concurrency 1–16.
+  active attempts; batch 1–256 members, concurrency 1–16. Child policies bound
+  1–32 outstanding children and 1–8 active children, defaulting to 4 active.
+  Completed children do not exhaust a lifetime count; aggregate budgets still apply.
 
 ## Run and verify
 

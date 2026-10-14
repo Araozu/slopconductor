@@ -291,15 +291,31 @@ mod tests {
         api_version: u32,
         seen: Arc<Mutex<Vec<String>>>,
         unauthorized: bool,
+        capabilities: Vec<String>,
     }
 
     async fn server(api_version: u32, seen: Arc<Mutex<Vec<String>>>, unauthorized: bool) -> String {
+        server_with_capabilities(
+            api_version,
+            seen,
+            unauthorized,
+            vec!["health".into(), "node".into()],
+        )
+        .await
+    }
+
+    async fn server_with_capabilities(
+        api_version: u32,
+        seen: Arc<Mutex<Vec<String>>>,
+        unauthorized: bool,
+        capabilities: Vec<String>,
+    ) -> String {
         async fn health(State(state): State<Arc<TestState>>) -> Json<HealthResponse> {
             Json(HealthResponse {
                 service: SERVICE_NAME.into(),
                 version: "test".into(),
                 api_version: state.api_version,
-                capabilities: vec!["health".into(), "node".into()],
+                capabilities: state.capabilities.clone(),
             })
         }
         async fn node(
@@ -347,6 +363,7 @@ mod tests {
             api_version,
             seen,
             unauthorized,
+            capabilities,
         });
         let app = Router::new()
             .route(HEALTH_PATH, get(health))
@@ -357,6 +374,56 @@ mod tests {
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn subagent_policies_require_new_capability_on_legacy_child_daemons() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = server_with_capabilities(
+            API_VERSION,
+            seen.clone(),
+            false,
+            vec!["persistent-conversations".into(), "child-tasks".into()],
+        )
+        .await;
+        let client = DaemonClient::with_token(&endpoint, Some(TOKEN.into())).unwrap();
+        let policy = slop_protocol::orchestration::OrchestrationPolicy {
+            max_children: 4,
+            max_concurrent_children: 2,
+            max_depth: 1,
+            allowed_models: Vec::new(),
+            allowed_tools: Vec::new(),
+        };
+        assert!(matches!(
+            client
+                .create_session(&CreateSessionRequest {
+                    command_id: "subagent-session".into(),
+                    provider: "opencode-go".into(),
+                    model: "glm-5.3-flash".into(),
+                    orchestration: Some(policy.clone()),
+                    ..Default::default()
+                })
+                .await,
+            Err(ClientError::UnsupportedCapability("subagent-v2"))
+        ));
+        assert!(matches!(
+            client
+                .create_task(&slop_protocol::orchestration::CreateTaskRequest {
+                    command_id: "subagent-task".into(),
+                    spec: slop_protocol::orchestration::SessionSpec {
+                        title: None,
+                        prompt: "delegate".into(),
+                        model: "opencode-go/glm-5.3-flash".into(),
+                        settings: Default::default(),
+                        project: None,
+                        budget: None,
+                        orchestration: Some(policy),
+                    },
+                })
+                .await,
+            Err(ClientError::UnsupportedCapability("subagent-v2"))
+        ));
+        assert!(seen.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

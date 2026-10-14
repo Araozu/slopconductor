@@ -163,7 +163,7 @@ async fn schema_nine_upgrade_preserves_conversations_history_and_receipts() {
         .unwrap();
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
-    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=9;").unwrap();
+    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=9;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
     let client = reopened.client();
@@ -1009,7 +1009,7 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
     client.start_tool(&turn, &intents[1]).await.unwrap();
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
-    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap();
+    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap();
     drop(connection);
     let store = open_test(&dir, None).await;
     let client = store.client();
@@ -1498,7 +1498,7 @@ async fn completed_request_usage_is_durable_before_the_turn_finishes() {
     assert_eq!(client.message(&reply.id).await.unwrap(), reply);
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
-    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap();
+    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
     let recovered = reopened.client().turn(&turn).await.unwrap();
@@ -1619,7 +1619,7 @@ async fn messages_keep_turn_models_across_provider_switches_and_migration() {
     // Exercise the previous schema's backfill using each turn's frozen model,
     // including resolved aliases and turns that override the session provider.
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
-    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap();
+    connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
     assert_eq!(

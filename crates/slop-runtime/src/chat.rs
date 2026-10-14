@@ -282,6 +282,8 @@ async fn run_scheduler<R: ChatRepository>(
     let mut active_turns = HashSet::new();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut claim_failures = 0_u8;
+    let mut reconcile_interval = tokio::time::interval(CLAIM_POLL);
+    reconcile_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         if *shutdown.borrow() {
             break;
@@ -300,6 +302,14 @@ async fn run_scheduler<R: ChatRepository>(
         }
         let permit = tokio::select! {
             _ = shutdown.changed() => break,
+            _ = reconcile_interval.tick() => {
+                if repository.reconcile().await.is_err() {
+                    scheduler_healthy.store(false, Ordering::Release);
+                    let _ = shutdown_sender.send(true);
+                    break;
+                }
+                continue;
+            },
             joined = turns.join_next(), if !turns.is_empty() => {
                 if let Some(joined) = joined {
                     match joined {
@@ -341,6 +351,13 @@ async fn run_scheduler<R: ChatRepository>(
                 drop(permit);
                 tokio::select! {
                     _ = shutdown.changed() => break,
+                    _ = reconcile_interval.tick() => {
+                        if repository.reconcile().await.is_err() {
+                            scheduler_healthy.store(false, Ordering::Release);
+                            let _ = shutdown_sender.send(true);
+                            break;
+                        }
+                    }
                     joined = turns.join_next(), if !turns.is_empty() => {
                         if let Some(joined) = joined {
                             match joined {

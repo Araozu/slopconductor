@@ -79,7 +79,7 @@ pub(super) fn legacy_fixture(c: &Connection, version: i64) -> StoreResult<()> {
             ALTER TABLE sessions DROP COLUMN inbox;
             DROP TABLE conversation_drafts;
             CREATE TEMP TABLE saved_work AS SELECT id,owner_node_id,spec,requested_spec,created_order,last_event_sequence FROM sessions;
-            DROP TABLE child_waits; DROP TABLE child_links;
+            DROP TABLE child_notifications; DROP TABLE child_waits; DROP TABLE child_links;
             DROP TABLE admission_groups; DROP TABLE admission_clock; DROP TABLE operation_budgets;
             DROP TRIGGER readmission_epoch;
             ALTER TABLE turns DROP COLUMN admission_epoch; ALTER TABLE turns DROP COLUMN budget_exhausted;

@@ -63,6 +63,11 @@ pub trait ChatRepository: Send + Sync + 'static {
     ) -> RepoFuture<'a, ()>;
     /// Atomically claim the next eligible turn and mark it running.
     fn claim_next(&self) -> RepoFuture<'_, Option<TurnWork>>;
+    /// Reconcile durable deadlines and notifications even while every execution
+    /// permit is occupied.
+    fn reconcile(&self) -> RepoFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
     /// Persist bounded visible assistant text as an incomplete checkpoint.
     fn checkpoint_visible<'a>(&'a self, turn_id: &'a str, text: &'a str) -> RepoFuture<'a, ()>;
     /// Atomically record the terminal assistant message, usage, outcome, and

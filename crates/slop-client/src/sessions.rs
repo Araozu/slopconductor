@@ -83,6 +83,13 @@ impl DaemonClient {
             self.require_feature("full-context").await?;
         }
         self.require_feature("persistent-conversations").await?;
+        if request.orchestration.is_some() {
+            self.require_feature("child-tasks").await?;
+            self.require_feature("subagent-v2").await?;
+        }
+        if request.budget.is_some() {
+            self.require_feature("orchestration-controls").await?;
+        }
         self.post_json(self.endpoint.join("/v1/sessions")?, request)
             .await
     }

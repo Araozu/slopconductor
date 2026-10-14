@@ -13,10 +13,14 @@ class DelegationFixture:
     def __init__(self):
         self.project_id = None
         self.calls = []
+        self.notification_visible = False
+        self.any_join_seen = False
+        self.timeout_seen = False
         self.lock = threading.Lock()
         self.children_release = threading.Event()
         self.held_release = threading.Event()
         self.manual_release = threading.Event()
+        self.slow_release = threading.Event()
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -29,13 +33,18 @@ class DelegationFixture:
                 results = [m for m in payload["messages"] if m["role"] == "tool"]
                 with fixture.lock:
                     fixture.calls.append(payload)
+                    if prompt == "delegate" and any(
+                        m["role"] == "user" and "Child task completion notices" in str(m.get("content", ""))
+                        for m in payload["messages"]
+                    ):
+                        fixture.notification_visible = True
 
                 def call(name, args, index=0):
                     return {"index": index, "id": f"fixture-{len(results)}-{index}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
 
                 calls = []
                 content = "result:" + prompt
-                if prompt == "delegate" or prompt.startswith("pool-") and not prompt.startswith("pool-child-") or prompt == "recovery-parent":
+                if prompt in {"delegate", "any-offline", "timeout-offline"} or prompt.startswith("pool-") and not prompt.startswith("pool-child-") or prompt == "recovery-parent":
                     receipts = []
                     waited = False
                     artifact_ids = []
@@ -52,11 +61,20 @@ class DelegationFixture:
                             raise AssertionError(message)
                         if isinstance(value, dict) and "task_id" in value:
                             receipts.append(value)
+                        if isinstance(value, dict) and isinstance(value.get("results"), list):
+                            if prompt == "any-offline":
+                                assert len(value["completed_run_ids"]) == 1 and len(value["pending_run_ids"]) == 1, value
+                                fixture.any_join_seen = True
+                            if prompt == "timeout-offline":
+                                assert value["timed_out"] and not value["completed_run_ids"] and len(value["pending_run_ids"]) == 1, value
+                                fixture.timeout_seen = True
+                            value = value["results"]
                         if isinstance(value, list):
                             waited = True
-                            assert all(v["status"] in {"completed", "interrupted", "failed", "cancelled", "incomplete"} for v in value), value
+                            if prompt not in {"any-offline", "timeout-offline"}:
+                                assert all(v["status"] in {"completed", "interrupted", "failed", "cancelled", "incomplete"} for v in value), value
                     if not receipts:
-                        prompts = ["child-one", "child-two"] if prompt == "delegate" else ["recovery-child" if prompt == "recovery-parent" else "pool-child-" + prompt.removeprefix("pool-")]
+                        prompts = ["child-one", "child-two"] if prompt == "delegate" else (["any-fast", "any-slow"] if prompt == "any-offline" else (["timeout-slow"] if prompt == "timeout-offline" else ["recovery-child" if prompt == "recovery-parent" else "pool-child-" + prompt.removeprefix("pool-")]))
                         for index, child_prompt in enumerate(prompts):
                             spec = {"prompt": child_prompt, "model": "opencode-go/glm-5.3-flash", "settings": {"max_output_tokens": 64}}
                             if prompt in {"delegate", "recovery-parent"}:
@@ -68,9 +86,18 @@ class DelegationFixture:
                         if prompt == "delegate" and not results:
                             calls = [call("bash", {"command": "printf '%020000d' 0"})]
                     elif not waited:
-                        calls = [call("child_wait", {"child_run_ids": [r["run_id"] for r in receipts]})]
+                        wait_args = {"child_run_ids": [r["run_id"] for r in receipts]}
+                        if prompt == "any-offline":
+                            wait_args.update({"mode": "any", "timeout_ms": 10000})
+                        elif prompt == "timeout-offline":
+                            wait_args.update({"mode": "all", "timeout_ms": 500})
+                        calls = [call("child_wait", wait_args)]
                     else:
-                        content = "collected:" + prompt
+                        content = "any-complete" if prompt == "any-offline" else ("timeout-continued" if prompt == "timeout-offline" else "collected:" + prompt)
+                elif prompt == "any-slow":
+                    fixture.slow_release.wait(timeout=25)
+                elif prompt == "timeout-slow":
+                    fixture.slow_release.wait(timeout=25)
                 elif prompt.startswith("pool-child-") or prompt.startswith(("child-one", "child-two")):
                     if not results:
                         fixture.children_release.wait(timeout=25)
@@ -170,11 +197,29 @@ def check_delegation(daemon_binary, cli_binary, root):
         fixture.children_release.set()
         wait_turn(endpoint, token, parent["turn_id"], {"completed"})
         assert cli("run", "result", parent["run_id"])["output"]["text"] == "collected:delegate"
+        assert fixture.notification_visible, "the next parent provider request must include its child's completion notice"
         for child in children:
             workspace = api(f"/v1/workspaces/{child['latest_run']['workspace_id']}")
             assert (Path(workspace["path"]) / "file.txt").read_text() == child["spec"]["prompt"] + "\n"
         assert (repo / "file.txt").read_text() == "before\n"
         assert cli("task", "show", parent["task_id"])["budget_usage"] == {"model_requests": 8, "tool_calls": 6}
+
+        any_policy_file=root / "any-policy.json"
+        any_policy_file.write_text(json.dumps(dict(policy,max_children=2,allowed_tools=[])),encoding="utf-8")
+        any_parent = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--orchestration-policy", str(any_policy_file), "--text", "any-offline", "--command-id", "any-offline")
+        wait_for(lambda: fixture.any_join_seen, "any-mode join to return while a sibling is still running")
+        any_children = cli("run", "children", any_parent["run_id"])["items"]
+        assert len(any_children) == 2
+        fixture.slow_release.set()
+        wait_turn(endpoint, token, any_parent["turn_id"], {"completed"})
+
+        fixture.slow_release.clear()
+        timeout_parent=cli("task","create","--model","opencode-go/glm-5.3-flash","--orchestration-policy",str(any_policy_file),"--text","timeout-offline","--command-id","timeout-offline")
+        wait_for(lambda:fixture.timeout_seen,"bounded join timeout while child is running")
+        timeout_children=cli("run","children",timeout_parent["run_id"])["items"]
+        assert len(timeout_children)==1 and timeout_children[0]["latest_run"]["turn"]["status"] in {"running","queued"}
+        fixture.slow_release.set()
+        wait_turn(endpoint,token,timeout_parent["turn_id"],{"completed"})
 
         # All four execution slots can wait on children without deadlocking them.
         fixture.children_release.clear()
@@ -191,12 +236,12 @@ def check_delegation(daemon_binary, cli_binary, root):
 
         # Client-created children use the same policy and durable wait operation.
         manual_policy = root / "manual-policy.json"
-        manual_policy.write_text(json.dumps(dict(pool_policy, max_depth=2)), encoding="utf-8")
+        manual_policy.write_text(json.dumps(dict(pool_policy, max_depth=1)), encoding="utf-8")
         manual = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--orchestration-policy", str(manual_policy), "--text", "manual-parent", "--command-id", "manual-parent")
         cli("run", "pause", manual["run_id"], "--command-id", "pause-manual")
         manual_spec = api(f"/v1/runs/{manual['run_id']}")
         child_file = root / "manual-child.json"
-        child_file.write_text(json.dumps({"spec": {"prompt": "manual-child", "model": "opencode-go/glm-5.3-flash", "orchestration": pool_policy}, "context": {"message_ids": [manual_spec["turn"]["user_message_id"]]}}), encoding="utf-8")
+        child_file.write_text(json.dumps({"spec": {"prompt": "manual-child", "model": "opencode-go/glm-5.3-flash"}, "context": {"message_ids": [manual_spec["turn"]["user_message_id"]]}}), encoding="utf-8")
         manual_child = cli("run", "create-child", manual["run_id"], str(child_file), "--command-id", "manual-child")
         assert cli("run", "create-child", manual["run_id"], str(child_file), "--command-id", "manual-child") == manual_child
         parent_snapshot = cli("task", "show", manual["task_id"])

@@ -198,6 +198,8 @@ pub(super) async fn run(command: RunCommand, context: &Context) -> Result<()> {
         RunCommand::Wait {
             id,
             child_run_ids,
+            mode,
+            timeout_ms,
             command_id,
         } => {
             let command_id = choose_command_id(command_id)?;
@@ -207,6 +209,8 @@ pub(super) async fn run(command: RunCommand, context: &Context) -> Result<()> {
                     &WaitChildrenRequest {
                         command_id: command_id.clone(),
                         child_run_ids,
+                        mode,
+                        timeout_ms,
                     },
                 )
                 .await

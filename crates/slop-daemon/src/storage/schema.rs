@@ -101,6 +101,19 @@ where
         if existing_version < 14 {
             execution::expand_message_order(&tx)?;
         }
+        if existing_version < 15 {
+            children::migrate_notifications(&tx)?;
+            children::migrate_subagent_receipt_payloads(&tx)?;
+        }
+        if existing_version < 16 {
+            children::migrate_wait_modes(&tx)?;
+        }
+        if existing_version < 17 {
+            children::migrate_child_activity(&tx)?;
+        }
+        if existing_version < 18 {
+            children::migrate_wait_results(&tx)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

@@ -184,7 +184,14 @@ fn branch(
             },
             project: selection,
             budget: source.spec.budget.clone(),
-            orchestration: source.spec.orchestration.clone(),
+            // A fork is a new conversation, but a child remains a leaf: copying
+            // its stored legacy policy here would let history paths regrant
+            // spawn authority after the one-level policy migration.
+            orchestration: if children::link(tx, &source.id)?.is_none() {
+                source.spec.orchestration.clone()
+            } else {
+                None
+            },
             ..Default::default()
         },
         source.settings.max_output_tokens,

@@ -36,7 +36,7 @@ mod projects;
 
 const DATABASE_FILE: &str = "state.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 18;
 const MESSAGE_ORDER_STRIDE: i64 = 1 << 32;
 const MINIMUM_SQLITE_VERSION: i32 = 3_051_003;
 const MAX_QUEUE_CAPACITY: usize = 4096;

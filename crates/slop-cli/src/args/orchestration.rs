@@ -93,8 +93,12 @@ pub enum RunCommand {
     },
     Wait {
         id: String,
-        #[arg(long = "child-run", required = true)]
+        #[arg(long = "child-run")]
         child_run_ids: Vec<String>,
+        #[arg(long, default_value = "all", value_parser = ["all", "any"])]
+        mode: String,
+        #[arg(long = "timeout-ms")]
+        timeout_ms: Option<u64>,
         #[arg(long)]
         command_id: Option<String>,
     },

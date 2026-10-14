@@ -130,7 +130,7 @@ async fn schema_thirteen_message_order_upgrade_preserves_frontiers_and_queued_us
     store.shutdown().await.unwrap();
     let db = Connection::open(data.path().join(DATABASE_FILE)).unwrap();
     let tx = db.unchecked_transaction().unwrap();
-    tx.execute_batch(&format!("UPDATE messages SET ordinal=-(ordinal/{MESSAGE_ORDER_STRIDE}*1024+ordinal%{MESSAGE_ORDER_STRIDE}); UPDATE messages SET ordinal=-ordinal; PRAGMA user_version=13;")).unwrap();
+    tx.execute_batch(&format!("UPDATE messages SET ordinal=-(ordinal/{MESSAGE_ORDER_STRIDE}*1024+ordinal%{MESSAGE_ORDER_STRIDE}); UPDATE messages SET ordinal=-ordinal; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=13;")).unwrap();
     tx.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status,context) VALUES('migration-summary',?1,?2,1,'opencode-go/glm-5.3-flash','{}','{}','completed','{\"compaction\":true}')",
         rusqlite::params![turn,original[1].id]).unwrap();
     tx.execute("INSERT INTO session_context(session_id,through_ordinal,messages,request_id) VALUES(?1,1025,'[]','migration-summary')",[&session]).unwrap();

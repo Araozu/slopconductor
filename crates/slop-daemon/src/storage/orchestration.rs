@@ -236,6 +236,7 @@ fn retry_allowed(
     previous: &RunResponse,
     acknowledge: bool,
 ) -> StoreResult<SessionResponse> {
+    children::check_reactivation_capacity(connection, &previous.task_id)?;
     let history_only: bool = connection
         .query_row(
             "SELECT history_only FROM turns WHERE id=?1",

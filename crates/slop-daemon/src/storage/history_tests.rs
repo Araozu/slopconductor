@@ -491,7 +491,7 @@ async fn schema_eleven_migrates_without_changing_existing_history() {
     complete(&c, &source, "message", "old prompt", "old reply").await;
     let original = c.messages(&source, None, 200).await.unwrap().items;
     c.submit(|db|{
-        db.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; PRAGMA user_version=11;").unwrap(); Ok(())
+        db.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap(); Ok(())
     }).await.unwrap();
     store.shutdown().await.unwrap();
     let store = open_test(&dir, None).await;

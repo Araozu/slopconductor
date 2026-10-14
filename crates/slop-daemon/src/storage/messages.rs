@@ -96,6 +96,7 @@ pub(super) fn send_message_tx(
     if let Some(receipt) = prior_receipt(tx, &request.command_id, &scope, &payload)? {
         return Ok(receipt);
     }
+    children::check_reactivation_capacity(tx, session_id)?;
     let session = get_session(tx, session_id)?;
     projects::require_available(tx, &session)?;
     if request

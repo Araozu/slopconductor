@@ -21,7 +21,11 @@ Schema 7 adds persistent admission tickets/clock, task/batch operation ledgers,
 and durable batch cancellation. Schema 8 adds child parent/run/root links,
 inherited admission scopes, selected context references, and exact-attempt wait
 dependencies. Child creation and its native tool result commit together; a
-completed wait result commits before readmission. See [child tasks](child-tasks.md).
+completed wait result commits before readmission. Schema 15 adds notification
+mode, detachment, and the deduplicated durable completion inbox (legacy links
+default to manual). Schema 16 adds all/any wait mode and timeout deadlines;
+schema 17 adds nullable child spawn times; schema 18 stores stable completed
+wait results. See [child tasks](child-tasks.md).
 Schema 11 adds per-request context size/purpose and an atomic session inference
 checkpoint containing the summary, retained messages, and historical cursor.
 Compaction changes the inference view without deleting public history.

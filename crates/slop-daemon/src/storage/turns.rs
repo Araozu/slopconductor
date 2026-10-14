@@ -81,6 +81,7 @@ pub(super) fn cancel_turn_tx(
     );
     commit_command(tx, &request.command_id, &scope, &payload, &receipt)?;
     children::cancel_descendants(tx, turn_id)?;
+    children::enqueue_completion(tx, turn_id)?;
     children::wake(tx)?;
     Ok(receipt)
 }
@@ -112,6 +113,7 @@ pub(super) fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
         tx.execute("UPDATE turns SET status='interrupted',error_code='daemon_restarted',error_message='The daemon restarted during this turn.' WHERE id=?1",[&turn_id]).map_err(|_|StoreError::Database)?;
         reject_steering_tx(&tx, &turn_id, "daemon_restarted")?;
         append_event(&tx, &session_id, "turn_interrupted", Some(&turn_id), None)?;
+        children::enqueue_completion(&tx, &turn_id)?;
     }
     children::wake(&tx)?;
     projects::recover(&tx)?;
@@ -462,7 +464,8 @@ pub(super) fn finish_turn(
             && (outcome.status == ChatStatus::Completed
                 || outcome.error_code.as_deref() == Some("awaiting_children"));
     let wait_yield = outcome.error_code.as_deref() == Some("awaiting_children")
-        || children::pending(&tx, turn_id)? && outcome.status == ChatStatus::Completed;
+        || (children::pending(&tx, turn_id)? || children::attached_pending(&tx, turn_id)?)
+            && outcome.status == ChatStatus::Completed;
     if !cancel_requested && !pause_requested && wait_yield {
         execution::reconcile_requests(&tx, turn_id, "awaiting_children")?;
         execution::reconcile_tools(&tx, turn_id, "awaiting_children")?;
@@ -558,20 +561,6 @@ pub(super) fn finish_turn(
             outcome.error_code.as_deref().unwrap_or("turn_cancelled"),
         )?;
     }
-    let event_kind = match outcome.status {
-        ChatStatus::Completed => "turn_completed",
-        ChatStatus::Canceled => "turn_cancelled",
-        ChatStatus::Incomplete => "turn_incomplete",
-        ChatStatus::Interrupted => "turn_interrupted",
-        ChatStatus::Failed => "turn_failed",
-    };
-    let final_status = match outcome.status {
-        ChatStatus::Completed => "completed",
-        ChatStatus::Canceled => "cancelled",
-        ChatStatus::Incomplete => "incomplete",
-        ChatStatus::Interrupted => "interrupted",
-        ChatStatus::Failed => "failed",
-    };
     let message_status = if outcome.status == ChatStatus::Completed {
         "completed"
     } else if outcome.status == ChatStatus::Failed {
@@ -629,6 +618,19 @@ pub(super) fn finish_turn(
     } else {
         None
     };
+    let notification_replan =
+        outcome.status == ChatStatus::Completed && children::deliver_notifications(&tx, turn_id)?;
+    let (event_kind, final_status) = if notification_replan {
+        ("child_completion_delivered", "queued")
+    } else {
+        match outcome.status {
+            ChatStatus::Completed => ("turn_completed", "completed"),
+            ChatStatus::Canceled => ("turn_cancelled", "cancelled"),
+            ChatStatus::Incomplete => ("turn_incomplete", "incomplete"),
+            ChatStatus::Interrupted => ("turn_interrupted", "interrupted"),
+            ChatStatus::Failed => ("turn_failed", "failed"),
+        }
+    };
     use slop_runtime::providers::UsageSource;
     let input = outcome.usage.input_tokens.map(|value| value.to_string());
     let output = outcome.usage.output_tokens.map(|value| value.to_string());
@@ -646,6 +648,7 @@ pub(super) fn finish_turn(
         Some(turn_id),
         assistant_id.as_deref(),
     )?;
+    children::enqueue_completion(&tx, turn_id)?;
     children::wake(&tx)?;
     tx.commit().map_err(|_| StoreError::Database)
 }

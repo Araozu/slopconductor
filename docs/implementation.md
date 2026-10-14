@@ -322,8 +322,10 @@ global capacity and a returning group attempting to reuse old priority.
 [Native child-task tools](child-tasks.md) use the public API's application
 operations under a separate policy from the four coding tools. Creation and its
 native tool result commit together with parent/run links and command receipts.
-Explicit context/artifact previews, model/tool subsets, finite ancestor budgets,
-depth/fan-out limits, cancellation policy, and wait dependencies are implemented.
+Explicit context/artifact previews, independent provider/model/effort selection,
+finite ancestor budgets, one-level delegation, outstanding/concurrent limits,
+completion notices, child steering, cancellation policy, and all/any/timeout
+wait dependencies are implemented.
 Children have fresh sessions and isolated project workspaces. Waiting parents
 release slots; recovery preserves known IDs/dependencies and pauses the parent
 until explicit resume, without replaying unknown effects.

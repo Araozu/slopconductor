@@ -413,7 +413,7 @@ impl StoreClient {
         let turn_id = turn_id.to_owned();
         self.submit(move |connection| {
             let queued: bool = connection.query_row(
-                "SELECT status IN ('queued','running','awaiting_children') AND (EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='applied') OR EXISTS(SELECT 1 FROM child_waits WHERE parent_turn_id=?1) OR EXISTS(SELECT 1 FROM session_events WHERE turn_id=?1 AND kind='turn_context_yielded')) FROM turns WHERE id=?1",
+                "SELECT status IN ('queued','running','awaiting_children') AND (EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='applied') OR EXISTS(SELECT 1 FROM child_waits WHERE parent_turn_id=?1) OR EXISTS(SELECT 1 FROM session_events WHERE turn_id=?1 AND kind IN('turn_context_yielded','turn_awaiting_children','child_completion_delivered'))) FROM turns WHERE id=?1",
                 [&turn_id],
                 |row| row.get(0),
             ).optional().map_err(|_| StoreError::Database)?.ok_or(StoreError::NotFound)?;
