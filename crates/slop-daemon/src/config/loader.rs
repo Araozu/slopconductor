@@ -96,6 +96,12 @@ pub fn load_with_environment_and_name(
             "the bootstrap daemon only supports loopback listeners".into(),
         ));
     }
+    let peer_listen = args.peer_listen.or(file.peer_listen);
+    if peer_listen.is_some_and(|address| !address.ip().is_loopback()) {
+        return Err(ConfigError::Invalid(
+            "peer_listen must be a loopback address".into(),
+        ));
+    }
     let queue_capacity = file
         .database_queue_capacity
         .unwrap_or(DEFAULT_QUEUE_CAPACITY);
@@ -188,6 +194,7 @@ pub fn load_with_environment_and_name(
     }
     Ok(Config {
         listen,
+        peer_listen,
         node_name,
         database_queue_capacity: queue_capacity,
         database_busy_timeout: Duration::from_millis(busy_timeout_ms),

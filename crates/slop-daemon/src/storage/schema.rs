@@ -114,6 +114,9 @@ where
         if existing_version < 18 {
             children::migrate_wait_results(&tx)?;
         }
+        if existing_version < 19 {
+            peers::migrate(&tx)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

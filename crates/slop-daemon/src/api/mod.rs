@@ -5,3 +5,5 @@ pub mod projects;
 pub mod providers;
 
 pub mod filesystem;
+
+pub mod peers;

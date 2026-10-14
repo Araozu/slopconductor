@@ -19,6 +19,7 @@ fn relative_xdg_paths_are_ignored_and_overrides_are_absolute() {
     env.xdg_data_home = Some("relative".into());
     let cfg = load_with_environment(
         StartupArgs {
+            peer_listen: None,
             listen: None,
             config: None,
             data_dir: None,
@@ -36,6 +37,7 @@ fn relative_xdg_paths_are_ignored_and_overrides_are_absolute() {
     );
     let error = load_with_environment(
         StartupArgs {
+            peer_listen: None,
             listen: None,
             config: None,
             data_dir: Some("relative".into()),
@@ -58,6 +60,7 @@ fn explicit_config_must_exist_and_file_settings_are_bounded() {
     assert!(
         load_with_environment(
             StartupArgs {
+                peer_listen: None,
                 listen: None,
                 config: Some(missing),
                 data_dir: None,
@@ -75,6 +78,7 @@ fn explicit_config_must_exist_and_file_settings_are_bounded() {
     assert!(
         load_with_environment(
             StartupArgs {
+                peer_listen: None,
                 listen: None,
                 config: Some(config_path),
                 data_dir: None,
@@ -97,6 +101,7 @@ fn explicit_overrides_and_absolute_xdg_paths_do_not_require_home() {
     let environment = ConfigEnvironment::default();
     let cfg = load_with_environment(
         StartupArgs {
+            peer_listen: None,
             listen: None,
             config: Some(config_path),
             data_dir: Some(temp.path().join("data")),
@@ -120,6 +125,7 @@ fn explicit_overrides_and_absolute_xdg_paths_do_not_require_home() {
         assert!(
             load_with_environment(
                 StartupArgs {
+                    peer_listen: None,
                     listen: None,
                     config: None,
                     data_dir: None,

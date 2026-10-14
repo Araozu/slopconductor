@@ -24,6 +24,11 @@ pub enum Command {
     },
     /// Check daemon connectivity, API compatibility, and capabilities.
     Status,
+    /// Configure scoped daemon-to-daemon access.
+    Peer {
+        #[command(subcommand)]
+        command: super::PeerCommand,
+    },
     /// Show this daemon's authenticated node identity.
     Node,
     /// Discover available models.

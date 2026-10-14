@@ -21,3 +21,6 @@ pub use provider::ProviderCommand;
 pub use session::SessionCommand;
 pub use turn::TurnCommand;
 pub use workspace::WorkspaceCommand;
+
+mod peer;
+pub use peer::PeerCommand;

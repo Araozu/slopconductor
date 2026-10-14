@@ -38,7 +38,7 @@ Do not make generated web assets a prerequisite for compiling the daemon or CLI.
 The daemon publishes a compile-time OpenAPI document via `utoipa`:
 `GET /api-docs/openapi.json` and interactive Swagger UI at `GET /docs`.
 Source of truth is `crates/slop-daemon/src/api/openapi.rs` (`ApiDoc`),
-which currently covers every route (62 paths). A coverage test fails if a
+which covers every administrator route (including the peer gateway). A coverage test fails if a
 route is added without registering it.
 
 Generate the document locally; never check the generated JSON into source
@@ -77,7 +77,9 @@ Do not add placeholder arithmetic tests or claim proposed endpoints work.
 
 Persistent sessions, project workspaces, tasks/run attempts, matrices, fair
 admission, aggregate operation budgets, batch cancellation, and bounded child
-tasks are implemented. Remote authentication, TUI, browser client, and Electron
+tasks are implemented. Scoped daemon peering now adds a separate optional
+loopback peer listener, explicit owner targeting, and session inspection/control.
+Deployed tailnet validation remains open. TUI, browser client, and Electron
 client remain planned. Linux and native Windows offline CI pass; live-provider
 and release-build capacity validation remain outstanding. See
 `docs/native-validation.md` for the recorded run and scope.

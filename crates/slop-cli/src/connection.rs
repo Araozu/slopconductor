@@ -6,6 +6,7 @@ use crate::Result;
 
 pub struct ConnectionOptions {
     pub daemon: String,
+    pub peer: Option<String>,
     pub token_file: Option<PathBuf>,
 }
 
@@ -25,10 +26,11 @@ pub fn authenticated_client(args: &ConnectionOptions) -> Result<DaemonClient> {
         )
         .into());
     }
-    Ok(DaemonClient::new_with_token_file(
-        &args.daemon,
-        &token_file,
-    )?)
+    let client = DaemonClient::new_with_token_file(&args.daemon, &token_file)?;
+    Ok(match &args.peer {
+        Some(peer) => client.via_peer(peer)?,
+        None => client,
+    })
 }
 
 fn default_token_file() -> Result<Option<PathBuf>> {

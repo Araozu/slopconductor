@@ -189,8 +189,10 @@ Use `--config`/`SLOP_CONFIG`, `--data-dir`/`SLOP_DATA_DIR`, and
 `--name`/`SLOP_NODE_NAME` for startup overrides. See the
 [startup guide](docs/daemon-startup-plan.md) for config settings, Windows path
 restrictions, and the chat durability/recovery rules.
-The bootstrap accepts loopback listeners only. Authenticated remote control is a
-planned milestone; requiring Tailscale does not mean that feature is implemented.
+The bootstrap accepts loopback listeners only. The optional
+[peer listener and gateway](docs/daemon-peering.md) add scoped inspection/control
+of existing owner sessions over explicitly configured private HTTPS forwarding.
+Deployed Tailscale validation remains open.
 
 ## Build and check
 

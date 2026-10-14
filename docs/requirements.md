@@ -53,7 +53,7 @@ promise that an entire machine contains only one operating-system process.
 | F11 | Agent-created child tasks | M2, bounded local slice implemented | One-level delegation, provider-qualified model choice, independent concurrency/outstanding limits, durable completion notices, steering, and all/any/timeout joins share the native scheduler and public contract. |
 | F12 | Multiple providers and model catalogs | M2 | Unsupported settings fail validation rather than being dropped. |
 | F13 | Supported subscription authentication | M2, eligibility dependent | Direct documented flow; credentials remain outside task data. |
-| F14 | Peer registration and remote CLI access | M3 | Trusted clients target an owner over Tailscale. |
+| F14 | Peer registration and remote CLI access | M3, local slice implemented; deployed tailnet validation open | Trusted clients target an owner over Tailscale. |
 | F15 | Aggregate multi-machine views | M3 | Peer availability and origin are shown accurately. |
 | F16 | Optional history/artifact mirroring | M4 | Replicas can show last-known data with freshness indicators. |
 | F17 | Native TUI | M4, independent track | Uses the public client SDK; no execution ownership. |

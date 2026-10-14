@@ -6,6 +6,7 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub(super) struct FileConfig {
     pub(super) listen: Option<SocketAddr>,
+    pub(super) peer_listen: Option<SocketAddr>,
     pub(super) node_name: Option<String>,
     pub(super) database_queue_capacity: Option<usize>,
     pub(super) database_busy_timeout_ms: Option<u64>,

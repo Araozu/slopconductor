@@ -12,10 +12,12 @@ migration are deliberately later tracks.
 
 ## Recommended next delivery order
 
-**Status, 2026-10-10.** Local sessions, project worktrees, durable tasks/run
+**Status, 2026-10-14.** Local sessions, project worktrees, durable tasks/run
 attempts, and three-axis matrices are implemented. Steps 1 and 2 now have local
-implementations and offline validation. Platform/capacity validation and trusted
-remote control remain next; the complete milestone gates still apply.
+implementations and offline validation. The current local M3 slice is
+[daemon-to-daemon inspection/control](daemon-peering.md). Platform/capacity
+and live-provider validation remain open; the complete milestone gates still
+apply. Starting the M3 slice does not declare M1/M2 complete.
 
 1. **Scheduling and batch controls: implemented local slice.** Persistent
    admission tickets rotate across batches, independent task trees, and ordinary
@@ -46,8 +48,21 @@ remote control remain next; the complete milestone gates still apply.
    creation. Recovery preserves dependencies and unknown tool effects without
    automatically replaying inference or tools.
 
-3. **Platform and capacity validation.** Linux/native Windows CI is configured
-   for the required checks and real-binary workflows, including Git/Bash and
+3. **Trusted remote CLI access and daemon peering: implemented local slice.**
+   Explicit owner targeting, immutable read/control grants, revocation, owner-ID
+   verification, a separate loopback peer listener behind configured HTTPS, and
+   one-hop session inspection/event following/steering/turn control are
+   implemented. See [daemon peering](daemon-peering.md). Real-binary offline
+   checks cover gateway loss and same-ID recovery after a lost owner response.
+   Deployed Tailscale validation remains open. Aggregate lists, offline delivery,
+   mirroring, and cross-node execution remain later slices.
+
+   Acceptance: a work CLI through its local daemon inspects and steers a
+   home-owned session; read-only or unpaired callers cannot mutate it, and home
+   execution continues through client, gateway, or network loss.
+
+4. **Platform and capacity validation: still open.** Linux/native Windows CI is
+   configured for the required checks and real-binary workflows, including Git/Bash and
    cancellation of native children and their descendants.
    [Recorded offline validation](native-validation.md) passes on both platforms.
    Measure release builds with 1/10/100 sessions and a large mostly queued batch,
@@ -58,15 +73,6 @@ remote control remain next; the complete milestone gates still apply.
    and the supported provider/tool combinations. M1/M2 remain partial until their
    remaining acceptance scenarios pass; do not infer completion from Linux
    offline checks alone.
-
-4. **Trusted remote CLI access.** Start M3 with owner-targeted access over
-   Tailscale, explicit pairing/revocation, read/write permissions, and protected
-   transport. Preserve command identities and distinguish pending delivery from
-   owner acceptance before adding aggregation or graphical clients.
-
-   Acceptance: a work CLI inspects and steers a home-owned task; read-only or
-   unpaired callers cannot mutate it, and local execution continues through
-   client or network loss.
 
 Branch publishing, richer result artifacts, and retention policy remain separate
 M2 follow-ups. Complete the full milestone gates below before declaring M2 done.
@@ -197,6 +203,12 @@ CLI/API alone.
 ## M3 — Trusted remote access and multi-machine visibility
 
 **Goal:** start at home, inspect and steer from work through Tailscale.
+
+**Partial implementation:** [scoped daemon peering](daemon-peering.md) now
+implements the owner-targeted CLI/gateway path, read/control grants, revocation,
+identity checks, reconnectable event relay, and explicit unknown-delivery
+handling. Local two-daemon fixtures are covered; deployed tailnet validation,
+aggregate views, forwarding queues, and freshness-aware cached data remain open.
 
 Add stable peer registration, pairing/trust, read/write API capabilities,
 HTTPS/private-network deployment, owner-aware routing, and peer availability.

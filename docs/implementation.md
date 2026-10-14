@@ -34,7 +34,8 @@ separate diffs, explicit cleanup, and Git recovery are now implemented; see
 [projects/workspaces](projects-workspaces.md). Durable tasks/run attempts and
 matrices with preview, selective retry, and result export are implemented; see
 [tasks and batches](tasks-batches.md). Bounded [native children](child-tasks.md)
-are implemented; peer control remains planned.
+are implemented. Scoped [daemon peering](daemon-peering.md) adds optional
+owner-targeted inspection/control; aggregate views remain planned.
 
 ## Current source organization
 
@@ -294,8 +295,9 @@ offline acceptance workflow are described in
 [projects/workspaces](projects-workspaces.md). Task/run controls and matrices are implemented
 as described in
 [tasks and batches](tasks-batches.md). The [recommended delivery order](roadmap.md#recommended-next-delivery-order)
-now marks scheduling/batch controls and native children implemented locally,
-with platform and capacity validation next before remote control.
+now marks scheduling/batch controls and native children implemented locally.
+The [local daemon-peering slice](daemon-peering.md) now adds explicit remote
+inspection/control; platform and capacity validation remain open release gates.
 
 Record logical repository identity, current exact base commit, local mappings,
 and workspace policy. Use managed worktrees for parallel writers; default shared
@@ -364,6 +366,11 @@ recoverable account states. Ineligible flows remain unavailable rather than
 being presented as supported.
 
 ## Step 8: peer API and optional aggregate view
+
+The [first daemon-peering slice](daemon-peering.md) implements scoped trust and
+identity probing, explicit-target read-only access, steering, and turn controls.
+It uses owner-issued credentials and a separate optional peer listener in the
+same daemon. Aggregate views and mirroring remain follow-ups.
 
 Use Tailscale for reachability. Implement trust/pairing, owner-aware targeting,
 read/write capabilities, and per-source freshness. Add a reachable node's

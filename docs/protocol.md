@@ -174,7 +174,9 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/runs/{id}/result | Implemented: attempt result with public output |
 | GET /v1/projects/{id} | Implemented: project identity and local mapping |
 | GET /v1/projects/{id}/events | Implemented: paginated durable project/workspace events |
-| GET, POST /v1/peers | Configure and inspect trusted peer endpoints |
+| GET /v1/peers; PUT, DELETE /v1/peers/{id} | Implemented: scoped outbound registrations and removal |
+| GET /v1/peer-grants; PUT /v1/peer-grants/{id}; POST /v1/peer-grants/{id}/revoke | Implemented: inbound grant creation/listing/revocation |
+| /v1/peers/{peer_id}/... | Implemented: explicit one-hop session inspection, events, steering, and turn controls; see [daemon peering](daemon-peering.md) |
 | POST /v1/transfers | Future handoff preparation; unavailable before M6 |
 
 Routes marked implemented are available now; other spelling is a proposal.
@@ -290,10 +292,12 @@ Local bearer-token authentication is implemented for node, provider credential,
 and text-chat queries
 and mutations. The daemon
 still binds loopback only. Explicit session workspace/tool policy gates local
-tool execution under the bearer credential. Remote pairing and separate
-read/write authorization remain future work. M3 adds authenticated access over Tailscale, with separate
-read/write capabilities. Network membership alone is not the entire application
-authorization policy.
+tool execution under the bearer credential. The local
+[M3 peer slice](daemon-peering.md) implements explicit registration,
+read/control grants, revocation, owner-ID checks, and one-hop forwarding. Private
+HTTPS reaches a separate loopback peer listener; it exposes a restricted public
+API and accepts only peer credentials. Tailnet deployment validation remains
+separate. Network membership alone is not application authorization.
 
 A forwarder identifies the target node and carries an authenticated command to
 the owner. Responses preserve origin and freshness. Browser entrypoints can
