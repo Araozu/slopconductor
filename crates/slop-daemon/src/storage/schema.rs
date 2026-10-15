@@ -118,8 +118,28 @@ where
             peers::migrate(&tx)?;
         }
         if existing_version < 20 {
-            tx.execute_batch("ALTER TABLE managed_workspaces ADD COLUMN name TEXT NOT NULL DEFAULT ''; UPDATE managed_workspaces SET name=id;")
+            let has_name: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('managed_workspaces') WHERE name='name')",
+                [],
+                |row| row.get(0),
+            ).map_err(|_| StoreError::Database)?;
+            if !has_name {
+                tx.execute_batch("ALTER TABLE managed_workspaces ADD COLUMN name TEXT NOT NULL DEFAULT ''; UPDATE managed_workspaces SET name=id;")
+                    .map_err(|_| StoreError::Database)?;
+            }
+        }
+        if existing_version < 21 {
+            let has_name: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='name')",
+                    [],
+                    |row| row.get(0),
+                )
                 .map_err(|_| StoreError::Database)?;
+            if !has_name {
+                tx.execute_batch("ALTER TABLE projects ADD COLUMN name TEXT NOT NULL DEFAULT ''; UPDATE projects SET name=id;")
+                    .map_err(|_| StoreError::Database)?;
+            }
         }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")

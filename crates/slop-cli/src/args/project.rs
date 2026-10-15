@@ -19,6 +19,12 @@ pub enum ProjectCommand {
     Show {
         id: String,
     },
+    Rename {
+        id: String,
+        name: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
     Workspaces {
         id: String,
         #[arg(long)]

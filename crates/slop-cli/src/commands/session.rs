@@ -1,6 +1,7 @@
 use slop_client::DaemonClient;
 use slop_protocol::chat::{
-    DeleteMessageRequest, EditMessageRequest, ForkSessionRequest, SendMessageRequest,
+    DeleteMessageRequest, EditMessageRequest, ForkSessionRequest, RenameSessionRequest,
+    SendMessageRequest,
 };
 
 use crate::{
@@ -57,6 +58,26 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
                     println!("Workspace path: {}", policy.root);
                 }
             })?;
+        }
+        SessionCommand::Rename {
+            id,
+            title,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .rename_session(
+                    &id,
+                    &RenameSessionRequest {
+                        command_id: command_id.clone(),
+                        title,
+                    },
+                )
+                .await
+                .map_err(|error| mutation_error(error, &command_id))?;
+            context
+                .output
+                .value(&receipt, || println!("renamed session {id}"))?;
         }
         SessionCommand::History { id, after, limit } => {
             let page = client.history(&id, after, Some(limit)).await?;

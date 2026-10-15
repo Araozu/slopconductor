@@ -4,7 +4,9 @@ use crate::{
     args::{ProjectCommand, WorkspaceCommand},
     mutation::{choose_command_id, mutation_error},
 };
-use slop_protocol::projects::{RegisterProjectRequest, RemoveWorkspaceRequest};
+use slop_protocol::projects::{
+    RegisterProjectRequest, RemoveWorkspaceRequest, RenameProjectRequest,
+};
 
 pub(super) async fn project(command: ProjectCommand, context: &Context) -> Result<()> {
     let client = context.client()?;
@@ -21,15 +23,15 @@ pub(super) async fn project(command: ProjectCommand, context: &Context) -> Resul
                 })
                 .await
                 .map_err(|error| mutation_error(error, &command_id))?;
-            context
-                .output
-                .value(&response, || println!("{}\t{}", response.id, response.path))
+            context.output.value(&response, || {
+                println!("{}\t{}\t{}", response.name, response.id, response.path)
+            })
         }
         ProjectCommand::List { after, limit } => {
             let response = client.projects(after, Some(limit)).await?;
             context.output.value(&response, || {
                 for project in &response.items {
-                    println!("{}\t{}", project.id, project.path);
+                    println!("{}\t{}\t{}", project.name, project.id, project.path);
                 }
             })
         }
@@ -38,9 +40,29 @@ pub(super) async fn project(command: ProjectCommand, context: &Context) -> Resul
             context.output.value(&response, || {
                 println!(
                     "{}\t{}\nGit common directory: {}",
-                    response.id, response.path, response.git_common_dir
+                    response.name, response.path, response.git_common_dir
                 )
             })
+        }
+        ProjectCommand::Rename {
+            id,
+            name,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let response = client
+                .rename_project(
+                    &id,
+                    &RenameProjectRequest {
+                        command_id: command_id.clone(),
+                        name,
+                    },
+                )
+                .await
+                .map_err(|error| mutation_error(error, &command_id))?;
+            context
+                .output
+                .value(&response, || println!("{}\t{}", response.name, response.id))
         }
         ProjectCommand::Workspaces { id, after, limit } => {
             let response = client.project_workspaces(&id, after, Some(limit)).await?;

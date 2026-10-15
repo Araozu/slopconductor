@@ -93,6 +93,7 @@ anonymous. The daemon accepts loopback listeners only.
 | GET /v1/models | Known executable Go, Zen, and Codex models with per-provider readiness and capabilities |
 | GET, POST /v1/sessions | Paginated listing or durable creation |
 | GET /v1/sessions/{id} | Session configuration, revision, and event watermark |
+| PATCH /v1/sessions/{id} | Rename one conversation thread with `{"command_id":"rename-1","title":"Readable title"}` |
 | GET, POST /v1/sessions/{id}/messages | Paginated history or durable message/turn acceptance |
 | POST /v1/sessions/{id}/fork | Copy history through a selected message into a new conversation |
 | PATCH /v1/sessions/{id}/messages/{message_id} | Edit user/assistant text in a new fork, discarding the original suffix |
@@ -163,6 +164,7 @@ The CLI prints message IDs in `slop session history`. For example:
 
 ```sh
 slop session fork SESSION --message MESSAGE --command-id fork-1
+slop session rename SESSION "Readable title" --command-id rename-1
 slop session edit SESSION --message MESSAGE --text "Revised prompt" --command-id edit-1
 slop session delete-message SESSION --message MESSAGE --command-id delete-1
 ```

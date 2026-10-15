@@ -74,6 +74,19 @@ impl DaemonClient {
             .await
     }
 
+    pub async fn rename_project(
+        &self,
+        id: &str,
+        request: &slop_protocol::projects::RenameProjectRequest,
+    ) -> Result<slop_protocol::projects::ProjectResponse, ClientError> {
+        self.require_feature("managed-workspaces").await?;
+        self.post_json(
+            id_url(&self.endpoint, "/v1/projects", id, Some("rename"))?,
+            request,
+        )
+        .await
+    }
+
     pub async fn project_workspaces(
         &self,
         id: &str,

@@ -17,6 +17,7 @@ Git must be on the daemon's PATH. Register an absolute checkout path:
 slop project register /absolute/repository --command-id register-demo
 slop project list
 slop project show PROJECT_ID
+slop project rename PROJECT_ID "Readable name" --command-id rename-project-a
 slop chat --project PROJECT_ID --base main --prompt "Fix the failing test." --detach --command-id job-a
 slop chat --project PROJECT_ID --base main --prompt "Improve error handling." --detach --command-id job-b
 slop project workspaces PROJECT_ID
@@ -140,6 +141,7 @@ or workspace mutations to older daemons.
 | `POST /v1/projects` | Register `{"command_id":"register-1","path":"/absolute/repo"}` |
 | `GET /v1/projects` | Paginated registered projects |
 | `GET /v1/projects/{id}` | Project identity/local mapping |
+| `POST /v1/projects/{id}/rename` | Rename `{"command_id":"rename-project-1","name":"Readable name"}` without changing project identity or path |
 | `GET /v1/projects/{id}/workspaces` | Paginated workspace provenance/states |
 | `GET /v1/projects/{id}/events` | Paginated durable project/workspace events |
 | `GET /v1/workspaces/{id}` | Workspace state and failure details, including its display name |

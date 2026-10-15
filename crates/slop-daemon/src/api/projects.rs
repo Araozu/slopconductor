@@ -23,6 +23,7 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/projects", get(projects).post(register))
         .route("/v1/projects/create", post(create))
         .route("/v1/projects/{id}", get(project))
+        .route("/v1/projects/{id}/rename", post(rename_project))
         .route("/v1/projects/{id}/workspaces", get(workspaces))
         .route("/v1/projects/{id}/events", get(events))
         .route("/v1/workspaces/{id}", get(workspace))
@@ -103,6 +104,36 @@ pub(crate) async fn project(
     Path(id): Path<String>,
 ) -> Response {
     storage_response(state.store.project(&id).await)
+}
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{id}/rename",
+    tag = "projects",
+    params(("id" = String, Path, description = "Project id")),
+    request_body = slop_protocol::projects::RenameProjectRequest,
+    responses(
+        (status = 202, description = "Project renamed", body = slop_protocol::projects::ProjectResponse),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Project not found", body = slop_protocol::ErrorResponse),
+        (status = 409, description = "Command state conflict", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn rename_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<slop_protocol::projects::RenameProjectRequest>,
+) -> Response {
+    if !state.accepting.load(Ordering::Acquire) {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "The daemon is shutting down.",
+        );
+    }
+    accepted(state.store.rename_project(&id, request).await)
 }
 #[utoipa::path(
     get,

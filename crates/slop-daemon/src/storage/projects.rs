@@ -38,10 +38,11 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> StoreResult<()> {
 fn project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectResponse> {
     Ok(ProjectResponse {
         id: row.get(0)?,
-        owner_node_id: row.get(1)?,
-        path: row.get(2)?,
+        name: row.get(1)?,
+        owner_node_id: row.get(2)?,
+        path: row.get(3)?,
         git_common_dir: {
-            let key: String = row.get(3)?;
+            let key: String = row.get(4)?;
             if key.starts_with("folder:") {
                 String::new()
             } else {
@@ -67,7 +68,7 @@ fn workspace_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceResponse>
 pub(super) fn project(connection: &Connection, id: &str) -> StoreResult<ProjectResponse> {
     connection
         .query_row(
-            "SELECT id,owner_node_id,path,git_common_dir FROM projects WHERE id=?1",
+            "SELECT id,name,owner_node_id,path,git_common_dir FROM projects WHERE id=?1",
             [id],
             project_row,
         )
@@ -408,14 +409,15 @@ impl StoreClient {
         self.submit(move |connection| {
             let tx = connection.unchecked_transaction().map_err(|_| StoreError::Database)?;
             if let Some(prior) = prior(&tx, &request.command_id, "register_project", &payload)? { return Ok(prior); }
-            let existing = tx.query_row("SELECT id,owner_node_id,path,git_common_dir FROM projects WHERE git_common_dir=?1", [&repo.common_dir], project_row).optional().map_err(|_| StoreError::Database)?;
+            let existing = tx.query_row("SELECT id,name,owner_node_id,path,git_common_dir FROM projects WHERE git_common_dir=?1", [&repo.common_dir], project_row).optional().map_err(|_| StoreError::Database)?;
             let registered = match existing {
                 Some(project) => project,
                 None => {
                     let count: i64 = tx.query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0)).map_err(|_| StoreError::Database)?;
                     if count >= MAX_PROJECTS { return Err(StoreError::Limit); }
-                    let project = ProjectResponse { id: opaque_id()?, owner_node_id: query_node(&tx)?.node_id, path: repo.path, git_common_dir: if repo.common_dir.starts_with("folder:") { String::new() } else { repo.common_dir.clone() } };
-                    tx.execute("INSERT INTO projects(id,owner_node_id,path,git_common_dir) VALUES(?1,?2,?3,?4)", rusqlite::params![project.id, project.owner_node_id, project.path, repo.common_dir]).map_err(|_| StoreError::Database)?;
+                    let id = opaque_id()?;
+                    let project = ProjectResponse { name: id.clone(), id, owner_node_id: query_node(&tx)?.node_id, path: repo.path, git_common_dir: if repo.common_dir.starts_with("folder:") { String::new() } else { repo.common_dir.clone() } };
+                    tx.execute("INSERT INTO projects(id,name,owner_node_id,path,git_common_dir) VALUES(?1,?2,?3,?4,?5)", rusqlite::params![project.id, project.name, project.owner_node_id, project.path, repo.common_dir]).map_err(|_| StoreError::Database)?;
                     event(&tx, &project.id, None, "project_registered")?;
                     project
                 }
@@ -430,6 +432,39 @@ impl StoreClient {
         let id = id.to_owned();
         self.submit(move |connection| project(connection, &id))
             .await
+    }
+    pub async fn rename_project(
+        &self,
+        id: &str,
+        request: RenameProjectRequest,
+    ) -> StoreResult<ProjectResponse> {
+        let id = id.to_owned();
+        let payload = canonical(&request)?;
+        self.submit(move |connection| {
+            let tx = connection
+                .unchecked_transaction()
+                .map_err(|_| StoreError::Database)?;
+            let scope = format!("project:{id}:rename");
+            if let Some(prior) = prior(&tx, &request.command_id, &scope, &payload)? {
+                return Ok(prior);
+            }
+            project(&tx, &id)?;
+            let name = request.name.trim();
+            if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+                return Err(StoreError::Invalid);
+            }
+            tx.execute(
+                "UPDATE projects SET name=?1 WHERE id=?2",
+                rusqlite::params![name, id],
+            )
+            .map_err(|_| StoreError::Database)?;
+            event(&tx, &id, None, "project_renamed")?;
+            let response = project(&tx, &id)?;
+            save(&tx, &request.command_id, &scope, &payload, &response)?;
+            tx.commit().map_err(|_| StoreError::Database)?;
+            Ok(response)
+        })
+        .await
     }
     pub async fn workspace(&self, id: &str) -> StoreResult<WorkspaceResponse> {
         let id = id.to_owned();
@@ -479,7 +514,7 @@ impl StoreClient {
     ) -> StoreResult<Page<ProjectResponse>> {
         let limit = page_limit(limit)?;
         self.submit(move |connection| {
-            page(connection, "SELECT id,owner_node_id,path,git_common_dir,created_order FROM projects WHERE created_order>?1 ORDER BY created_order LIMIT ?2", None, after, limit, 4, project_row)
+            page(connection, "SELECT id,name,owner_node_id,path,git_common_dir,created_order FROM projects WHERE created_order>?1 ORDER BY created_order LIMIT ?2", None, after, limit, 5, project_row)
         }).await
     }
     pub async fn workspaces(

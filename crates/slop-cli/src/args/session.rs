@@ -13,6 +13,12 @@ pub enum SessionCommand {
     Show {
         id: String,
     },
+    Rename {
+        id: String,
+        title: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
     History {
         id: String,
         #[arg(long)]

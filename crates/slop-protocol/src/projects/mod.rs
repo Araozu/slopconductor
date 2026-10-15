@@ -2,6 +2,8 @@
 
 mod register_project_request;
 pub use register_project_request::RegisterProjectRequest;
+mod rename_project_request;
+pub use rename_project_request::RenameProjectRequest;
 mod project_response;
 pub use project_response::ProjectResponse;
 mod project_workspace_request;
