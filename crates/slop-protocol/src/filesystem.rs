@@ -21,13 +21,3 @@ pub struct CreateDirectoryRequest {
     pub parent: String,
     pub name: String,
 }
-
-/// Creates a new repository in an exclusively created child directory.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct CreateProjectRequest {
-    #[serde(default)]
-    pub git: bool,
-    pub command_id: String,
-    pub parent: String,
-    pub name: String,
-}

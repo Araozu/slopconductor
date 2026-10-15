@@ -151,11 +151,10 @@ pub(crate) fn validate_policy(spec: &SessionSpec) -> StoreResult<()> {
         serde_json::from_str(&canonical(policy)?).map_err(|_| StoreError::Invalid)?;
     if !slop_runtime::orchestration::validate(&runtime)
         || spec.budget.is_none()
-        || policy.allowed_tools.iter().any(|tool| {
-            spec.project
-                .as_ref()
-                .is_none_or(|p| !p.allowed_tools.contains(tool))
-        })
+        || policy
+            .allowed_tools
+            .iter()
+            .any(|tool| !spec.workspace.allowed_tools.contains(tool))
     {
         return Err(StoreError::Invalid);
     }
@@ -216,23 +215,27 @@ fn constrain(
     if link(c, &parent.id)?.is_some() || spec.orchestration.is_some() {
         return Err(StoreError::Unsupported("child.orchestration"));
     }
-    match (&parent.spec.project, &mut spec.project) {
-        (Some(p), Some(child)) if p.project_id == child.project_id => {
-            if child
+    let p = &parent.spec.workspace;
+    let child = &mut spec.workspace;
+    if child.workspace_id != slop_protocol::workspaces::DEFAULT_WORKSPACE_ID {
+        let descends: bool = c.query_row("WITH RECURSIVE ancestry(id,source_workspace_id) AS (SELECT id,source_workspace_id FROM workspaces WHERE id=?1 UNION SELECT w.id,w.source_workspace_id FROM workspaces w JOIN ancestry a ON w.id=a.source_workspace_id) SELECT EXISTS(SELECT 1 FROM ancestry WHERE id=?2)",rusqlite::params![child.workspace_id,p.workspace_id],|r|r.get(0)).map_err(|_|StoreError::Database)?;
+        if !descends
+            || child
                 .allowed_tools
                 .iter()
-                .any(|t| !policy.allowed_tools.contains(t))
-                || child
-                    .base_ref
-                    .as_ref()
-                    .is_some_and(|b| Some(b) != p.base_ref.as_ref())
-            {
-                return Err(StoreError::Unsupported("child.project"));
-            }
-            child.base_ref = p.base_ref.clone();
+                .any(|t| !policy.allowed_tools.contains(t) || !p.allowed_tools.contains(t))
+        {
+            return Err(StoreError::Unsupported("child.workspace"));
         }
-        (_, None) => {}
-        _ => return Err(StoreError::Unsupported("child.project")),
+        let limits = p.limits.clone().unwrap_or_default();
+        let child_limits = child.limits.get_or_insert_with(|| limits.clone());
+        if child_limits.shell_timeout_ms > limits.shell_timeout_ms
+            || child_limits.max_output_bytes > limits.max_output_bytes
+            || child_limits.max_tool_calls > limits.max_tool_calls
+            || child_limits.max_model_requests > limits.max_model_requests
+        {
+            return Err(StoreError::Unsupported("child.workspace.limits"));
+        }
     }
     let inherited = parent.spec.budget.as_ref().ok_or(StoreError::Invalid)?;
     if let Some(b) = &spec.budget {
@@ -904,28 +907,13 @@ impl StoreClient {
         }
         let parent_id = parent_run.to_owned();
         let lookup = parent_id.clone();
-        let parent_snapshot = self.submit(move |c| parent(c, &lookup)).await?;
+        self.submit(move |c| parent(c, &lookup)).await?;
         let mut spec = effective.ok_or(StoreError::Invalid)?;
-        // Freeze inherited project identity before Git I/O, then revalidate all
-        // limits in the acceptance transaction to handle competing creates.
-        let mut project = spec.project.clone();
-        if let (Some(p), Some(child)) = (&parent_snapshot.spec.project, &mut project) {
-            if p.project_id != child.project_id
-                || child
-                    .base_ref
-                    .as_ref()
-                    .is_some_and(|b| Some(b) != p.base_ref.as_ref())
-            {
-                return Err(StoreError::Unsupported("child.project"));
-            }
-            child.base_ref = p.base_ref.clone();
-        }
-        spec.project = project;
-        let resolved = self.resolve_job_project(&mut spec.project).await?;
+        let resolved = self.resolve_job_workspace(&spec.workspace).await?;
         let artifact_dir = self.shared.data_dir.join("artifacts");
         self.submit(move|c| {
             let tx=c.unchecked_transaction().map_err(|_|StoreError::Database)?;
-            if let Some(receipt)=projects::prior(&tx,&request.command_id,&scope,&payload)? {return Ok(receipt);}
+            if let Some(receipt)=workspaces::prior(&tx,&request.command_id,&scope,&payload)? {return Ok(receipt);}
             let parent=parent(&tx,&parent_id)?;
             let (root,depth)=constrain(&tx,&parent,&mut spec)?;
             spec.prompt=selected_context(&tx,&parent,&request.context,&spec.prompt,&artifact_dir)?;
@@ -934,7 +922,7 @@ impl StoreClient {
             tx.execute("INSERT INTO child_links(child_task_id,parent_task_id,parent_run_id,root_task_id,depth,cancel_with_parent,context,notification_mode,detached,spawned_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",rusqlite::params![receipt.task_id,parent.id,parent_id,root,depth,request.cancel_with_parent,canonical(&request.context)?,request.notification_mode,request.detached,spawned_at_ms]).map_err(|_|StoreError::Database)?;
             tx.execute("UPDATE sessions SET root_task_id=?1,admission_batch_id=(SELECT admission_batch_id FROM sessions WHERE id=?2) WHERE id=?3",rusqlite::params![root,parent.id,receipt.task_id]).map_err(|_|StoreError::Database)?;
             append_event(&tx,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.session_id,"child_created",Some(&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.id),None)?;
-            projects::save(&tx,&request.command_id,&scope,&payload,&receipt)?;
+            workspaces::save(&tx,&request.command_id,&scope,&payload,&receipt)?;
             if let Some(intent)=intent {execution::finish_tool_tx(&tx,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.session_id,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.turn.id,&intent,&completed(canonical(&receipt)?))?;}
             tx.commit().map_err(|_|StoreError::Database)?;
             Ok(receipt)
@@ -977,7 +965,7 @@ impl StoreClient {
             let tx = c
                 .unchecked_transaction()
                 .map_err(|_| StoreError::Database)?;
-            if let Some(receipt) = projects::prior(&tx, &request.command_id, &scope, &payload)? {
+            if let Some(receipt) = workspaces::prior(&tx, &request.command_id, &scope, &payload)? {
                 return Ok(receipt);
             }
             let parent = parent(&tx, &id)?;
@@ -1033,7 +1021,7 @@ impl StoreClient {
                 current.revision,
                 current.last_event_sequence,
             );
-            projects::save(&tx, &request.command_id, &scope, &payload, &receipt)?;
+            workspaces::save(&tx, &request.command_id, &scope, &payload, &receipt)?;
             tx.commit().map_err(|_| StoreError::Database)?;
             Ok(receipt)
         })
@@ -1231,7 +1219,7 @@ mod tests {
                 reasoning_effort: None,
                 full_context: None,
             },
-            project: None,
+            workspace: Default::default(),
             budget: Some(OperationBudget {
                 max_model_requests: 32,
                 max_tool_calls: 64,
@@ -1422,6 +1410,7 @@ mod tests {
         store.shutdown().await.unwrap();
         let db = Connection::open(data.join(DATABASE_FILE)).unwrap();
         db.execute("UPDATE sessions SET spec=json_remove(spec,'$.orchestration.max_concurrent_children'),requested_spec=json_remove(requested_spec,'$.orchestration.max_concurrent_children') WHERE id=?1",[&parent.task_id]).unwrap();
+        workspaces::legacy_fixture(&db).unwrap();
         db.execute_batch("DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=13;").unwrap();
         drop(db);
         let migrated = open(data).await;
@@ -1477,8 +1466,7 @@ mod tests {
             model: "glm-5.3-flash".into(),
             max_tokens: Some(64),
             settings: None,
-            execution: None,
-            project: None,
+            workspace: Default::default(),
             prompt: Some("delegating session".into()),
             draft_id: None,
             budget: Some(OperationBudget {
@@ -1493,7 +1481,7 @@ mod tests {
             prompts: vec!["batch child parent".into()],
             models: vec!["opencode-go/glm-5.3-flash".into()],
             settings: vec![Default::default()],
-            project: None,
+            workspace: Default::default(),
             max_concurrent_runs: 1,
             default_max_output_tokens: Some(64),
             budget: Some(OperationBudget {
@@ -1516,6 +1504,7 @@ mod tests {
             .unwrap();
         // Model the exact schema-13 request bytes that those commands stored.
         let db = Connection::open(data.join(DATABASE_FILE)).unwrap();
+        workspaces::legacy_fixture(&db).unwrap();
         db.execute_batch("UPDATE commands SET payload=json_remove(payload,'$.spec.orchestration.max_concurrent_children') WHERE scope='create_task'; UPDATE commands SET payload=json_remove(payload,'$.orchestration.max_concurrent_children') WHERE scope='create_session'; UPDATE commands SET payload=json_remove(payload,'$.spec.orchestration.max_concurrent_children') WHERE scope='create_batch'; UPDATE commands SET payload=json_remove(payload,'$.notification_mode','$.detached') WHERE scope LIKE 'run:%:child'; UPDATE commands SET payload=json_remove(payload,'$.mode','$.timeout_ms') WHERE scope LIKE 'run:%:wait'; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=13;").unwrap();
         db.execute(
             "UPDATE turns SET status='completed' WHERE id=?1",
@@ -2663,7 +2652,7 @@ mod tests {
             prompts: vec![task_spec.prompt],
             models: vec![task_spec.model],
             settings: vec![task_spec.settings],
-            project: None,
+            workspace: Default::default(),
             max_concurrent_runs: 1,
             default_max_output_tokens: Some(64),
             budget: task_spec.budget,

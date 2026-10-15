@@ -132,43 +132,12 @@ fn branch(
     through: i64,
     title: Option<String>,
     edited: bool,
-    data_dir: PathBuf,
+    _data_dir: PathBuf,
 ) -> StoreResult<(String, Option<String>)> {
-    // Older ordinary sessions migrated to schema 9 can have a managed
-    // workspace without a project selection in their new SessionSpec.
-    let selection = if let Some(selection) = &source.spec.project {
-        Some(selection.clone())
-    } else if let Some(id) = &source.managed_workspace_id {
-        let workspace = projects::workspace(tx, id)?;
-        Some(slop_protocol::projects::ProjectWorkspaceRequest {
-            project_id: workspace.project_id,
-            base_ref: Some(workspace.base_commit),
-            allowed_tools: source
-                .execution
-                .as_ref()
-                .ok_or(StoreError::Database)?
-                .allowed_tools
-                .clone(),
-        })
-    } else {
-        None
-    };
-    let resolved = selection
-        .as_ref()
-        .map(|selection| -> StoreResult<projects::ResolvedWorkspace> {
-            let project = projects::project(tx, &selection.project_id)?;
-            let base_commit = if project.git_common_dir.is_empty() {
-                String::new()
-            } else {
-                selection.base_ref.clone().ok_or(StoreError::Conflict)?
-            };
-            Ok(projects::ResolvedWorkspace {
-                project,
-                base_commit,
-                data_dir,
-            })
-        })
-        .transpose()?;
+    let selection = source.spec.workspace.clone();
+    let resolved = Some(workspaces::ResolvedWorkspace {
+        workspace: workspaces::workspace(tx, &selection.workspace_id)?,
+    });
     let receipt = create_session_tx(
         tx,
         CreateSessionRequest {
@@ -177,12 +146,7 @@ fn branch(
             provider: source.provider.clone(),
             model: source.model.clone(),
             settings: Some(source.settings.clone()),
-            execution: if selection.is_none() {
-                source.execution.clone()
-            } else {
-                None
-            },
-            project: selection,
+            workspace: selection,
             budget: source.spec.budget.clone(),
             // A fork is a new conversation, but a child remains a leaf: copying
             // its stored legacy policy here would let history paths regrant

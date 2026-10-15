@@ -116,7 +116,7 @@ pub(super) fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
         children::enqueue_completion(&tx, &turn_id)?;
     }
     children::wake(&tx)?;
-    projects::recover(&tx)?;
+    workspaces::recover(&tx)?;
     tx.commit().map_err(|_| StoreError::Database)
 }
 

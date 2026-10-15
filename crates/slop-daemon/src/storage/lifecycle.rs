@@ -218,7 +218,7 @@ impl StoreClient {
         if !self.shared.workspace_healthy.load(Ordering::Acquire) {
             return Err(StoreError::Unavailable);
         }
-        let resolved = self.resolve_project_workspace(&request).await?;
+        let resolved = self.resolve_workspace(&request).await?;
         self.submit(move |connection| {
             create_session(connection, request, default_max_tokens, resolved)
         })

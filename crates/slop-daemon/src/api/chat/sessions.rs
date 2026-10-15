@@ -201,7 +201,7 @@ pub(crate) async fn create_session(
             prompt: prompt.clone(),
             model: format!("{}/{}", request.provider, request.model),
             settings: request.settings.clone().unwrap_or_default(),
-            project: request.project.clone(),
+            workspace: request.workspace.clone(),
             budget: request.budget.clone(),
             orchestration: request.orchestration.clone(),
         };

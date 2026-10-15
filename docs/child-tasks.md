@@ -21,18 +21,18 @@ provider-qualified catalog. A nonempty list restricts models explicitly and
 has no arbitrary eight-model cap.
 New policies should set `max_depth` to 1. Legacy values 2–4 remain accepted for
 file compatibility, but cannot grant nested spawning authority.
-Allowed tools are a subset of the parent's project tools. A text-only parent
+Allowed tools are a subset of the parent's selected workspace tools. A text-only parent
 uses an empty coding-tool list. Go, Zen, and Codex can be delegating parents
 when explicitly authorized. Codex subscription children omit output caps; an
 explicit cap is rejected, and there is no inherited Platform billing fallback.
 
 Children choose their prompt and model explicitly. Omitted Go/Zen output caps
 use the parent's frozen cap; requested inputs remain separately recorded. No
-conversation is copied implicitly. A child may omit its project for text-only work, or select the
-same registered project with a subset of authorized coding tools. Its base must
-be the parent's frozen commit; a dirty parent workspace is never copied. Each
-child is a conversation with its own lazily allocated worktree reservation. Its
-follow-ups and retries reuse that conversation and workspace.
+conversation is copied implicitly. A child selects an existing workspace with a
+subset of authorized coding tools. It uses the built-in `default` workspace for
+text-only work. Child creation never creates a directory or worktree. If a child
+needs independent writable state, create a worktree explicitly first and pass
+its workspace ID. Follow-ups and retries reuse the child's selected workspace.
 
 An omitted child budget inherits the parent's finite limits. An explicit child
 budget cannot exceed them. Every child request/tool dispatch also consumes the
@@ -51,10 +51,11 @@ Binary artifact consumption remains outside this slice.
 ## CLI workflow
 
 The [policy example](../examples/child-policy.json) authorizes writing in the
-selected project. Register a project, then submit a parent:
+selected workspace. Open a directory, then submit a parent:
 
 ```sh
-slop task create --model opencode-go/glm-5.3-flash --project PROJECT_ID \
+slop workspace open /absolute/repository
+slop task create --model opencode-go/glm-5.3-flash --workspace-id WORKSPACE_ID \
   --orchestration-policy examples/child-policy.json \
   --max-model-requests 32 --max-tool-calls 64 \
   --text "Delegate two independent implementations and compare their results." \
@@ -65,10 +66,10 @@ slop task follow PARENT_TASK_ID
 
 If a CLI policy is supplied without aggregate limit flags, it supplies a budget
 of 64 model requests and 128 tool calls. API callers supply their budget explicitly.
-Project reservations, descendants, and retained retry workspaces share the
-existing 32-per-project/256-global workspace quotas, so leave capacity for children.
+Children that share a workspace serialize writes by canonical root. Each child
+can select a different existing workspace when appropriate.
 
-Clients can also create a child directly. Replace the project ID in the
+Clients can also create a child directly. Replace the workspace ID in the
 [child request example](../examples/child-request.json); the file contains inputs,
 and the CLI supplies its command ID:
 
@@ -83,7 +84,7 @@ Creation requires the parent's latest attempt to be queued, running, paused,
 or awaiting children, with no cancellation pending. Repeating an accepted
 command returns its original receipt, even after state changes. Child queries
 remain available for old attempts. Results expose the attempt and canonical
-public output; artifacts and worktree diffs retain their existing API operations.
+public output; artifacts and workspace diffs retain their existing API operations.
 
 ## Native tools and waiting
 
@@ -161,7 +162,9 @@ previously running children become interrupted under the existing recovery rules
 Known waits can finish while a parent is paused, but provider execution resumes
 only after an explicit resume command. Native creation is not duplicated, and
 unknown shell/Git operations are never replayed. A child retry with uncertain
-effects requires the existing explicit acknowledgement and a fresh workspace.
+effects requires the existing explicit acknowledgement and retains the child's
+workspace. Create a separate workspace explicitly when isolation from earlier
+filesystem effects is desired.
 
 ## Public API and validation
 

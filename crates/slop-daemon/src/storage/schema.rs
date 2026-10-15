@@ -72,7 +72,7 @@ where
             steering_migrate(&tx)?;
         }
         if existing_version < 5 {
-            projects::migrate(&tx)?;
+            workspaces::migrate_legacy(&tx)?;
         }
         if existing_version < 6 {
             orchestration::migrate(&tx)?;
@@ -140,6 +140,9 @@ where
                 tx.execute_batch("ALTER TABLE projects ADD COLUMN name TEXT NOT NULL DEFAULT ''; UPDATE projects SET name=id;")
                     .map_err(|_| StoreError::Database)?;
             }
+        }
+        if existing_version < 22 {
+            workspaces::migrate(&tx)?;
         }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")

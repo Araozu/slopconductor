@@ -25,10 +25,11 @@ pub enum TaskCommand {
         #[arg(long)]
         orchestration_policy: Option<PathBuf>,
         #[arg(long)]
-        project: Option<String>,
-        #[arg(long, requires = "project")]
-        base: Option<String>,
-        #[arg(long="tool",requires="project",value_parser=["read","write","edit","bash"])]
+        workspace_id: Option<String>,
+        /// Select the built-in directory-less workspace explicitly.
+        #[arg(long, conflicts_with = "workspace_id")]
+        no_workspace: bool,
+        #[arg(long="tool",requires="workspace_id",value_parser=["read","write","edit","bash"])]
         tools: Vec<String>,
         #[arg(long)]
         command_id: Option<String>,

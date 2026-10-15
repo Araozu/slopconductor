@@ -51,9 +51,7 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
                     "Revision: {}  Event: {}",
                     session.revision, session.last_event_sequence
                 );
-                if let Some(workspace) = &session.managed_workspace_id {
-                    println!("Managed workspace: {workspace}");
-                }
+                println!("Workspace: {}", session.workspace_id);
                 if let Some(policy) = &session.execution {
                     println!("Workspace path: {}", policy.root);
                 }

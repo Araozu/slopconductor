@@ -1,5 +1,5 @@
 use super::{OperationBudget, OrchestrationPolicy};
-use crate::{execution::GenerationSettings, projects::ProjectWorkspaceRequest};
+use crate::{execution::GenerationSettings, workspaces::WorkspaceSelection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -9,7 +9,7 @@ pub struct BatchSpec {
     pub prompts: Vec<String>,
     pub models: Vec<String>,
     pub settings: Vec<GenerationSettings>,
-    pub project: Option<ProjectWorkspaceRequest>,
+    pub workspace: WorkspaceSelection,
     pub max_concurrent_runs: u32,
     /// Preview freezes the daemon default for uncapped API-key cells.
     #[serde(default)]

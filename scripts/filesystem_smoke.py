@@ -1,13 +1,14 @@
-"""Authenticated real-daemon folder projects and filesystem navigation."""
+"""Authenticated real-daemon directory workspaces and filesystem navigation."""
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 from chat_smoke import isolated_env, request, start_daemon, stop_daemon, wait_turn
-from projects_smoke import ProjectFixture
+from workspaces_smoke import WorkspaceFixture
 
 
 def check_filesystem(binary, root):
-    fixture = ProjectFixture()
+    fixture = WorkspaceFixture()
     daemon = log = None
     try:
         env = isolated_env(root, fixture)
@@ -27,33 +28,42 @@ def check_filesystem(binary, root):
         api("POST", "/v1/filesystem/directories", {"parent": str(parent), "name": "nested"})
         api("POST", "/v1/filesystem/directories", {"parent": str(parent), "name": "../escape"}, 400)
         payload = {"command_id": "create-folder", "parent": str(parent), "name": "plain project"}
-        project = api("POST", "/v1/projects/create", payload, 202)
-        assert project["git_common_dir"] == ""
+        created = api("POST", "/v1/workspaces/create", payload, 202)
+        assert api("POST", "/v1/workspaces/create", payload, 202) == created
+        def ready(record):
+            for _ in range(300):
+                record = api("GET", f"/v1/workspaces/{record['id']}")
+                if record["status"] != "allocating":
+                    assert record["status"] == "ready", record
+                    return record
+                time.sleep(0.03)
+            raise RuntimeError("workspace creation did not finish")
+        project = ready(created)
+        assert project["git_common_dir"] is None
         assert not (Path(project["path"]) / ".git").exists()
-        api("POST", "/v1/projects/create", payload, 409)
-        again = api("POST", "/v1/projects", {"command_id": "register-folder", "path": project["path"]}, 202)
+        again = api("POST", "/v1/workspaces", {"command_id": "register-folder", "path": project["path"]}, 202)
         assert again == project
-        other = api("POST", "/v1/projects", {"command_id": "register-other", "path": str(parent / "nested")}, 202)
+        other = api("POST", "/v1/workspaces", {"command_id": "register-other", "path": str(parent / "nested")}, 202)
         assert other["id"] != project["id"]
-        selection = {"project_id": project["id"], "base_ref": None, "allowed_tools": ["read", "write"]}
-        session_payload = {"command_id": "folder-session", "provider": "opencode-go", "model": "glm-5.3-flash", "project": selection}
+        selection = {"workspace_id": project["id"], "allowed_tools": ["read", "write"]}
+        session_payload = {"command_id": "folder-session", "provider": "opencode-go", "model": "glm-5.3-flash", "workspace": selection}
         receipt = api("POST", "/v1/sessions", session_payload, 202)
         session = api("GET", f"/v1/sessions/{receipt['session_id']}")
         assert session["execution"]["root"] == project["path"]
-        assert session.get("managed_workspace_id") is None
+        assert session["workspace_id"] == project["id"]
         assert api("POST", "/v1/sessions", session_payload, 202) == receipt
-        task = api("POST", "/v1/tasks", {"command_id": "folder-task", "spec": {"title": "Folder task", "prompt": "hello", "model": "opencode-go/glm-5.3-flash", "settings": {}, "project": selection}}, 202)
+        task = api("POST", "/v1/tasks", {"command_id": "folder-task", "spec": {"title": "Folder task", "prompt": "hello", "model": "opencode-go/glm-5.3-flash", "settings": {}, "workspace": selection}}, 202)
         task_session = api("GET", f"/v1/sessions/{task['session_id']}")
         assert task_session["execution"]["root"] == project["path"]
-        assert task_session.get("managed_workspace_id") is None
+        assert task_session["workspace_id"] == project["id"]
         assert wait_turn(endpoint, token, task["turn_id"], {"completed", "failed"})["status"] == "completed"
-        git = api("POST", "/v1/projects/create", {"command_id": "create-git", "parent": str(parent), "name": "git project", "git": True}, 202)
+        git = ready(api("POST", "/v1/workspaces/create", {"command_id": "create-git", "parent": str(parent), "name": "git project", "git": True}, 202))
         assert git["git_common_dir"]
         stop_daemon(daemon, log)
         daemon = log = None
         daemon, endpoint, log = start_daemon(binary, root / "restart", root / "data", env)
-        assert api("GET", f"/v1/projects/{project['id']}") == project
-        print("filesystem and folder project smoke passed")
+        assert api("GET", f"/v1/workspaces/{project['id']}") == project
+        print("filesystem and directory workspace smoke passed")
     finally:
         if daemon is not None:
             stop_daemon(daemon, log)

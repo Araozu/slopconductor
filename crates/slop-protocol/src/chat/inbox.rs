@@ -29,10 +29,8 @@ pub struct ConversationDraft {
     pub title: String,
     pub text: String,
     pub model: String,
-    pub workspace: String,
     pub settings: Option<crate::execution::GenerationSettings>,
-    pub project: Option<crate::projects::ProjectWorkspaceRequest>,
-    pub allowed_tools: Option<Vec<String>>,
+    pub workspace: Option<crate::workspaces::WorkspaceSelection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

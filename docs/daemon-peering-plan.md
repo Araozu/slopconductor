@@ -52,7 +52,7 @@ pause/resume/cancel. Keep the first target explicit with a proposed CLI selector
 such as `slop --peer home session list`; this goes through the local daemon.
 All command examples and route names here are illustrative.
 
-Remote creation of tasks/projects/workspaces, cross-node agent delegation,
+Remote creation of tasks/workspaces, cross-node agent delegation,
 combined session lists, offline command queues, artifact mirroring, migration,
 and automatic discovery remain subsequent slices. In particular, native child
 tasks continue running on their parent's owning daemon.

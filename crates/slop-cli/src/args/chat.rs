@@ -1,21 +1,21 @@
 use std::path::PathBuf;
 
 #[derive(Debug, clap::Args)]
-#[command(group(clap::ArgGroup::new("workspace_selection").args(["workspace", "project"]).multiple(false)))]
+#[command(group(clap::ArgGroup::new("workspace_selection").args(["workspace", "workspace_id", "no_workspace"]).multiple(false)))]
 pub struct ChatArgs {
     #[arg(long)]
     pub session: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
-    /// Explicit workspace on the daemon's machine for a new tool-enabled session.
+    /// Open this existing directory before creating a new workspace-backed session.
     #[arg(long, conflicts_with = "session")]
     pub workspace: Option<PathBuf>,
-    /// Registered project on the daemon; reserve an isolated managed worktree.
+    /// Use a workspace already registered with the daemon.
     #[arg(long, conflicts_with = "session")]
-    pub project: Option<String>,
-    /// Git revision to freeze when reserving a project worktree (default HEAD).
-    #[arg(long, requires = "project")]
-    pub base: Option<String>,
+    pub workspace_id: Option<String>,
+    /// Select the built-in directory-less workspace explicitly.
+    #[arg(long, conflicts_with = "session")]
+    pub no_workspace: bool,
     /// Tool to allow; repeat to restrict the default read/write/edit/bash set.
     #[arg(long="tool", requires="workspace_selection", value_parser=["read","write","edit","bash"])]
     pub tools: Vec<String>,

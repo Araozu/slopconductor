@@ -19,7 +19,7 @@ from chat_smoke import check_chat_lifecycle
 from credentials_smoke import check_credentials
 from codex_smoke import check_codex
 from tools_smoke import check_tools
-from projects_smoke import check_projects
+from workspaces_smoke import check_workspaces
 from filesystem_smoke import check_filesystem
 from orchestration_smoke import check_orchestration
 from delegation_smoke import check_delegation
@@ -199,7 +199,7 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
             stored_id = database.execute(
                 "SELECT node_id FROM node_identity WHERE singleton = 1"
             ).fetchone()[0]
-        if journal != "wal" or schema_version != 21 or stored_id != node["node_id"]:
+        if journal != "wal" or schema_version != 22 or stored_id != node["node_id"]:
             raise RuntimeError(
                 f"unexpected SQLite state: journal={journal}, schema={schema_version}, node={stored_id}"
             )
@@ -403,7 +403,7 @@ def main():
         check_peers(daemon_binary, cli_binary, root / "peers")
         check_context(daemon_binary, root / "context", start_daemon, stop_daemon, isolated_env)
         check_tools(daemon_binary, cli_binary, root / "structured-tools")
-        check_projects(daemon_binary, cli_binary, root / "projects")
+        check_workspaces(daemon_binary, cli_binary, root / "workspaces")
         check_filesystem(daemon_binary, root / "filesystem")
         check_orchestration(daemon_binary, cli_binary, root / "orchestration")
         check_delegation(daemon_binary, cli_binary, root / "delegation")
@@ -412,7 +412,7 @@ def main():
 
     print("Smoke check passed: bootstrap ownership/authentication, runtime credentials/login, chat durability/replay, "
           "scoped daemon peering/events/control/revocation, chat forks/edits/suffix deletion, after-turn/next-boundary/immediate steering, provider snapshot rotation, pause/resume recovery, "
-          "structured tools/artifacts/recovery, managed worktree isolation/frozen bases/cleanup, tasks/runs, deterministic matrices/selective retries/export, fair admission, aggregate budgets, batch cancellation, native children/waits/recovery, command idempotency, client boundaries, and offline provider execution.")
+          "structured tools/artifacts/recovery, required workspaces, explicit worktree isolation/frozen bases/cleanup, tasks/runs, deterministic matrices/selective retries/export, fair admission, aggregate budgets, batch cancellation, native children/waits/recovery, command idempotency, client boundaries, and offline provider execution.")
 
 
 if __name__ == "__main__":

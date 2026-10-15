@@ -29,9 +29,9 @@ specifies the implemented surface. Structured Go/Zen/Codex turns now persist blo
 model/settings, model requests, file/shell invocations, artifacts, and recovery
 results. Its only coding tools are `read`, `write`, `edit`, and `bash`, implemented
 in Rust; workspace chats enable all four unless an explicit allowlist restricts
-them. Registered projects, frozen-base managed session worktrees, lazy allocation,
-separate diffs, explicit cleanup, and Git recovery are now implemented; see
-[projects/workspaces](projects-workspaces.md). Durable tasks/run attempts and
+them. The unified workspace API opens canonical directories in place and creates
+Git worktrees explicitly. Sessions select existing workspace IDs and writers
+serialize by canonical root; see [workspaces](workspaces.md). Durable tasks/run attempts and
 matrices with preview, selective retry, and result export are implemented; see
 [tasks and batches](tasks-batches.md). Bounded [native children](child-tasks.md)
 are implemented. Scoped [daemon peering](daemon-peering.md) adds optional
@@ -52,14 +52,14 @@ crates/slop-protocol/src/
   chat/                 # one wire DTO per file
   execution/            # one wire DTO per file
   orchestration/        # one wire DTO per file
-  projects/             # one wire DTO per file
+  workspaces/           # one wire DTO per file
   providers/            # one wire DTO per file
 
 crates/slop-client/src/
   error.rs
   execution.rs
   orchestration.rs
-  projects.rs
+  workspaces.rs
   providers.rs
   sessions.rs
   streams.rs
@@ -173,7 +173,7 @@ to extend this structure.
 
 **Implemented startup foundation:** see [daemon startup](daemon-startup-plan.md)
 for actual paths, configuration, authentication, and the accepted recovery policy.
-Project registration and runtime provider credentials now have their own public
+Workspace registration and runtime provider credentials now have their own public
 operations. Remote pairing remains a later extension rather than a startup
 configuration placeholder.
 
@@ -182,9 +182,9 @@ and OS-backed exclusivity are implemented. Physical-machine grouping remains
 display metadata for future work.
 
 The bounded startup config currently controls listener, name, database queue/busy
-limits, and shutdown deadline. Provider/account handles and registered projects
-will be added with their owning behavior; startup does not scan the home directory
-or parse repositories.
+limits, and shutdown deadline. Provider/account handles use their own credential
+operations; clients explicitly register workspace roots. Startup does not scan
+the home directory or parse repositories.
 
 Local bearer authentication and private credential publication are implemented.
 Pairing and execution authorization remain necessary before privileged tools are
@@ -285,27 +285,31 @@ Acceptance: use failure injection around persistence/launch/completion to verify
 known results are reused and unknown edits/commands are not blindly replayed.
 Check Linux and Windows process behavior with real children.
 
-## Step 6: projects, worktrees, and matrix orchestration
+## Step 6: workspaces, explicit worktrees, and matrix orchestration
 
-**Implemented project/workspace subset:** repository registration, frozen base
-commits, metadata-only reservations, detached allocation on turn admission,
-bounded Git supervision, independent diffs, explicit conservative cleanup, and
-no-replay Git recovery. Each workspace belongs to a session; a task attempt owns its session. The CLI/API and
-offline acceptance workflow are described in
-[projects/workspaces](projects-workspaces.md). Task/run controls and matrices are implemented
+**Unified workspace contract:** open existing canonical directories in place;
+store optional Git common-directory metadata; explicitly create managed
+worktrees with a frozen base; expose workspace state, events, diffs, and
+conservative removal. Sessions, task/batch members, children, retries, and
+history forks select or retain existing workspaces and never create worktrees
+implicitly. Multiple sessions can select one workspace, with writes serialized
+by canonical root. The CLI/API is described in [workspaces](workspaces.md).
+Task/run controls and matrices are implemented
 as described in
 [tasks and batches](tasks-batches.md). The [recommended delivery order](roadmap.md#recommended-next-delivery-order)
 now marks scheduling/batch controls and native children implemented locally.
 The [local daemon-peering slice](daemon-peering.md) now adds explicit remote
 inspection/control; platform and capacity validation remain open release gates.
 
-Record logical repository identity, current exact base commit, local mappings,
-and workspace policy. Use managed worktrees for parallel writers; default shared
-directory execution needs an exclusive reservation.
+Record canonical workspace paths, optional Git common-directory metadata,
+worktree provenance, and effective session policies. Use explicitly created
+managed worktrees for independent parallel writers; sessions sharing one root
+serialize writes.
 
 Implement batch preview before submission. Validate product cardinality with
 overflow protection and a configured cap, freeze inputs, and persist member
-metadata. Allocate contexts/worktrees lazily on admission. Keep deterministic
+metadata. Allocate contexts lazily on admission; worktrees are explicitly
+created before a session selects them. Keep deterministic
 combination indexes and selective retries.
 
 The [example request](../examples/batch-request.json) now matches the implemented
@@ -328,7 +332,7 @@ Explicit context/artifact previews, independent provider/model/effort selection,
 finite ancestor budgets, one-level delegation, outstanding/concurrent limits,
 completion notices, child steering, cancellation policy, and all/any/timeout
 wait dependencies are implemented.
-Children have fresh sessions and isolated project workspaces. Waiting parents
+Children have fresh sessions and select existing workspaces. Waiting parents
 release slots; recovery preserves known IDs/dependencies and pauses the parent
 until explicit resume, without replaying unknown effects.
 

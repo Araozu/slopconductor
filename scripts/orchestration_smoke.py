@@ -2,6 +2,7 @@
 import http.server
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 import time
@@ -53,8 +54,8 @@ class OrchestrationFixture:
                         name = "bash"
                         arguments = {"command": "printf 'started\\n' >> attempt-log.txt" + ("; sleep 3" if attempt == 1 else "")}
                     else:
-                        name = "edit"
-                        arguments = {"path": "file.txt", "oldText": "before", "newText": f"{prompt}/{payload['model']}/{cap}"}
+                        name = "write"
+                        arguments = {"path": "file.txt", "content": f"{prompt}/{payload['model']}/{cap}"}
                     delta = {"tool_calls": [{"index": 0, "id": f"fixture-call-{len(fixture.calls)}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
                     finish = "tool_calls"
                 else:
@@ -105,7 +106,6 @@ def check_orchestration(daemon_binary, cli_binary, root):
         (repo / "file.txt").write_text("before\n", encoding="utf-8")
         git("add", ".")
         git("commit", "-m", "base")
-        base = git("rev-parse", "HEAD")
         data = root / "data"
         daemon, endpoint, log = start_daemon(daemon_binary, root / "first", data, env)
         token_path = data / "credentials/local-api-token"
@@ -130,39 +130,59 @@ def check_orchestration(daemon_binary, cli_binary, root):
 
         assert request(endpoint, None, path="/v1/tasks")[0] == 401
         assert request(endpoint, None, "POST", {"name": "bad"}, "/v1/batches/preview")[0] == 401
-        project = cli("project", "register", str(repo), "--command-id", "matrix-project")
-        spec = {"name": "eight jobs", "prompts": ["alpha", "beta"], "models": ["opencode-go/glm-5.3-flash", "opencode-go/glm-5.3"], "settings": [{"max_output_tokens": 17}, {"max_output_tokens": 18}], "project": {"project_id": project["id"], "base_ref": "HEAD", "allowed_tools": ["edit"]}, "max_concurrent_runs": 2}
+        workspace = cli("workspace", "open", str(repo), "--command-id", "matrix-workspace")
+        selection = {"workspace_id": workspace["id"], "allowed_tools": ["write"], "limits": None}
+        spec = {"name": "eight jobs", "prompts": ["alpha", "beta"], "models": ["opencode-go/glm-5.3-flash", "opencode-go/glm-5.3"], "settings": [{"max_output_tokens": 17}, {"max_output_tokens": 18}], "workspace": selection, "max_concurrent_runs": 2}
         source = root / "batch.json"
         source.write_text(json.dumps(spec), encoding="utf-8")
         frozen_path = root / "frozen.json"
         preview = cli("batch", "preview", str(source), "--output", str(frozen_path))
         assert [(c["prompt_index"], c["model_index"], c["settings_index"]) for c in preview["combinations"]] == [(p, m, s) for p in range(2) for m in range(2) for s in range(2)]
-        assert preview["spec"]["project"]["base_ref"] == base
+        assert preview["spec"]["workspace"]["workspace_id"] == selection["workspace_id"]
+        assert preview["spec"]["workspace"]["allowed_tools"] == selection["allowed_tools"]
         assert cli("task", "list")["items"] == []
-        assert api(f"/v1/projects/{project['id']}/workspaces")["items"] == []
         oversized = dict(spec, prompts=["too many"] * 65)
         api("/v1/batches/preview", oversized, status=429)
         api("/v1/batches/preview", dict(spec, settings=[{"reasoning_effort": "invented"}]), status=400)
-        api("/v1/batches/preview", dict(spec, project=dict(spec["project"], allowed_tools=["unsupported"])), status=400)
-        api("/v1/batches/preview", dict(spec, prompts=["within matrix cap"] * 9), status=429)
+        api("/v1/batches/preview", dict(spec, workspace=dict(selection, allowed_tools=["unsupported"])), status=400)
+        assert len(api("/v1/batches/preview", dict(spec, prompts=["within matrix cap"] * 9))["combinations"]) == 36
         default_preview = api("/v1/batches/preview", dict(spec, settings=[{}]))
         assert default_preview["spec"]["default_max_output_tokens"] == 4096
         assert all(c["spec"]["settings"]["max_output_tokens"] == 4096 for c in default_preview["combinations"])
-        # A preview's exact commit survives a later source HEAD change.
+
+        # Independent writable workspaces still admit concurrently. Batch
+        # members below share one workspace and are serialized by canonical root.
+        parallel_tasks = []
+        for label in ("a", "b"):
+            parallel_repo = root / f"parallel-{label}"
+            shutil.copytree(repo, parallel_repo)
+            parallel_workspace = cli("workspace", "open", str(parallel_repo),
+                                     "--command-id", f"parallel-open-{label}")
+            parallel_tasks.append(cli("task", "create", "--model", "opencode-go/glm-5.3-flash",
+                                      "--workspace-id", parallel_workspace["id"], "--tool", "write",
+                                      "--text", "alpha" if label == "a" else "beta",
+                                      "--command-id", f"parallel-task-{label}"))
+        for task in parallel_tasks:
+            wait_turn(endpoint, token, task["turn_id"], {"running"})
+        wait_for(lambda: len([c for c in fixture.calls if next(m["content"] for m in c["messages"] if m["role"] == "user") in {"alpha", "beta"}]) >= 2,
+                 "two independent workspace requests held concurrently")
+        fixture.release.set()
+        for task in parallel_tasks:
+            wait_turn(endpoint, token, task["turn_id"], {"completed"})
+        # Batch members keep the selected workspace even as the source HEAD changes.
         (repo / "later.txt").write_text("later", encoding="utf-8")
         git("add", ".")
         git("commit", "-m", "advance")
+        fixture.release.clear()
         accepted = cli("batch", "submit", str(frozen_path), "--command-id", "eight-jobs")
         assert len(accepted["members"]) == 8
         assert cli("batch", "submit", str(frozen_path), "--command-id", "eight-jobs") == accepted
         api("/v1/batches", {"command_id": "eight-jobs", "spec": dict(preview["spec"], name="changed")}, status=409)
         batch_id = accepted["batch_id"]
-        members = wait_for(lambda: (lambda items: items if sum(t["latest_run"]["turn"]["status"] == "running" for t in items) == 2 else None)(cli("batch", "members", batch_id)["items"]), "two admitted jobs")
-        workspaces = api(f"/v1/projects/{project['id']}/workspaces")["items"]
-        wait_for(lambda: sum(Path(w["path"]).is_dir() for w in workspaces) == 2, "lazy allocation of only two worktrees")
-        assert all(w["base_commit"] == base for w in workspaces)
-        assert len({w["path"] for w in workspaces}) == 8
-        assert sum(w["status"] == "reserved" for w in api(f"/v1/projects/{project['id']}/workspaces")["items"]) == 6
+        members = wait_for(lambda: (lambda items: items if any(t["latest_run"]["turn"]["status"] == "running" for t in items) else None)(cli("batch", "members", batch_id)["items"]), "one admitted writer for the shared workspace")
+        assert sum(t["latest_run"]["turn"]["status"] == "running" for t in members) == 1
+        assert {t["latest_run"]["workspace_id"] for t in members} == {workspace["id"]}
+        assert Path(workspace["path"]).is_dir()
         # Spare daemon capacity remains usable while this batch reaches its cap.
         independent = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--text", "independent", "--command-id", "independent")
         wait_turn(endpoint, token, independent["turn_id"], {"completed"})
@@ -176,12 +196,13 @@ def check_orchestration(daemon_binary, cli_binary, root):
         assert [t["combination_index"] for t in members] == list(range(8))
         assert cli("batch", "show", batch_id)["statuses"] == {"completed": 7, "failed": 1}
         successes = {t["id"]: t["latest_run"]["id"] for t in members if t["latest_run"]["turn"]["status"] == "completed"}
-        assert (repo / "file.txt").read_text(encoding="utf-8") == "before\n"
-        for task in members[1:]:
-            workspace = api(f"/v1/workspaces/{task['latest_run']['workspace_id']}")
-            expected = f"{task['spec']['prompt']}/{task['spec']['model'].split('/', 1)[1]}/{task['spec']['settings']['max_output_tokens']}"
-            assert (Path(workspace["path"]) / "file.txt").read_text(encoding="utf-8").strip() == expected
-            assert expected in cli("workspace", "diff", workspace["id"])["patch"]
+        final_content = (repo / "file.txt").read_text(encoding="utf-8").strip()
+        possible_contents = {
+            f"{task['spec']['prompt']}/{task['spec']['model'].split('/', 1)[1]}/{task['spec']['settings']['max_output_tokens']}"
+            for task in members
+        }
+        assert final_content in possible_contents
+        assert final_content in cli("workspace", "diff", workspace["id"])["patch"]
         retried = cli("batch", "retry", batch_id, "--index", "0", "--command-id", "retry-zero")
         assert len(retried["members"]) == 1
         assert cli("batch", "retry", batch_id, "--index", "0", "--command-id", "retry-zero") == retried
@@ -205,7 +226,7 @@ def check_orchestration(daemon_binary, cli_binary, root):
         exported = [json.loads(line) for line in export_path.read_text(encoding="utf-8").splitlines()]
         assert len(exported) == 8 and all(r["output"]["status"] == "completed" for r in exported)
         assert all(r["task"]["latest_run"]["turn"]["usage"]["total_tokens"] == 14 for r in exported)
-        assert all(r["task"]["spec"]["project"]["base_ref"] == base for r in exported)
+        assert all(r["task"]["spec"]["workspace"]["workspace_id"] == workspace["id"] for r in exported)
         # Real API/CLI controls and durable steering use the primary run turn.
         controlled = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--text", "control-held", "--command-id", "controlled-job")
         wait_turn(endpoint, token, controlled["turn_id"], {"running"})
@@ -228,7 +249,7 @@ def check_orchestration(daemon_binary, cli_binary, root):
         wait_turn(endpoint, token, cancelled["turn_id"], {"cancelled"})
         fixture.cancel_release.set()
         # Interrupt an actual shell tool after its first external write.
-        held = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--project", project["id"], "--base", base, "--tool", "bash", "--text", "restart-held", "--command-id", "restart-job")
+        held = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--workspace-id", workspace["id"], "--tool", "bash", "--text", "restart-held", "--command-id", "restart-job")
         held_task = cli("task", "show", held["task_id"])
         held_workspace = api(f"/v1/workspaces/{held_task['latest_run']['workspace_id']}")
         old_path = Path(held_workspace["path"])

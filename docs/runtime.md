@@ -18,7 +18,7 @@ Responses API, with native ChatGPT subscription login or Platform API keys;
 see [Codex connection](codex-connection.md). All three clients share bounded
 wire decoders. Responses preserve terminal outcomes, optional usage/provenance,
 and requested/reported model IDs. The daemon composes all three providers with
-a bounded turn supervisor, durable repository port, session/workspace
+a bounded turn supervisor, durable workspace port, canonical-root writer
 serialization, visible checkpoints, and cancellation. All three providers support
 the bounded file/shell tool loop. Provider clients are selected
 per turn and snapshotted at admission. See [text chat](text-chat.md) and
@@ -173,9 +173,9 @@ PATH. The four tools are native Rust implementations with the existing workspace
 policy, durable invocation records, and artifact storage; no pi/JS runtime is
 used. See [structured execution](structured-execution.md) for schemas and limits.
 
-The native [Git workspace service](projects-workspaces.md) implements repository
-inspection, frozen-base resolution, supervised detached worktree allocation,
-diff/status, and conservative cleanup. These are daemon application operations;
+The native [workspace service](workspaces.md) opens existing canonical
+directories in place and supports explicit supervised Git worktree creation,
+frozen-base diff/status, and conservative cleanup. These are daemon application operations;
 the coding-tool set stays at four. Dedicated model Git tools, merging, publishing,
 and richer result artifacts remain proposed.
 
@@ -214,7 +214,7 @@ block an invisible client-side prompt.
 ## Admission, child tasks, and fairness
 
 Use daemon-level limits for admitted runs, provider requests, tools, and browser
-contexts. Add per-project writer limits and per-account provider limits. A batch
+contexts. Add per-workspace-root writer limits and per-account provider limits. A batch
 cannot consume every slot indefinitely; fairness operates across batches and
 interactive tasks.
 

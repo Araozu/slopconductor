@@ -9,12 +9,15 @@ async fn default_workspace_can_pass_old_step_and_message_limits_with_a_queued_fo
     let store = open_test(&data, None).await;
     let client = store.client();
     let mut request = create_request("long-create", None);
-    request.execution = Some(
+    request.workspace = super::tests::select_workspace(
+        &client,
+        "long",
         serde_json::from_value(serde_json::json!({
             "root":workspace.path().to_string_lossy(),"allowed_tools":["read"]
         }))
         .unwrap(),
-    );
+    )
+    .await;
     let session = client.create_session(request).await.unwrap().session_id;
     let first = client
         .send_message(
@@ -129,6 +132,7 @@ async fn schema_thirteen_message_order_upgrade_preserves_frontiers_and_queued_us
     let original = client.messages(&session, None, 200).await.unwrap().items;
     store.shutdown().await.unwrap();
     let db = Connection::open(data.path().join(DATABASE_FILE)).unwrap();
+    workspaces::legacy_fixture(&db).unwrap();
     let tx = db.unchecked_transaction().unwrap();
     tx.execute_batch(&format!("UPDATE messages SET ordinal=-(ordinal/{MESSAGE_ORDER_STRIDE}*1024+ordinal%{MESSAGE_ORDER_STRIDE}); UPDATE messages SET ordinal=-ordinal; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=13;")).unwrap();
     tx.execute("INSERT INTO model_requests(id,turn_id,message_id,ordinal,requested_model,requested_settings,settings,status,context) VALUES('migration-summary',?1,?2,1,'opencode-go/glm-5.3-flash','{}','{}','completed','{\"compaction\":true}')",

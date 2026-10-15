@@ -60,6 +60,8 @@ class CodexFixture:
                 status = "completed"
 
                 def call(name, args, index=0):
+                    if name == "child_create":
+                        args["spec"].setdefault("workspace", {"workspace_id": "default", "allowed_tools": []})
                     return {"type": "function_call", "status": "completed", "call_id": f"{prompt}-{index}",
                             "name": name, "arguments": json.dumps(args)}
 
@@ -328,10 +330,17 @@ def check_codex(daemon_binary, cli_binary, root):
         run(["git", "-C", str(repo), "init"], env=env)
         run(["git", "-C", str(repo), "add", "file.txt"], env=env)
         run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "base"], env=env)
-        project = json.loads(cli("project", "register", str(repo), "--command-id", "codex-project"))
+        project = json.loads(cli("workspace", "open", str(repo), "--command-id", "codex-project"))
+        created = json.loads(cli("workspace", "worktree", project["id"], "--command-id", "codex-tree"))
+        for _ in range(200):
+            created = api(f"/v1/workspaces/{created['id']}")
+            if created["status"] == "ready":
+                break
+            time.sleep(0.03)
+        assert created["status"] == "ready", created
         managed = api("/v1/tasks", {"command_id": "codex-managed-task", "spec": {
             "prompt": "workflow", "model": "codex/gpt-6.1-sol",
-            "project": {"project_id": project["id"], "allowed_tools": ["read", "write", "edit", "bash"]},
+            "workspace": {"workspace_id": created["id"], "allowed_tools": ["read", "write", "edit", "bash"]},
         }}, 202)
         wait_turn(endpoint, token, managed["turn_id"], {"completed"})
         managed_run = api(f"/v1/runs/{managed['run_id']}")

@@ -67,6 +67,12 @@ pub(super) fn legacy_fixture(c: &Connection, version: i64) -> StoreResult<()> {
         let tx = c
             .unchecked_transaction()
             .map_err(|_| StoreError::Database)?;
+        // Reconstruct the pre-unification fixture; production migrations only go forward.
+        workspaces::migrate_legacy(&tx)?;
+        tx.execute_batch("INSERT INTO projects(id,owner_node_id,path,git_common_dir)
+            SELECT id,owner_node_id,path,COALESCE(git_common_dir,'folder:'||path) FROM workspaces WHERE is_default=0 AND managed_worktree=0;
+            ALTER TABLE sessions DROP COLUMN workspace_id;
+            DROP TABLE workspace_events; DROP TABLE workspaces;").map_err(|_|StoreError::Database)?;
         tx.execute_batch("DROP INDEX messages_request;
             ALTER TABLE messages DROP COLUMN deleted;
             ALTER TABLE messages DROP COLUMN context_excluded;

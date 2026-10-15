@@ -60,10 +60,11 @@ results, and a way to retry individual failures without rerunning successes.
 
 ### Parallel work in one repository
 
-Several tasks target the same project. Each writable coding task gets its own
-worktree and branch or an explicit exclusive workspace reservation. The user can
-inspect diffs and test results per task. The daemon records which base commit and
-workspace produced each result.
+Several writable tasks may target one workspace, where their writes serialize.
+For independent concurrent edits, the user explicitly creates Git worktrees and
+selects a different workspace for each task. The user can inspect diffs and test
+results per task. The daemon records the selected workspace and, for worktrees,
+the frozen base commit.
 
 Success means separate edits, clear provenance, and deliberate merging or cleanup.
 Creating a worktree alone does not isolate ports, databases, external services,
@@ -72,7 +73,7 @@ or subprocess privileges.
 ### An agent starts another session
 
 An agent invokes a native orchestration tool to create a child task, selecting
-its model, target, workspace mode, allowed tools, initial context, and budget.
+its model, target, existing workspace, allowed tools, initial context, and budget.
 The child is admitted through the same scheduler used by human clients and
 scripts. The parent can await a result, receive an artifact, or continue with
 other work.
@@ -96,8 +97,8 @@ checkpoint design now without blocking the first useful CLI release.
 | --- | --- |
 | Physical machine | A device such as the home PC; useful for display/grouping |
 | Node / execution environment | One daemon installation and its OS-local data directory |
-| Project | A registered repository or directory, with logical identity and local mappings |
-| Workspace | The concrete directory, worktree, or other environment used by a run |
+| Workspace | A registered canonical directory selected by sessions, tasks, and child agents |
+| Managed worktree | A Git worktree explicitly created as its own workspace, with source and base provenance |
 | Conversation / session | One persistent work item with messages, context, workspace, policy, budgets, and an owner |
 | Turn | One queued or active execution within a conversation; it can contain multiple model requests and tool calls |
 | Batch | A named collection of tasks with recorded parameter combinations |

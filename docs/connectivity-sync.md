@@ -81,7 +81,7 @@ Begin with selective owner-authored events, session snapshots, and referenced
 artifacts. Each replica stores per-session sequence cursors and source ownership
 metadata. Transfers are authenticated, bounded, idempotent, and resumable.
 
-Replicate only selected data. Credentials, arbitrary project contents, ignored
+Replicate only selected data. Credentials, arbitrary workspace contents, ignored
 files, and entire workspaces are separate categories with explicit rules. Event
 mirroring must not accidentally upload an entire repository.
 
@@ -96,7 +96,7 @@ and storage quotas.
 
 ## Dual boot
 
-Each OS install has its own node ID, credentials, project mappings, and data
+Each OS install has its own node ID, credentials, workspace mappings, and data
 directory. Group them under a physical-machine label for display. Only the booted
 OS environment is normally available on that device.
 

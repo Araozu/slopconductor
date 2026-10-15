@@ -32,8 +32,8 @@ pub use error_response::ErrorResponse;
 pub mod chat;
 pub mod execution;
 pub mod orchestration;
-pub mod projects;
 pub mod providers;
+pub mod workspaces;
 
 pub mod filesystem;
 pub mod peers;

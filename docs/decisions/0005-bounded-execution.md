@@ -10,8 +10,9 @@ affects several active sessions.
 
 ## Decision proposal
 
-Admit active work through daemon/project/account resource limits. Create
-contexts and worktrees lazily. Persist accepted commands, execution steps, known
+Admit active work through daemon/workspace-root/account resource limits. Create
+contexts lazily; create Git worktrees only through an explicit workspace
+operation. Persist accepted commands, execution steps, known
 outcomes, and semantic events; paginate history and use artifacts for large data.
 
 Record external tool intent before execution and its outcome afterward. Unknown

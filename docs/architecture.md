@@ -57,11 +57,14 @@ children after restart without replaying unknown operations. One-level authority
 completion inboxes, attached finalization, and optional detachment are enforced
 at the same SQLite boundary; completion context enters only at safe execution
 boundaries through the shared fair scheduler.
-Registered [projects and managed workspaces](projects-workspaces.md) now add
-frozen repository commits, lazy detached worktree allocation after admission,
-separate diffs, explicit cleanup, and no-replay Git recovery. Each conversation owns its workspace and all of its turns. Follow-ups and retries
-retain that conversation and workspace. Batch and child metadata live on the same
-conversation record; there are no separate task or run entities.
+The [workspace registry](workspaces.md) records canonical directories independently
+of conversations. A session selects an existing workspace ID; explicit worktree
+creation freezes a Git base and returns a workspace record. Sessions, tasks,
+batches, children, retries, and history forks never create worktrees implicitly.
+Multiple sessions may select one workspace, and writers serialize by canonical
+root. Session responses retain the effective execution policy. Batch and child
+metadata live on the same conversation record; there are no separate task or run
+entities.
 
 The daemon also owns [runtime provider credential configuration](provider-credentials.md):
 private XDG records, API-key replacement, and a bounded ChatGPT login listener.
@@ -128,7 +131,7 @@ stale preconditions where necessary.
 ## Runtime service composition
 
 A daemon-wide Tokio runtime supplies asynchronous execution. Shared resources
-include provider connection pools, admission controls, project registries, tool
+include provider connection pools, admission controls, workspace registries, tool
 implementations, and cache services. Per-session state is deliberately bounded.
 
 Use an execution supervisor for each admitted run, a bounded inbox for its
@@ -162,9 +165,10 @@ Windows uses local application data. Startup also reconciles in-flight text
 turns and model requests as interrupted, and pairs unfinished tools with failure
 results without replaying effects; queued, undispatched turns remain eligible
 for admission.
-Unfinished Git allocation/removal becomes a failed workspace with unknown
-effects; it is never replayed. Ready workspaces are validated on admission.
-Startup does not scan registered projects or implicitly resume recorded commands.
+Unfinished explicit Git worktree creation/removal becomes a failed workspace with
+unknown effects; it is never replayed. Selected workspaces are validated on
+admission. Startup does not scan workspace directories or implicitly resume
+recorded commands.
 
 Shutdown handles Ctrl-C and Unix SIGTERM, stops HTTP admissions, and drains the
 database worker under a configured deadline. Chat inference is stopped before

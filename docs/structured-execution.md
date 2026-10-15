@@ -178,13 +178,14 @@ quota/authentication failures are not retried. Uncertain retry usage stays unkno
 
 ## Workspace authority and tools
 
-Creating a tool-enabled session requires an explicit execution policy with an
-absolute workspace root on the daemon's machine and a nonempty tool allowlist.
-The root is canonicalized before acceptance. Only one admitted turn can use
-that same canonical root across sessions. This lease does not cover nested
-roots, external editors/processes, or a second daemon with another data directory.
-[Managed projects/workspaces](projects-workspaces.md) now reserve separate
-detached worktrees with frozen bases and lazy allocation after turn admission.
+Every session selects a registered workspace, including plain text sessions
+that use the built-in `default` selection with no tools. A tool-enabled session
+requires a nonempty tool allowlist. The daemon resolves and validates the
+canonical root before acceptance. Multiple sessions may select the same workspace; their
+writers serialize by canonical root. This lease does not cover nested roots,
+external editors/processes, or a second daemon with another data directory.
+See [workspaces](workspaces.md) for opening directories and explicitly creating
+Git worktrees.
 
 | Tool | Behavior |
 | --- | --- |
@@ -330,9 +331,9 @@ These are bounds, not a
 memory/performance benchmark.
 
 ```sh
-slop chat --workspace /absolute/project --prompt "Inspect this project."
-slop chat --workspace /absolute/project --tool read --prompt "Review this project without changing files."
-slop chat --workspace /absolute/project --tool read --tool edit --tool bash --prompt "Fix the failing test."
+slop chat --workspace /absolute/repository --prompt "Inspect this repository."
+slop chat --workspace-id WORKSPACE_ID --tool read --prompt "Review this repository without changing files."
+slop chat --workspace-id WORKSPACE_ID --tool read --tool edit --tool bash --prompt "Fix the failing test."
 slop chat --session SESSION_ID --model opencode-go/glm-5.3 --max-output-tokens 512 --prompt "Review this."
 slop chat --full-context --prompt "Work with the model's full context window."
 slop session send SESSION_ID --full-context=false --text "Use the cost cap for this turn."
@@ -342,10 +343,14 @@ slop turn tools TURN_ID
 slop artifact download ARTIFACT_ID --output output.json
 ```
 
-`--workspace` alone enables all four tools: `read`, `write`, `edit`, and `bash`.
-Specifying `--tool` sets the exact allowlist; use `--tool read` for read-only file
-access. Chats without `--workspace` keep plain text behavior. Workspace
-policy is chosen at session creation. `--model`/settings on a new chat set its
+`--workspace PATH` opens the existing directory before creating the session;
+`--workspace-id` selects an already registered workspace. Either selection alone
+enables all four tools: `read`, `write`, `edit`, and `bash`. With no directory
+selection, the session uses the built-in `default` workspace with no tools;
+`--no-workspace` makes that choice explicit. Specifying `--tool`
+sets the exact allowlist; use `--tool read` for read-only file access. Chats
+without a workspace selection keep plain text behavior. Workspace policy is
+chosen at session creation. `--model`/settings on a new chat set its
 defaults; on a resumed chat they override the next turn. JSON following includes
 canonical message/tool snapshots, deltas, receipts, and terminal records.
 Closing the CLI detaches; `slop turn cancel TURN_ID` explicitly cancels execution.

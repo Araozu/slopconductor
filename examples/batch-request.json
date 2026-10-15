@@ -1,8 +1,8 @@
 {
   "name": "prompt-model-sweep",
   "prompts": [
-    "Improve error handling in the selected project and document your changes.",
-    "Inspect failure paths in the selected project, improve them, and verify your changes."
+    "Improve error handling in the selected workspace and document your changes.",
+    "Inspect failure paths in the selected workspace, improve them, and verify your changes."
   ],
   "models": [
     "opencode-go/glm-5.3-flash",
@@ -12,9 +12,8 @@
     { "max_output_tokens": 1024 },
     { "max_output_tokens": 2048 }
   ],
-  "project": {
-    "project_id": "replace-with-project-id",
-    "base_ref": "HEAD",
+  "workspace": {
+    "workspace_id": "replace-with-workspace-id",
     "allowed_tools": ["read", "write", "edit", "bash"]
   },
   "max_concurrent_runs": 2

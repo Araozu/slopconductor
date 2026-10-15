@@ -163,6 +163,7 @@ async fn schema_nine_upgrade_preserves_conversations_history_and_receipts() {
         .unwrap();
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    workspaces::legacy_fixture(&connection).unwrap();
     connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE sessions DROP COLUMN inbox; DROP TABLE conversation_drafts; DROP TABLE session_context; ALTER TABLE model_requests DROP COLUMN context; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=9;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
@@ -287,6 +288,7 @@ fn schema_two_migration_preserves_history_settings_and_command_payloads() {
     let connection = Connection::open_in_memory().unwrap();
     let tx = connection.unchecked_transaction().unwrap();
     create_chat_schema(&tx).unwrap();
+    tx.execute_batch("CREATE TABLE node_identity(singleton INTEGER PRIMARY KEY,node_id TEXT,name TEXT,os TEXT); INSERT INTO node_identity VALUES(1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','legacy','linux');").unwrap();
     tx.execute("INSERT INTO sessions(id,owner_node_id,provider,model,max_tokens,created_order) VALUES('session','node','opencode-go','glm-5.3-flash',1024,1)",[]).unwrap();
     tx.execute(
         "INSERT INTO commands VALUES('command','scope','{\"text\":\"old payload\"}','{}')",
@@ -365,10 +367,10 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
         max_model_requests: 4,
     };
     let mut first = create_request("lease-first", None);
-    first.execution = Some(policy.clone());
+    first.workspace = select_workspace(&client, "first", policy.clone()).await;
     let first = client.create_session(first).await.unwrap();
     let mut second = create_request("lease-second", None);
-    second.execution = Some(policy);
+    second.workspace = select_workspace(&client, "second", policy).await;
     let second = client.create_session(second).await.unwrap();
     let sent = client
         .send_message(
@@ -640,14 +642,19 @@ async fn pause_resume_is_durable_and_keeps_the_workspace_request_cap() {
     let store = open_test(&dir, None).await;
     let client = store.client();
     let mut request = create_request("pause-create", None);
-    request.execution = Some(WorkspacePolicy {
-        root: workspace.path().to_string_lossy().into_owned(),
-        allowed_tools: vec!["read".into()],
-        shell_timeout_ms: 1000,
-        max_output_bytes: 1024,
-        max_tool_calls: 4,
-        max_model_requests: 2,
-    });
+    request.workspace = select_workspace(
+        &client,
+        "pause",
+        WorkspacePolicy {
+            root: workspace.path().to_string_lossy().into_owned(),
+            allowed_tools: vec!["read".into()],
+            shell_timeout_ms: 1000,
+            max_output_bytes: 1024,
+            max_tool_calls: 4,
+            max_model_requests: 2,
+        },
+    )
+    .await;
     let created = client.create_session(request).await.unwrap();
     let receipt = client
         .send_message(
@@ -1009,6 +1016,7 @@ async fn restart_pairs_unfinished_tools_without_replaying_completed_effects() {
     client.start_tool(&turn, &intents[1]).await.unwrap();
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    workspaces::legacy_fixture(&connection).unwrap();
     connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap();
     drop(connection);
     let store = open_test(&dir, None).await;
@@ -1498,6 +1506,7 @@ async fn completed_request_usage_is_durable_before_the_turn_finishes() {
     assert_eq!(client.message(&reply.id).await.unwrap(), reply);
     store.shutdown().await.unwrap();
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    workspaces::legacy_fixture(&connection).unwrap();
     connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
@@ -1619,6 +1628,7 @@ async fn messages_keep_turn_models_across_provider_switches_and_migration() {
     // Exercise the previous schema's backfill using each turn's frozen model,
     // including resolved aliases and turns that override the session provider.
     let connection = Connection::open(dir.path().join(DATABASE_FILE)).unwrap();
+    workspaces::legacy_fixture(&connection).unwrap();
     connection.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap();
     drop(connection);
     let reopened = open_test(&dir, None).await;
@@ -2695,4 +2705,28 @@ where
     F: FnOnce(&Transaction<'_>) -> StoreResult<()>,
 {
     super::migrate_with_hook(connection, existing_version, node_name, hook)
+}
+
+pub(super) async fn select_workspace(
+    client: &StoreClient,
+    command: &str,
+    policy: slop_protocol::execution::WorkspacePolicy,
+) -> slop_protocol::workspaces::WorkspaceSelection {
+    let workspace = client
+        .open_workspace(slop_protocol::workspaces::OpenWorkspaceRequest {
+            command_id: format!("{command}-workspace"),
+            path: policy.root,
+        })
+        .await
+        .unwrap();
+    slop_protocol::workspaces::WorkspaceSelection {
+        workspace_id: workspace.id,
+        allowed_tools: policy.allowed_tools,
+        limits: Some(slop_protocol::workspaces::WorkspaceToolLimits {
+            shell_timeout_ms: policy.shell_timeout_ms,
+            max_output_bytes: policy.max_output_bytes,
+            max_tool_calls: policy.max_tool_calls,
+            max_model_requests: policy.max_model_requests,
+        }),
+    }
 }

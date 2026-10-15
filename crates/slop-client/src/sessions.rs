@@ -66,12 +66,7 @@ impl DaemonClient {
         &self,
         request: &CreateSessionRequest,
     ) -> Result<CommandReceipt, ClientError> {
-        if request.execution.is_some() {
-            self.require_feature("tools").await?;
-        }
-        if request.project.is_some() {
-            self.require_feature("managed-workspaces").await?;
-        }
+        self.require_feature("unified-workspaces").await?;
         if request.settings.is_some() {
             self.require_feature("per-turn-settings").await?;
         }

@@ -14,8 +14,8 @@ ID. Session and task operations return the same `SessionResponse`; there is no
 separate task response type or persisted task/run record.
 
 `POST /v1/sessions` accepts an optional initial `prompt`, `budget`, and
-`orchestration` policy alongside the existing model, workspace, and project
-settings. When a prompt is supplied, creation and initial message acceptance are
+`orchestration` policy alongside the existing model and workspace settings.
+When a prompt is supplied, creation and initial message acceptance are
 atomic. The task convenience API creates this same conversation. Every creation
 path supports subsequent messages and the same execution controls.
 
@@ -26,14 +26,18 @@ active turn's frozen settings. If there is no active turn, the message starts a
 new turn. Turn context includes prior completed work and excludes later queued
 messages. A turn may contain multiple model requests and coding-tool calls.
 
-Project selection reserves a worktree once for the conversation, freezes its
-base, and allocates it after admission. Follow-ups and retries use that workspace.
-Independent conversations, including batch members and children, still get their
-own project workspaces. Closing a client leaves accepted work running.
+Sessions and tasks always select a workspace by ID. Directory-less work uses
+the built-in `default` workspace. Selection never
+creates a directory or worktree. Batch members and children use only the
+workspace explicitly selected by their spec/request; retries and history forks
+retain the existing session workspace. Multiple conversations may select one
+workspace, and their writers serialize by canonical root. Create a separate
+worktree explicitly when independent writable state is needed. Closing a client
+leaves accepted work running.
 
 ```sh
 slop task create --model opencode-go/glm-5.3-flash \
-  --project PROJECT_ID --base main --text "Fix the failing test." \
+  --workspace-id WORKSPACE_ID --text "Fix the failing test." \
   --command-id fix-test
 slop task show TASK_ID
 slop task follow TASK_ID
@@ -109,7 +113,7 @@ operations rather than tokens or billing totals. A delegation policy requires
 an explicit finite budget; see [child tasks](child-tasks.md).
 
 ```sh
-slop task create --model opencode-go/glm-5.3-flash --project PROJECT_ID \
+slop task create --model opencode-go/glm-5.3-flash --workspace-id WORKSPACE_ID \
   --text "Fix the failing test." --max-model-requests 16 --max-tool-calls 32 \
   --command-id bounded-job
 slop batch cancel BATCH_ID --command-id cancel-sweep
@@ -137,9 +141,8 @@ changing dimension. Duplicate input values retain distinct indexes.
   "prompts": ["Improve error handling.", "Inspect and fix failure paths."],
   "models": ["opencode-go/glm-5.3-flash", "opencode-go/glm-5.3"],
   "settings": [{"max_output_tokens": 1024}, {"max_output_tokens": 2048}],
-  "project": {
-    "project_id": "PROJECT_ID",
-    "base_ref": "HEAD",
+  "workspace": {
+    "workspace_id": "WORKSPACE_ID",
     "allowed_tools": ["read", "write", "edit", "bash"]
   },
   "max_concurrent_runs": 2
@@ -157,26 +160,28 @@ slop batch retry BATCH_ID --index 3 --index 6 --command-id retry-selected
 ```
 
 Preview validates every model/settings/tool combination, checks cardinality and
-current workspace capacity, and resolves the base to an exact commit without
-creating jobs, worktrees, or model requests. The optional output file saves the
-returned spec, including its exact commit and `default_max_output_tokens` for
-uncapped API-key cells. Missing output caps on subscription cells remain uncapped.
+the selected workspace without creating jobs, worktrees, directories, or model
+requests. The optional output file saves the returned spec and
+`default_max_output_tokens` for uncapped API-key cells. Missing output caps on
+subscription cells remain uncapped.
 Effective cell settings are also shown in the preview. Saved preview/export
 files require a new destination and never overwrite an existing file.
 
 Submit can accept an original spec directly, resolving inputs at acceptance, or
-the saved preview spec to preserve its base/defaults. Capabilities and capacity
+the saved preview spec to preserve its defaults. Capabilities and capacity
 are checked again: provider authorization and available space can change after
 preview. Invalid or oversized submissions create no partial batch. Member tasks,
 their initial runs/sessions/prompts, workspace metadata, and the batch receipt
-commit together. Queued members hold metadata on disk; admission loads context
-and allocates worktrees lazily.
+commit together. Queued members hold metadata on disk; admission loads context.
+Every member selects the same required existing workspace from the batch spec;
+use `default` for directory-less work. No member creates a worktree implicitly.
 
 Batch status counts describe each member's latest attempt. A selective retry
 requires distinct explicit zero-based indexes and validates the entire selection
 before committing any new attempts. Selecting a successful or active member
-rejects the whole command. Successful members retain their IDs, outputs, and
-workspaces. Per-task attempt history includes previous failures.
+rejects the whole command. Successful members retain their IDs and outputs.
+Per-task attempt history includes previous failures; retries use the workspace
+selected by that member's conversation.
 
 Results preserve combination index, requested/effective inputs, attempt and
 session IDs, workspace ID, status/errors, usage, request/tool IDs, and the latest
@@ -233,16 +238,19 @@ advertises `orchestration-controls`; the SDK checks it before budgeted submissio
 and batch cancellation.
 
 There are at most 1,024 active job attempts, with the existing 1,024 queued-turn
-limit also enforced. Managed workspaces retain their 256-global/32-per-project
-limits; old attempt reservations count until explicitly removed. A project
-matrix can therefore have fewer than 256 members. Request bodies are bounded at
+limit also enforced. Workspace registry and writer limits apply to canonical
+workspace roots; batch size is not a workspace count because members never
+create workspaces. Request bodies are bounded at
 2 MiB, preview JSON at 8 MiB, and query pages target 4 MiB with bounded individual
 records. Prompt, context, tool, Git, and subprocess limits remain unchanged.
 
-Offline validation covers an eight-cell matrix with two models and two settings,
-isolated diffs, lazy allocation, spare-capacity admission, selective retry/export,
-command deduplication, pause/resume/steering, transactional fault injection,
-schema-five upgrade, and interruption of a real shell side effect without replay.
+The 2026-10-10 offline validation report covers an eight-cell matrix with two
+models and two settings, isolated diffs and lazy worktree allocation under the
+prior session-owned workspace design, spare-capacity admission, selective
+retry/export, command deduplication, pause/resume/steering, transactional fault
+injection, schema-five upgrade, and interruption of a real shell side effect
+without replay. Its worktree assertions are historical and do not validate the
+unified workspace contract described in [workspaces](workspaces.md).
 Additional checks cover persistent admission rotation, returning groups,
 aggregate reservation across retries/restart, budget denial before filesystem
 dispatch, atomic batch cancellation, and [native delegation](child-tasks.md).

@@ -20,7 +20,7 @@ The implemented commands are `status`, `node`, `models`, `capabilities`, `artifa
 (show/download), `provider`
 (status/set-key/login/login-status), `chat`, `session`
 (list/show/history/send/follow), `turn` (show/requests/tools/cancel/pause/resume),
-`project` (register/list/show/workspaces/events), `workspace` (show/diff/remove),
+`workspace` (open/create/list/show/worktree/diff/events/rename/remove),
 `task` (create/show/list/runs/events/send/follow), `run`
 (show/pause/resume/cancel/retry/children/create-child/wait/result), and `batch`
 (preview/submit/show/members/results/export/retry/cancel), optionally with
@@ -50,6 +50,14 @@ Closing a client or pressing Ctrl-C while following detaches without canceling.
 `turn cancel` is explicit. Interactive `/exit` exits; `/cancel TURN_ID` submits
 the same cancellation command.
 
+Every conversation selects a workspace. `chat --workspace PATH` opens an existing
+directory immediately before session creation; clients can defer opening a path
+until a conversation actually starts, or reuse a previously returned ID with
+`chat --workspace-id ID`. Without either option, chat uses the built-in `default` workspace
+(`No workspace`) with no coding tools. `--no-workspace` makes that choice
+explicit. Task creation has the same default and accepts `--workspace-id` or
+`--no-workspace`.
+
 [Provider credential commands](provider-credentials.md) forward bounded secret
 input through the API to daemon-owned XDG storage. The daemon owns browser login
 and persistence independently of CLI lifetime. Status separates configured
@@ -69,7 +77,7 @@ The command groups and remaining extensions are:
 | Group | Examples of responsibilities |
 | --- | --- |
 | node / peer | Inspect owner identity, register endpoints, select a target |
-| project / workspace | Register repositories, inspect and allocate worktrees |
+| workspace | Open or create directories, explicitly create worktrees, inspect diffs and lifecycle |
 | session | Create/list/show conversations, read messages, send steering |
 | task / run | Create work, inspect attempts, pause/resume/cancel/retry |
 | batch | Validate a matrix, submit it, inspect/export results |
@@ -92,8 +100,8 @@ These job and matrix operations are also implemented; see
 [tasks and batches](tasks-batches.md):
 
 ```sh
-slop project register /absolute/repo
-slop task create --project PROJECT_ID --model opencode-go/glm-5.3-flash --prompt-file task.md
+slop workspace open /absolute/repo
+slop task create --workspace-id WORKSPACE_ID --model opencode-go/glm-5.3-flash --prompt-file task.md
 slop task follow TASK_ID
 slop batch preview examples/batch-request.json --output frozen-batch.json --json
 slop batch submit frozen-batch.json --json

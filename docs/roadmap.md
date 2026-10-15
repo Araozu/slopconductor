@@ -12,7 +12,7 @@ migration are deliberately later tracks.
 
 ## Recommended next delivery order
 
-**Status, 2026-10-14.** Local sessions, project worktrees, durable tasks/run
+**Status, 2026-10-15.** Local sessions, unified workspaces, durable tasks/run
 attempts, and three-axis matrices are implemented. Steps 1 and 2 now have local
 implementations and offline validation. The current local M3 slice is
 [daemon-to-daemon inspection/control](daemon-peering.md). Platform/capacity
@@ -36,9 +36,9 @@ apply. Starting the M3 slice does not declare M1/M2 complete.
    create/discover/inspect/send/wait/result/cancel operations use the same
    application services as public clients. Creation commits parent/run links
    and its native tool result atomically. Context/artifact previews, provider
-   model choice, frozen project bases, finite budgets, one-level authority,
+   model choice, explicit workspace selection, finite budgets, one-level authority,
    outstanding/concurrent limits, completion inboxes, and cancel/detach policy
-   are explicit. Fresh child sessions/workspaces share the applicable limits.
+   are explicit. Children select existing workspaces and share applicable limits.
    Waiting parents release execution slots; restart preserves dependencies and
    pauses the parent until explicit resume. See [child tasks](child-tasks.md).
 
@@ -110,9 +110,11 @@ structured streaming, frozen per-turn model/settings, and no-replay recovery.
 Durable task/run lifecycle and matrix submission are now implemented; see
 [tasks and batches](tasks-batches.md). [Native offline validation](native-validation.md)
 passes on Linux and Windows.
-The first M2 project/workspace slice is now implemented: registered repositories,
-frozen bases, lazy detached worktree admission, separate diffs, explicit cleanup,
-and no-replay Git recovery. See [projects/workspaces](projects-workspaces.md).
+The workspace contract was redesigned on 2026-10-15: canonical directories are
+registered independently of sessions, and Git worktrees are created explicitly
+as new workspaces. Sessions, retries, forks, batches, and children do not create
+worktrees. See [workspaces](workspaces.md). Offline validation written for the
+prior project/lazy-allocation behavior remains historical evidence only.
 
 ## M1 — Useful local native coding agent through the CLI
 
@@ -157,14 +159,16 @@ model is observable. No graphical client is required.
 
 **Goal:** a script reliably starts many differentiated coding jobs.
 
-Register projects and implement managed worktree allocation, frozen base commits,
-workspace reservations, diffs, artifacts, and deliberate cleanup. Add matrix
+Register canonical directories in place and implement explicit managed worktree
+creation with frozen base commits, workspace selection, diffs, artifacts, and deliberate cleanup. Add matrix
 preflight/validation, deterministic expansion, admission limits, batch metadata,
 selective retries, and result export.
 
-**Partial implementation:** sessions can select registered projects and reserve
-detached workspaces. Real-binary offline checks exercise concurrent independent
-edits, frozen commits, diffs, cleanup refusals, and restart durability. Durable tasks/runs and deterministic
+**Partial implementation:** sessions select existing workspace IDs. Explicit
+directory/repository and worktree creation return allocating workspace records
+that clients inspect until ready or failed. Restart does not replay unfinished
+filesystem or Git operations and records uncertain effects. Same-root writers serialize; separate workspaces support
+independent edits. Durable tasks/runs and deterministic
 prompt/model/settings matrices now cover
 preview, atomic submission, lazy admission, selective retries, and JSON Lines
 results. Native children now add selected context/artifact previews, one-level
@@ -187,10 +191,11 @@ API-key execution remains independently usable. See the
 
 Acceptance scenarios:
 
-1. Two writable jobs target one repo but produce independent worktree diffs.
+1. Two writable jobs selecting one workspace serialize; explicitly created
+   worktrees allow independent diffs when desired.
 2. A 2-prompt × 2-model × 2-setting batch yields eight reproducible combinations.
 3. A batch larger than admission capacity stays queued without creating every
-   full context or worktree in advance.
+   full context or implicitly creating worktrees.
 4. A parent creates/awaits a child; parent reconnect/recovery does not duplicate it.
 5. Full admission capacity of waiting parents cannot deadlock all children.
 6. Unsupported model settings and exhausted account limits produce explicit errors.

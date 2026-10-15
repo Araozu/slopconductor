@@ -4,14 +4,12 @@ use std::path::PathBuf;
 use super::*;
 
 #[test]
-fn managed_workspaces_require_an_unambiguous_target() {
+fn chat_workspace_selection_requires_an_unambiguous_target() {
     let args = Args::try_parse_from([
         "slop",
         "chat",
-        "--project",
-        "project-1",
-        "--base",
-        "main",
+        "--workspace-id",
+        "workspace-1",
         "--tool",
         "edit",
         "--prompt",
@@ -19,16 +17,26 @@ fn managed_workspaces_require_an_unambiguous_target() {
     ])
     .unwrap();
     assert!(
-        matches!(args.command, Command::Chat(ChatArgs { project: Some(project), base: Some(base), .. }) if project == "project-1" && base == "main")
+        matches!(args.command, Command::Chat(ChatArgs { workspace_id: Some(id), .. }) if id == "workspace-1")
     );
     for args in [
-        vec!["slop", "chat", "--project", "p", "--workspace", "/tmp"],
-        vec!["slop", "chat", "--project", "p", "--session", "s"],
-        vec!["slop", "chat", "--base", "main"],
+        vec!["slop", "chat", "--workspace-id", "p", "--workspace", "/tmp"],
+        vec!["slop", "chat", "--workspace-id", "p", "--no-workspace"],
+        vec!["slop", "chat", "--workspace-id", "p", "--session", "s"],
+        vec!["slop", "project", "register", "/tmp"],
         vec!["slop", "chat", "--tool", "edit"],
     ] {
         assert!(Args::try_parse_from(args).is_err());
     }
+    let args =
+        Args::try_parse_from(["slop", "chat", "--no-workspace", "--prompt", "text"]).unwrap();
+    assert!(matches!(
+        args.command,
+        Command::Chat(ChatArgs {
+            no_workspace: true,
+            ..
+        })
+    ));
 }
 
 #[test]

@@ -45,9 +45,10 @@ Implemented:
 - Daemon-owned coding tools limited to `read`, `write`, `edit`, and `bash`, with
   workspace policies, durable invocation/results, bounded output, artifacts,
   cancellation, and recovery without replay. See [structured execution](docs/structured-execution.md).
-- Registered projects and managed session worktrees with frozen base commits,
-  lazy allocation, independent diffs, explicit cleanup, and Git recovery without
-  replay. See [projects and workspaces](docs/projects-workspaces.md).
+- Unified workspaces that open existing canonical directories in place, plus
+  explicit Git worktree creation with frozen bases, diffs, conservative cleanup,
+  and recovery without replay. Sessions and orchestration select existing
+  workspaces. See [workspaces](docs/workspaces.md).
 - Persistent conversations and execution turns, with pause/resume/cancel, steering,
   fresh retries, and preserved prior workspaces/results.
 - Deterministic prompt/model/settings matrices with preview, atomic acceptance,
@@ -56,7 +57,7 @@ Implemented:
 - Persistent fair admission, aggregate task/tree/batch request and tool budgets,
   and durable batch cancellation.
 - Separately authorized native child creation, inspection, waits, results, and
-  cancellation with isolated workspaces and restart-safe links. See
+  cancellation with explicit workspace selection and restart-safe links. See
   [child tasks](docs/child-tasks.md).
 - Scoped daemon peering for inspecting and controlling existing sessions over
   Tailscale HTTPS, with explicit owner registration, read/control grants, and
@@ -92,8 +93,8 @@ cargo run -- --json status
 cargo run -- --json node
 cargo run -- models
 cargo run -- chat --prompt "Reply with a short greeting."
-cargo run -- chat --workspace /absolute/project --prompt "Fix the failing test."
-cargo run -- chat --workspace /absolute/project --tool read --prompt "Review the code."
+cargo run -- chat --workspace /absolute/repository --prompt "Fix the failing test."
+cargo run -- chat --workspace /absolute/repository --tool read --prompt "Review the code."
 cargo run -- chat --session SESSION_ID
 cargo run -- --json session history SESSION_ID
 cargo run -- turn cancel TURN_ID
@@ -140,7 +141,9 @@ restrict that set; `--tool read` permits only file reads. `read` uses 1-based li
 offsets, `write` creates or overwrites files, and `edit` makes exact text
 replacements. `bash` runs from the workspace root under the daemon's output and
 time limits. Windows tool use requires `bash.exe` on PATH (for example, Git for
-Windows); native builds do not require it.
+Windows); native builds do not require it. Chats without a workspace selection
+use the built-in `default` workspace, named “No workspace,” with no coding tools;
+pass `--no-workspace` to state that choice explicitly.
 
 Use `provider login codex` to authorize a ChatGPT subscription through the
 daemon, or configure a Codex Platform API key with `provider set-key codex`.
@@ -155,27 +158,28 @@ survives daemon restart. Interrupted thinking is discarded and in-flight turns
 are marked interrupted without automatically repeating the provider request.
 See [text chat](docs/text-chat.md) for API and recovery details.
 
-For isolated jobs in one repository, register it and use its returned project ID:
+Open a directory once, then select its returned workspace ID for sessions and jobs:
 
 ```sh
-cargo run -- project register /absolute/project
-cargo run -- chat --project PROJECT_ID --base main --prompt "Fix the failing test." --detach
-cargo run -- chat --project PROJECT_ID --base main --prompt "Improve error handling." --detach
-cargo run -- project workspaces PROJECT_ID
-cargo run -- workspace diff WORKSPACE_ID
-cargo run -- workspace remove WORKSPACE_ID
+cargo run -- workspace open /absolute/repository
+cargo run -- chat --workspace-id WORKSPACE_ID --prompt "Fix the failing test." --detach
+cargo run -- chat --workspace-id WORKSPACE_ID --prompt "Improve error handling." --detach
+cargo run -- workspace worktree WORKSPACE_ID --base main --name fix-test
+cargo run -- workspace diff WORKTREE_ID
+cargo run -- workspace remove WORKTREE_ID
 ```
 
-Each session freezes its base at acceptance and allocates a detached worktree
-when its first turn is admitted. Git must be on the daemon's PATH. Cleanup is
-explicit and refuses active workspaces, dirty files, and new detached commits;
-inspect its asynchronous outcome with `workspace show`. See the
-[workspace guide](docs/projects-workspaces.md) for API, limits, and recovery.
+Opening a directory registers it in place. Worktrees are created only by the
+explicit `workspace worktree` operation; its frozen base and lifecycle are
+available through `workspace show`. Sessions that share one canonical path
+serialize their writes. Ordinary workspace removal only unregisters the path;
+worktree removal refuses active users, dirty files, and commits beyond the frozen
+base. See the [workspace guide](docs/workspaces.md) for API and recovery.
 
 Durable jobs and prompt/model/settings matrices use the same runtime:
 
 ```sh
-cargo run -- task create --model opencode-go/glm-5.3-flash --project PROJECT_ID --text "Fix the failing test." --command-id fix-test
+cargo run -- task create --model opencode-go/glm-5.3-flash --workspace-id WORKSPACE_ID --text "Fix the failing test." --command-id fix-test
 cargo run -- task follow TASK_ID
 cargo run -- run retry FAILED_RUN_ID --command-id retry-fix
 cargo run -- --json batch preview examples/batch-request.json --output frozen-batch.json
@@ -185,8 +189,9 @@ cargo run -- batch export BATCH_ID --output results.jsonl
 cargo run -- batch retry BATCH_ID --index 3 --command-id retry-selected
 ```
 
-Replace the example's project ID before previewing. Each attempt retains its
-own session/workspace; retries preserve successful batch members. See
+Replace the example's workspace ID before previewing. Matrix preview and
+submission never create worktrees; each attempt retains its selected workspace,
+and retries preserve successful batch members. See
 [tasks and batches](docs/tasks-batches.md) for API, controls, and recovery.
 
 `SLOP_LISTEN` and `SLOP_DAEMON_URL` provide the equivalent endpoint settings.

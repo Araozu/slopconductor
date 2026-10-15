@@ -14,8 +14,7 @@ pub struct SessionResponse {
     pub settings: crate::execution::GenerationSettings,
     #[serde(default)]
     pub execution: Option<crate::execution::WorkspacePolicy>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_workspace_id: Option<String>,
+    pub workspace_id: String,
     pub spec: crate::orchestration::SessionSpec,
     pub requested_spec: crate::orchestration::SessionSpec,
     pub batch_id: Option<String>,

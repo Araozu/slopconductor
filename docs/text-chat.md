@@ -6,7 +6,7 @@ OpenCode Go, Zen, and Codex provide structured text/tool requests. Codex uses
 Platform keys or saved ChatGPT authorization.
 [Structured execution](structured-execution.md) now extends these
 turns with opt-in workspace tools, artifacts, and per-turn model/settings.
-[Projects/workspaces](projects-workspaces.md) and [tasks/batches](tasks-batches.md)
+[Workspaces](workspaces.md) and [tasks/batches](tasks-batches.md)
 now build repository isolation and durable job orchestration on these primitives.
 
 ## Ownership and durability
@@ -153,10 +153,11 @@ requests, tools, artifacts, lineage, and spent budgets for audit and recovery;
 it is a transcript operation, not a purge of execution records or filesystem
 effects. Existing forks retain their copied history after source deletion.
 
-Each Git-backed fork reserves a separate lazy worktree at the original frozen
-base commit. Uncommitted source-worktree changes are not copied. Folder projects
-and explicit workspace roots continue to share the configured directory under
-the existing writer lease. Transcript operations do not undo or replay tools.
+Each fork inherits the required selected workspace ID and creates no directory
+or worktree. If independent filesystem state is needed, create a worktree
+explicitly before creating the fork. Ordinary workspaces share their canonical directory;
+writes serialize by canonical root. Transcript operations do not undo or replay
+tools.
 The new fork starts its own operation ledger; inherited history is not charged
 as new inference or tool execution.
 

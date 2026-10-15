@@ -68,18 +68,16 @@ pub fn definitions(policy: &OrchestrationPolicy) -> Vec<ToolDefinition> {
     };
     let settings = json!({"type":"object","properties":{"max_output_tokens":{"type":["integer","null"],"minimum":1,"maximum":65536},"reasoning_effort":{"type":["string","null"]},"full_context":{"type":["boolean","null"]}},"additionalProperties":false});
     let budget = json!({"type":"object","properties":{"max_model_requests":{"type":"integer","minimum":0,"maximum":1000000},"max_tool_calls":{"type":"integer","minimum":0,"maximum":1000000}},"required":["max_model_requests","max_tool_calls"],"additionalProperties":false});
-    let project = json!({"type":"object","properties":{"project_id":id,"base_ref":{"type":["string","null"]},"allowed_tools":tool_names},"required":["project_id","allowed_tools"],"additionalProperties":false});
-    let mut spec = json!({"type":"object","properties":{"title":{"type":["string","null"]},"prompt":{"type":"string","minLength":1,"maxLength":65536},"model":{"type":"string"},"settings":settings,"budget":budget},"required":["prompt","model"],"additionalProperties":false});
+    let workspace = json!({"type":"object","properties":{"workspace_id":id,"allowed_tools":tool_names},"required":["workspace_id","allowed_tools"],"additionalProperties":false});
+    let mut spec = json!({"type":"object","properties":{"title":{"type":["string","null"]},"prompt":{"type":"string","minLength":1,"maxLength":65536},"model":{"type":"string"},"settings":settings,"budget":budget},"required":["prompt","model","workspace"],"additionalProperties":false});
     if !policy.allowed_models.is_empty() {
         spec["properties"]["model"]["enum"] = json!(policy.allowed_models);
     }
-    if !policy.allowed_tools.is_empty() {
-        spec["properties"]["project"] = project;
-    }
+    spec["properties"]["workspace"] = workspace;
     // Delegation is deliberately one level. Child policies are never offered
     // to a model, including for legacy parents whose stored policy had depth > 1.
     let context = json!({"type":"object","properties":{"message_ids":{"type":"array","items":id,"maxItems":16},"artifact_ids":{"type":"array","items":id,"maxItems":16}},"additionalProperties":false});
-    let mut result=vec![ToolDefinition{name:"child_create".into(),description:"Create one durable child with an explicit prompt, model, optional selected public context/artifacts, and isolated frozen-base project workspace. Returns stable task/run IDs. Authority cannot exceed the parent policy; no history is copied implicitly.".into(),parameters:json!({"type":"object","properties":{"spec":spec,"context":context,"cancel_with_parent":{"type":"boolean"},"notification_mode":{"type":"string","enum":["completion","manual"]},"detached":{"type":"boolean"}},"required":["spec"],"additionalProperties":false})},ToolDefinition{name:"child_discover".into(),description:"List daemon-supported provider-qualified models and their capabilities and reasoning efforts. Use after and limit to page the catalog. This reports adapter support, not account entitlement; credentials are never included.".into(),parameters:json!({"type":"object","properties":{"after":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":32}},"additionalProperties":false})}];
+    let mut result=vec![ToolDefinition{name:"child_create".into(),description:"Create one durable child with an explicit prompt, model, optional selected public context/artifacts, and explicitly selected existing workspace; creation never allocates a worktree. Returns stable task/run IDs. Authority cannot exceed the parent policy; no history is copied implicitly.".into(),parameters:json!({"type":"object","properties":{"spec":spec,"context":context,"cancel_with_parent":{"type":"boolean"},"notification_mode":{"type":"string","enum":["completion","manual"]},"detached":{"type":"boolean"}},"required":["spec"],"additionalProperties":false})},ToolDefinition{name:"child_discover".into(),description:"List daemon-supported provider-qualified models and their capabilities and reasoning efforts. Use after and limit to page the catalog. This reports adapter support, not account entitlement; credentials are never included.".into(),parameters:json!({"type":"object","properties":{"after":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":32}},"additionalProperties":false})}];
     for (name, description) in [
         (
             "child_inspect",
@@ -242,7 +240,7 @@ mod tests {
                 valid_ranges(&definition.parameters);
             }
             let spec = &definitions[0].parameters["properties"]["spec"];
-            assert!(spec["properties"].get("project").is_none());
+            assert!(spec["properties"].get("workspace").is_some());
             assert!(spec["properties"].get("orchestration").is_none());
         }
     }

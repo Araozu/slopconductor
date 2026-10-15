@@ -30,10 +30,10 @@ that needs them, and record consequential decisions in an ADR.
 
 ## Before orchestration and remote delivery
 
-8. **Project identity:** decide how remotes, local-only repositories, moved
-   directories, submodules, and separate checkouts map to one logical project.
-9. **Workspace lifecycle:** select branch naming, retained worktree limits,
-   user-owned versus managed directories, and cleanup policy.
+8. **Workspace root policy:** evaluate how nested workspaces and overlapping
+   roots should interact with canonical-root writer serialization.
+9. **Workspace retention:** choose cleanup and retention policies for explicit
+   managed worktrees while preserving ordinary directories users own.
 10. **Budget semantics:** cumulative task/tree/batch model-request and tool-call
     limits are implemented as reservations before dispatch, retained across
     attempts and restart. Existing per-turn limits remain. Account-specific
@@ -65,7 +65,7 @@ that needs them, and record consequential decisions in an ADR.
     subsets rather than promising arbitrary live-state migration.
 20. **Ownership proof/recovery:** validate handoff grants, restored-backup behavior,
     cloned data directories, and failure handling without a mandatory coordinator.
-21. **Cross-OS support:** choose the first portable project/toolchain subset.
+21. **Cross-OS support:** choose the first portable workspace/toolchain subset.
 22. **Unavailable owner:** establish deliberate recovery semantics for data copies;
     an offline cache must not imply authority to resume.
 

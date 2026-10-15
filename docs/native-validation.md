@@ -1,5 +1,26 @@
 # Native offline validation
 
+## Unified workspaces, 2026-10-15
+
+The unified workspace implementation passed the required checks locally on Linux:
+formatting, Clippy with warnings denied, all 240 non-live workspace tests, and
+`python3 scripts/smoke.py`. Thirteen credential-dependent live tests remained
+opt-in. The generated OpenAPI document was inspected locally and contains 81
+paths and 99 schemas; workspace selection is required for sessions and job/batch
+specs, and the former project routes and schemas are absent. Generated JSON is
+not checked in.
+
+The real-binary suite covers the permanent directory-less default workspace,
+opening Git and ordinary directories in place, workspace reuse across threads,
+explicit frozen-base worktree creation, isolated edits, shared-root serialization,
+conservative cleanup, persistence, forks, retries, batches, children, and provider
+fixtures. Storage tests also verify directory-creation receipt replay, capacity
+reservation before filesystem changes, migration from schema 21, and no replay
+of interrupted filesystem operations. This local run covers Linux and uses the
+same required checks as the native CI matrix.
+
+## Earlier cross-platform baseline, 2026-10-10
+
 **Passed, 2026-10-10:** [CI run 38089622582](https://github.com/Araozu/slopconductor/actions/runs/38089622582)
 validated commit [e3ffff7](https://github.com/Araozu/slopconductor/commit/e3ffff7456f1549fb5adf9f3f6cdaf87162dfb64)
 on Ubuntu 24.04 and native Windows Server 2025, using stable Rust and Python 3.12.
@@ -25,7 +46,7 @@ canonical Windows workspace roots and tracked file paths beyond 260 characters.
 
 Windows fixtures use Git for Windows' Bash, short per-user app-data temporary
 roots, and the daemon's Git configuration isolation. See
-[managed workspace path constraints](projects-workspaces.md#supervision-and-recovery).
+[managed workspace path constraints](workspaces.md#supervision-and-recovery).
 
 Live-provider tests remain opt-in and were not run. Release-build capacity
 measurements remain outstanding, and Windows service packaging remains planned.

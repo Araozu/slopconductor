@@ -7,6 +7,7 @@ impl DaemonClient {
         request: &CreateTaskRequest,
     ) -> Result<TaskReceipt, ClientError> {
         self.require_feature("persistent-conversations").await?;
+        self.require_feature("unified-workspaces").await?;
         if request.spec.orchestration.is_some() {
             self.require_feature("child-tasks").await?;
             self.require_feature("subagent-v2").await?;
@@ -87,6 +88,7 @@ impl DaemonClient {
         spec: &BatchSpec,
     ) -> Result<BatchPreviewResponse, ClientError> {
         self.require_feature("batch-matrices").await?;
+        self.require_feature("unified-workspaces").await?;
         if spec.budget.is_some() {
             self.require_feature("orchestration-controls").await?;
         }
@@ -114,6 +116,7 @@ impl DaemonClient {
         request: &CreateBatchRequest,
     ) -> Result<BatchReceipt, ClientError> {
         self.require_feature("batch-matrices").await?;
+        self.require_feature("unified-workspaces").await?;
         if request.spec.orchestration.is_some() {
             self.require_feature("child-tasks").await?;
             self.require_feature("subagent-v2").await?;

@@ -29,13 +29,13 @@ mod error;
 mod execution;
 mod orchestration;
 mod peers;
-mod projects;
 mod providers;
 mod sessions;
 mod streams;
 mod transport;
 mod turns;
 mod urls;
+mod workspaces;
 
 pub use error::ClientError;
 pub use streams::{ArtifactStream, EventStream};
@@ -415,7 +415,11 @@ mod tests {
             API_VERSION,
             seen.clone(),
             false,
-            vec!["persistent-conversations".into(), "child-tasks".into()],
+            vec![
+                "persistent-conversations".into(),
+                "child-tasks".into(),
+                "unified-workspaces".into(),
+            ],
         )
         .await;
         let client = DaemonClient::with_token(&endpoint, Some(TOKEN.into())).unwrap();
@@ -447,7 +451,7 @@ mod tests {
                         prompt: "delegate".into(),
                         model: "opencode-go/glm-5.3-flash".into(),
                         settings: Default::default(),
-                        project: None,
+                        workspace: Default::default(),
                         budget: None,
                         orchestration: Some(policy),
                     },
@@ -484,18 +488,18 @@ mod tests {
                 command_id: "managed".into(),
                 provider: "opencode-go".into(),
                 model: "glm-5.3-flash".into(),
-                project: Some(slop_protocol::projects::ProjectWorkspaceRequest {
-                    project_id: "project".into(),
-                    base_ref: None,
+                workspace: slop_protocol::workspaces::WorkspaceSelection {
+                    workspace_id: "workspace".into(),
                     allowed_tools: vec!["edit".into()],
-                }),
+                    limits: None,
+                },
                 ..Default::default()
             })
             .await
             .unwrap_err();
         assert!(matches!(
             error,
-            ClientError::UnsupportedCapability("managed-workspaces")
+            ClientError::UnsupportedCapability("unified-workspaces")
         ));
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -513,7 +517,7 @@ mod tests {
             prompt: "work".into(),
             model: "opencode-go/glm-5.3-flash".into(),
             settings: Default::default(),
-            project: None,
+            workspace: Default::default(),
         };
         assert!(matches!(
             client
@@ -533,7 +537,7 @@ mod tests {
             prompts: vec!["work".into()],
             models: vec!["opencode-go/glm-5.3-flash".into()],
             settings: vec![Default::default()],
-            project: None,
+            workspace: Default::default(),
             max_concurrent_runs: 1,
             default_max_output_tokens: None,
         };

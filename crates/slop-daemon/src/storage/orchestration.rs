@@ -45,12 +45,12 @@ pub(super) fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse>
         .ok_or(StoreError::NotFound)?;
     let workspace_id = connection
         .query_row(
-            "SELECT managed_workspace_id FROM sessions WHERE id=?1",
+            "SELECT workspace_id FROM sessions WHERE id=?1",
             [&session_id],
             |r| r.get(0),
         )
         .map_err(|_| StoreError::Database)?;
-    let effects_unknown: bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM tool_invocations WHERE turn_id=?1 AND (status='running' OR json_extract(outcome,'$.effects_unknown')=1)) OR EXISTS(SELECT 1 FROM managed_workspaces WHERE session_id=?2 AND effects_unknown=1)",rusqlite::params![turn_id,session_id],|r|r.get(0)).map_err(|_|StoreError::Database)?;
+    let effects_unknown: bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM tool_invocations WHERE turn_id=?1 AND (status='running' OR json_extract(outcome,'$.effects_unknown')=1)) OR EXISTS(SELECT 1 FROM workspaces w JOIN sessions s ON s.workspace_id=w.id WHERE s.id=?2 AND w.effects_unknown=1)",rusqlite::params![turn_id,session_id],|r|r.get(0)).map_err(|_|StoreError::Database)?;
     Ok(RunResponse {
         id: id.into(),
         task_id,
@@ -80,10 +80,10 @@ pub(crate) fn validate_spec(spec: &SessionSpec) -> StoreResult<()> {
     {
         return Err(StoreError::Invalid);
     }
-    if let Some(project) = &spec.project {
+    {
+        let project = &spec.workspace;
         let mut names = std::collections::BTreeSet::new();
-        if project.project_id.len() > 128
-            || project.allowed_tools.is_empty()
+        if project.workspace_id.len() > 128
             || project.allowed_tools.len() > 4
             || project.allowed_tools.iter().any(|n| {
                 !matches!(n.as_str(), "read" | "write" | "edit" | "bash") || !names.insert(n)
@@ -122,7 +122,7 @@ pub(crate) fn combinations(spec: &BatchSpec) -> StoreResult<Vec<CombinationRespo
                 prompt: spec.prompts[p].clone(),
                 model: spec.models[m].clone(),
                 settings: spec.settings[s].clone(),
-                project: spec.project.clone(),
+                workspace: spec.workspace.clone(),
                 budget: spec.orchestration.as_ref().and(spec.budget.clone()),
                 orchestration: spec.orchestration.clone(),
             };
@@ -142,7 +142,7 @@ fn insert_run(
     tx: &Transaction<'_>,
     task_id: &str,
     spec: &SessionSpec,
-    _resolved: Option<projects::ResolvedWorkspace>,
+    _resolved: Option<workspaces::ResolvedWorkspace>,
     previous: Option<&RunResponse>,
     command: &str,
 ) -> StoreResult<TaskReceipt> {
@@ -182,7 +182,7 @@ pub(super) fn insert_task(
     tx: &Transaction<'_>,
     spec: &SessionSpec,
     requested: &SessionSpec,
-    resolved: Option<projects::ResolvedWorkspace>,
+    resolved: Option<workspaces::ResolvedWorkspace>,
     batch: Option<(&str, u32)>,
     command: &str,
 ) -> StoreResult<TaskReceipt> {
@@ -197,7 +197,7 @@ pub(super) fn insert_task(
             provider: model.provider().as_str().into(),
             model: model.model().into(),
             settings: Some(spec.settings.clone()),
-            project: spec.project.clone(),
+            workspace: spec.workspace.clone(),
             budget: spec.budget.clone(),
             orchestration: spec.orchestration.clone(),
             ..Default::default()
@@ -281,7 +281,7 @@ impl StoreClient {
         let payload = canonical(&request)?;
         self.submit(move |c| {
             let tx = c.unchecked_transaction().map_err(|_|StoreError::Database)?;
-            if let Some(receipt) = projects::prior(&tx,&request.command_id,&scope,&payload)? { return Ok(receipt); }
+            if let Some(receipt) = workspaces::prior(&tx,&request.command_id,&scope,&payload)? { return Ok(receipt); }
             get_batch(&tx,&id)?;
             tx.execute("UPDATE batches SET cancellation_requested=1 WHERE id=?1",[&id]).map_err(|_|StoreError::Database)?;
             let mut stmt = tx.prepare("SELECT r.id,r.id FROM turns r JOIN sessions k ON k.id=r.session_id JOIN turns t ON t.id=r.id WHERE k.admission_batch_id=?1 AND t.status IN('queued','running','paused','awaiting_children') ORDER BY k.created_order,r.ordinal").map_err(|_|StoreError::Database)?;
@@ -295,7 +295,7 @@ impl StoreClient {
                 run_ids.push(run);
             }
             let receipt = BatchCancelReceipt{command_id:request.command_id.clone(),batch_id:id,run_ids};
-            projects::save(&tx,&request.command_id,&scope,&payload,&receipt)?;
+            workspaces::save(&tx,&request.command_id,&scope,&payload,&receipt)?;
             tx.commit().map_err(|_|StoreError::Database)?;
             Ok(receipt)
         }).await
@@ -308,44 +308,8 @@ impl StoreClient {
         payload: &str,
     ) -> StoreResult<Option<T>> {
         let (command, scope, payload) = (command.to_owned(), scope.to_owned(), payload.to_owned());
-        self.submit(move |c| projects::prior(c, &command, &scope, &payload))
+        self.submit(move |c| workspaces::prior(c, &command, &scope, &payload))
             .await
-    }
-
-    pub(super) async fn resolve_job_project(
-        &self,
-        selection: &mut Option<slop_protocol::projects::ProjectWorkspaceRequest>,
-    ) -> StoreResult<Option<projects::ResolvedWorkspace>> {
-        if !self.shared.workspace_healthy.load(Ordering::Acquire) {
-            return Err(StoreError::Unavailable);
-        }
-        let Some(selection) = selection else {
-            return Ok(None);
-        };
-        let project = self.project(&selection.project_id).await?;
-        if project.git_common_dir.is_empty() {
-            self.resolve_folder_project(&project, selection.base_ref.as_deref())
-                .await?;
-            return Ok(Some(projects::ResolvedWorkspace {
-                project,
-                base_commit: String::new(),
-                data_dir: self.shared.data_dir.clone(),
-            }));
-        }
-        let base_commit = self
-            .shared
-            .git
-            .resolve(
-                &projects::repository(&project),
-                selection.base_ref.as_deref(),
-            )
-            .await?;
-        selection.base_ref = Some(base_commit.clone());
-        Ok(Some(projects::ResolvedWorkspace {
-            project,
-            base_commit,
-            data_dir: self.shared.data_dir.clone(),
-        }))
     }
 
     pub async fn create_task(
@@ -360,14 +324,14 @@ impl StoreClient {
         {
             return Ok(receipt);
         }
-        let mut spec = effective.ok_or(StoreError::Invalid)?;
-        let resolved = self.resolve_job_project(&mut spec.project).await?;
+        let spec = effective.ok_or(StoreError::Invalid)?;
+        let resolved = self.resolve_job_workspace(&spec.workspace).await?;
         self.submit(move |c| {
             let tx = c
                 .unchecked_transaction()
                 .map_err(|_| StoreError::Database)?;
             if let Some(receipt) =
-                projects::prior(&tx, &request.command_id, "create_task", &payload)?
+                workspaces::prior(&tx, &request.command_id, "create_task", &payload)?
             {
                 return Ok(receipt);
             }
@@ -379,7 +343,7 @@ impl StoreClient {
                 None,
                 &request.command_id,
             )?;
-            projects::save(&tx, &request.command_id, "create_task", &payload, &receipt)?;
+            workspaces::save(&tx, &request.command_id, "create_task", &payload, &receipt)?;
             tx.commit().map_err(|_| StoreError::Database)?;
             Ok(receipt)
         })
@@ -451,13 +415,13 @@ impl StoreClient {
             return Ok(receipt);
         }
         let previous = self.run(id).await?;
-        let mut spec = effective.ok_or(StoreError::Invalid)?;
-        let resolved = self.resolve_job_project(&mut spec.project).await?;
+        let spec = effective.ok_or(StoreError::Invalid)?;
+        let resolved = self.resolve_job_workspace(&spec.workspace).await?;
         self.submit(move |c| {
             let tx = c
                 .unchecked_transaction()
                 .map_err(|_| StoreError::Database)?;
-            if let Some(receipt) = projects::prior(&tx, &request.command_id, &scope, &payload)? {
+            if let Some(receipt) = workspaces::prior(&tx, &request.command_id, &scope, &payload)? {
                 return Ok(receipt);
             }
             let current = retry_allowed(
@@ -476,7 +440,7 @@ impl StoreClient {
                 Some(&previous),
                 &request.command_id,
             )?;
-            projects::save(&tx, &request.command_id, &scope, &payload, &receipt)?;
+            workspaces::save(&tx, &request.command_id, &scope, &payload, &receipt)?;
             tx.commit().map_err(|_| StoreError::Database)?;
             Ok(receipt)
         })
@@ -485,18 +449,14 @@ impl StoreClient {
 
     pub async fn preview_batch(
         &self,
-        mut spec: BatchSpec,
+        spec: BatchSpec,
         mut cells: Vec<CombinationResponse>,
     ) -> StoreResult<BatchPreviewResponse> {
         // Validate cardinality before any repository I/O, contexts, or writes.
         combinations(&spec)?;
-        if let Some(project) = &spec.project {
-            self.require_workspace_capacity(&project.project_id, cells.len())
-                .await?;
-        }
-        self.resolve_job_project(&mut spec.project).await?;
+        self.resolve_job_workspace(&spec.workspace).await?;
         for cell in &mut cells {
-            cell.spec.project = spec.project.clone();
+            cell.spec.workspace = spec.workspace.clone();
             validate_spec(&cell.spec)?;
         }
         let preview = BatchPreviewResponse {
@@ -521,14 +481,14 @@ impl StoreClient {
         {
             return Ok(receipt);
         }
-        let mut prepared = prepared.ok_or(StoreError::Invalid)?;
-        let resolved = self.resolve_job_project(&mut prepared.spec.project).await?;
+        let prepared = prepared.ok_or(StoreError::Invalid)?;
+        let resolved = self.resolve_job_workspace(&prepared.spec.workspace).await?;
         self.submit(move |c| {
             let tx = c
                 .unchecked_transaction()
                 .map_err(|_| StoreError::Database)?;
             if let Some(receipt) =
-                projects::prior(&tx, &request.command_id, "create_batch", &payload)?
+                workspaces::prior(&tx, &request.command_id, "create_batch", &payload)?
             {
                 return Ok(receipt);
             }
@@ -548,7 +508,7 @@ impl StoreClient {
             let requested = combinations(&request.spec)?;
             let mut members = Vec::with_capacity(prepared.combinations.len());
             for mut cell in prepared.combinations {
-                cell.spec.project = prepared.spec.project.clone();
+                cell.spec.workspace = prepared.spec.workspace.clone();
                 let original = &requested
                     .get(cell.index as usize)
                     .ok_or(StoreError::Invalid)?
@@ -567,7 +527,7 @@ impl StoreClient {
                 batch_id: id,
                 members,
             };
-            projects::save(&tx, &request.command_id, "create_batch", &payload, &receipt)?;
+            workspaces::save(&tx, &request.command_id, "create_batch", &payload, &receipt)?;
             tx.commit().map_err(|_| StoreError::Database)?;
             Ok(receipt)
         })
@@ -626,14 +586,14 @@ impl StoreClient {
         if request.indices.iter().any(|i| !unique.insert(i)) {
             return Err(StoreError::Invalid);
         }
-        let mut project = specs[0].project.clone();
-        let resolved = self.resolve_job_project(&mut project).await?;
+        let selected_workspace = specs[0].workspace.clone();
+        let resolved = self.resolve_job_workspace(&selected_workspace).await?;
         let id = id.to_owned();
         self.submit(move |c| {
             let tx = c
                 .unchecked_transaction()
                 .map_err(|_| StoreError::Database)?;
-            if let Some(receipt) = projects::prior(&tx, &request.command_id, &scope, &payload)? {
+            if let Some(receipt) = workspaces::prior(&tx, &request.command_id, &scope, &payload)? {
                 return Ok(receipt);
             }
             get_batch(&tx, &id)?;
@@ -654,7 +614,7 @@ impl StoreClient {
                     current.latest_run.as_ref().ok_or(StoreError::Conflict)?,
                     request.acknowledge_unknown_effects,
                 )?;
-                if current.spec != spec || spec.project != project {
+                if current.spec != spec || spec.workspace != selected_workspace {
                     return Err(StoreError::Conflict);
                 }
                 members.push(insert_run(
@@ -671,7 +631,7 @@ impl StoreClient {
                 batch_id: id,
                 members,
             };
-            projects::save(&tx, &request.command_id, &scope, &payload, &receipt)?;
+            workspaces::save(&tx, &request.command_id, &scope, &payload, &receipt)?;
             tx.commit().map_err(|_| StoreError::Database)?;
             Ok(receipt)
         })
@@ -804,7 +764,7 @@ mod tests {
                 reasoning_effort: None,
                 full_context: None,
             },
-            project: None,
+            workspace: Default::default(),
         }
     }
     fn outcome(status: ChatStatus) -> ChatOutcome {
@@ -849,7 +809,7 @@ mod tests {
                     full_context: None,
                 },
             ],
-            project: None,
+            workspace: Default::default(),
             max_concurrent_runs: 1,
             default_max_output_tokens: Some(4096),
         }

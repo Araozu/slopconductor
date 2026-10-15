@@ -54,7 +54,8 @@ A package contains:
 - Protocol/checkpoint schema versions, required runtime/tool capabilities.
 - Session/task/run records, durable event watermark, and checkpoint digest.
 - Selected message/context records and artifact hashes/sizes.
-- Logical project identity, base commit, workspace manifest, and path mappings.
+- Workspace canonical path and destination mapping, plus managed-worktree source
+  provenance and frozen base commit where applicable.
 - Tool/inference uncertainty records that must be resolved before activation.
 - Explicit exclusions and a validation report.
 
@@ -72,9 +73,10 @@ also describe uncommitted and selected untracked state. It cannot assume a
 committed-history transfer contains the active working directory. See
 [Git bundle documentation](https://git-scm.com/docs/git-bundle).
 
-If the target already has the project, validate its identity and create a new
-managed workspace. Do not overwrite a user's existing dirty checkout. When
-necessary, transfer missing Git objects and reconstruct changes in staging.
+If the target has a workspace at the mapped path, validate its canonical identity
+and state. Create a separate managed worktree explicitly when isolation is
+needed. Do not overwrite a user's existing dirty directory. When necessary,
+transfer missing Git objects and reconstruct changes in staging.
 
 Ignored files, local secrets, caches, build output, databases, and background
 services are not automatically included. A target may rebuild dependencies and

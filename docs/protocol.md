@@ -18,9 +18,10 @@ IDs, and per-turn model/settings. Its DTOs live in `slop_protocol::execution`.
 Message DTOs also expose persisted `provider` and `model` fields; these describe
 each message's frozen selection or originating request's reported model, even
 when subsequent turns select a different provider.
-Registered [projects/workspaces](projects-workspaces.md) and durable
-[tasks/run attempts and matrices](tasks-batches.md) are also implemented. Their
-wire structs live in `slop_protocol::projects` and `slop_protocol::orchestration`.
+The unified [workspace API](workspaces.md) and durable
+[tasks/run attempts and matrices](tasks-batches.md) are also implemented. Workspace
+wire structs live in `slop_protocol::workspaces`; orchestration structs live in
+`slop_protocol::orchestration`.
 The orchestration contract includes cumulative budgets, batch cancellation,
 one-level delegation policies, parent/child links, exact-attempt all/any/deadline waits, notification/detachment settings, and public run
 results; see [child tasks](child-tasks.md#public-api-and-validation). Health
@@ -114,6 +115,10 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 
 ## Proposed API surface
 
+The administrator API publishes a compile-time OpenAPI document at
+`GET /api-docs/openapi.json` and interactive Swagger UI at `GET /docs`. The
+document covers all administrator routes, including workspace and peer routes.
+
 | Method and route | Purpose |
 | --- | --- |
 | GET /v1/health | Implemented: anonymous service identity/capabilities |
@@ -129,11 +134,15 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | POST /v1/providers/codex/accounts/{account}/logout | Implemented: clear tokens, retain registration, report confirmed/unconfirmed revocation |
 | POST /v1/providers/codex/login | Implemented: start/reuse the current ChatGPT authorization attempt, optionally for a named account |
 | GET /v1/providers/codex/login/{id} | Implemented: inspect the latest daemon-owned login attempt |
-| GET, POST /v1/projects | Implemented: register/list repositories and local mappings |
-| GET /v1/projects/{id}/workspaces | Implemented: paginated managed workspaces |
-| GET /v1/workspaces/{id}, /diff | Implemented: workspace state and tracked patch |
-| POST /v1/workspaces/{id}/remove | Implemented: explicit conservative cleanup |
-| GET /v1/workspaces | Inspect active worktree and exclusive workspace reservations |
+| GET /v1/workspaces | Implemented: paginated canonical directory records |
+| POST /v1/workspaces | Implemented: open an existing directory in place |
+| POST /v1/workspaces/create | Implemented: asynchronously create a directory, optionally initializing Git; returns `allocating` for polling |
+| GET /v1/workspaces/{id} | Implemented: workspace owner, path, Git metadata, provenance, and state |
+| POST /v1/workspaces/{id}/rename | Implemented: rename a workspace without moving its directory |
+| POST /v1/workspaces/{id}/remove | Implemented: unregister a directory or conservatively remove a managed worktree |
+| GET /v1/workspaces/{id}/diff | Implemented: Git patch against current HEAD or a worktree's frozen base |
+| GET /v1/workspaces/{id}/events | Implemented: paginated workspace lifecycle events |
+| POST /v1/workspaces/{id}/worktrees | Implemented: explicitly create a worktree as a new workspace |
 | GET, POST /v1/sessions | Implemented: list/create persistent conversations; optional prompt and policy are accepted atomically |
 | GET /v1/sessions/{id} | Implemented: snapshot with revision and event watermark |
 | POST /v1/sessions/{id}/inbox | Implemented: idempotent durable patch of stars, Archive, Trash, and read watermark; does not cancel or purge work |
@@ -172,8 +181,6 @@ event. Remote forwarders preserve the command ID. A forwarder may return
 | GET /v1/runs/{id}/children | Implemented: paginated direct-child task records |
 | POST /v1/runs/{id}/wait | Implemented: durable wait on explicit direct-child run IDs, releasing execution slots |
 | GET /v1/runs/{id}/result | Implemented: attempt result with public output |
-| GET /v1/projects/{id} | Implemented: project identity and local mapping |
-| GET /v1/projects/{id}/events | Implemented: paginated durable project/workspace events |
 | GET /v1/peers; PUT, DELETE /v1/peers/{id} | Implemented: scoped outbound registrations and removal |
 | GET /v1/peer-grants; PUT /v1/peer-grants/{id}; POST /v1/peer-grants/{id}/revoke | Implemented: inbound grant creation/listing/revocation |
 | /v1/peers/{peer_id}/... | Implemented: explicit one-hop session inspection, events, steering, and turn controls; see [daemon peering](daemon-peering.md) |
@@ -183,6 +190,10 @@ Routes marked implemented are available now; other spelling is a proposal.
 Implemented listings are paginated; broader filtering remains proposed. Task
 creation returns task/run/session/turn IDs atomically before admission. See
 [tasks and batches](tasks-batches.md) for payloads, limits, and retry semantics.
+Health advertises `unified-workspaces`. Every `CreateSessionRequest`,
+`SessionSpec`, and `BatchSpec` carries a required `WorkspaceSelection`; use the
+built-in workspace ID `default` with an empty tool list for directory-less work.
+There are no project routes or project compatibility aliases.
 
 ## Event contract
 

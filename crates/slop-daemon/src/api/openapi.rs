@@ -140,20 +140,18 @@ impl utoipa::Modify for BearerSecurity {
         super::providers::sign_out,
         super::providers::start_login,
         super::providers::login_status,
-        // Projects, workspaces, and local filesystem navigation.
+        // Workspaces and local filesystem navigation.
         super::filesystem::browse,
         super::filesystem::create,
-        super::projects::projects,
-        super::projects::register,
-        super::projects::create,
-        super::projects::project,
-        super::projects::rename_project,
-        super::projects::workspaces,
-        super::projects::events,
-        super::projects::workspace,
-        super::projects::diff,
-        super::projects::remove,
-        super::projects::rename,
+        super::workspaces::open,
+        super::workspaces::create,
+        super::workspaces::worktree,
+        super::workspaces::workspaces,
+        super::workspaces::events,
+        super::workspaces::workspace,
+        super::workspaces::diff,
+        super::workspaces::remove,
+        super::workspaces::rename,
     ),
     components(
         schemas(
@@ -170,7 +168,7 @@ impl utoipa::Modify for BearerSecurity {
             slop_protocol::filesystem::DirectoryEntry,
             slop_protocol::filesystem::DirectoryResponse,
             slop_protocol::filesystem::CreateDirectoryRequest,
-            slop_protocol::filesystem::CreateProjectRequest,
+            slop_protocol::workspaces::CreateWorkspaceRequest,
             slop_protocol::chat::CancelTurnRequest,
             slop_protocol::chat::CommandReceipt,
             slop_protocol::chat::CreateSessionRequest,
@@ -227,15 +225,15 @@ impl utoipa::Modify for BearerSecurity {
             slop_protocol::orchestration::TaskEventResponse,
             slop_protocol::orchestration::TaskReceipt,
             slop_protocol::orchestration::WaitChildrenRequest,
-            slop_protocol::projects::ProjectEventResponse,
-            slop_protocol::projects::ProjectResponse,
-            slop_protocol::projects::ProjectWorkspaceRequest,
-            slop_protocol::projects::RegisterProjectRequest,
-            slop_protocol::projects::RenameProjectRequest,
-            slop_protocol::projects::RemoveWorkspaceRequest,
-            slop_protocol::projects::RenameWorkspaceRequest,
-            slop_protocol::projects::WorkspaceDiffResponse,
-            slop_protocol::projects::WorkspaceResponse,
+            slop_protocol::workspaces::WorkspaceEventResponse,
+            slop_protocol::workspaces::WorkspaceSelection,
+            slop_protocol::workspaces::WorkspaceToolLimits,
+            slop_protocol::workspaces::OpenWorkspaceRequest,
+            slop_protocol::workspaces::CreateWorktreeRequest,
+            slop_protocol::workspaces::RemoveWorkspaceRequest,
+            slop_protocol::workspaces::RenameWorkspaceRequest,
+            slop_protocol::workspaces::WorkspaceDiffResponse,
+            slop_protocol::workspaces::WorkspaceResponse,
             slop_protocol::providers::LoginResponse,
             slop_protocol::providers::LoginStatus,
             slop_protocol::providers::ProviderAccount,
@@ -254,7 +252,7 @@ impl utoipa::Modify for BearerSecurity {
         (name = "chat", description = "Durable sessions and text chat"),
         (name = "orchestration", description = "Tasks, run attempts, and batch matrices"),
         (name = "providers", description = "Provider credentials and discovery"),
-        (name = "projects", description = "Projects, workspaces, and filesystem navigation"),
+        (name = "workspaces", description = "Open directories in place; explicitly create worktrees from an existing workspace"),
     )
 )]
 pub struct ApiDoc;
@@ -359,15 +357,13 @@ mod tests {
         "/v1/providers/codex/accounts/{account_id}/logout",
         "/v1/providers/codex/login",
         "/v1/providers/codex/login/{login_id}",
-        // Projects and filesystem.
+        // Workspaces and filesystem.
         "/v1/filesystem",
         "/v1/filesystem/directories",
-        "/v1/projects",
-        "/v1/projects/create",
-        "/v1/projects/{id}",
-        "/v1/projects/{id}/rename",
-        "/v1/projects/{id}/workspaces",
-        "/v1/projects/{id}/events",
+        "/v1/workspaces",
+        "/v1/workspaces/create",
+        "/v1/workspaces/{id}/worktrees",
+        "/v1/workspaces/{id}/events",
         "/v1/workspaces/{id}",
         "/v1/workspaces/{id}/diff",
         "/v1/workspaces/{id}/remove",
@@ -405,11 +401,68 @@ mod tests {
             "CreateSessionRequest",
             "TaskReceipt",
             "BatchResponse",
-            "ProjectResponse",
+            "WorkspaceResponse",
+            "OpenWorkspaceRequest",
+            "CreateWorktreeRequest",
+            "WorkspaceSelection",
+            "WorkspaceToolLimits",
             "ProviderStatus",
             "DirectoryResponse",
         ] {
             assert!(schemas.contains_key(name), "schema {name} missing");
         }
+    }
+    #[test]
+    fn workspace_contract_requires_membership_and_has_only_explicit_worktree_creation() {
+        let json = serde_json::to_value(ApiDoc::openapi()).unwrap();
+        for schema in ["CreateSessionRequest", "SessionSpec", "BatchSpec"] {
+            let required = json
+                .pointer(&format!("/components/schemas/{schema}/required"))
+                .unwrap()
+                .as_array()
+                .unwrap();
+            assert!(
+                required.iter().any(|field| field == "workspace"),
+                "{schema} must require a workspace"
+            );
+            let properties = json
+                .pointer(&format!("/components/schemas/{schema}/properties"))
+                .unwrap();
+            assert!(properties.get("project").is_none());
+        }
+        assert_eq!(
+            json.pointer("/components/schemas/SessionResponse/properties/workspace_id/type")
+                .unwrap(),
+            "string"
+        );
+        assert!(
+            json["paths"]
+                .get("/v1/workspaces/{id}/worktrees")
+                .unwrap()
+                .get("post")
+                .is_some()
+        );
+        assert!(
+            json["paths"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|path| !path.starts_with("/v1/projects"))
+        );
+        let payload = serde_json::json!({"command_id":"thread","provider":"opencode-go","model":"glm-5.3-flash"});
+        assert!(
+            serde_json::from_value::<slop_protocol::chat::CreateSessionRequest>(payload.clone())
+                .is_err()
+        );
+        let mut selected = payload;
+        selected["workspace"] = serde_json::json!({"workspace_id":"default","allowed_tools":[]});
+        assert!(
+            serde_json::from_value::<slop_protocol::chat::CreateSessionRequest>(selected.clone())
+                .is_ok()
+        );
+        selected["project"] = serde_json::json!({"project_id":"old"});
+        assert!(
+            serde_json::from_value::<slop_protocol::chat::CreateSessionRequest>(selected).is_err()
+        );
     }
 }

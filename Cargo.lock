@@ -2062,6 +2062,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "sha2",
  "slop-client",
  "slop-protocol",
  "tempfile",

@@ -65,12 +65,12 @@ impl StoreClient {
             || request.draft.title.chars().any(char::is_control)
             || request.draft.text.len() > MAX_MESSAGE_BYTES
             || request.draft.model.len() > 384
-            || request.draft.workspace.len() > 4096
-            || request.draft.allowed_tools.as_ref().is_some_and(|tools| {
-                tools.len() > 4
-                    || tools
+            || request.draft.workspace.as_ref().is_some_and(|w| {
+                w.workspace_id.len() > 128
+                    || w.allowed_tools.len() > 4
+                    || w.allowed_tools
                         .iter()
-                        .any(|tool| !["read", "write", "edit", "bash"].contains(&tool.as_str()))
+                        .any(|t| !["read", "write", "edit", "bash"].contains(&t.as_str()))
             })
             || canonical(&request.draft)?.len() > 128 * 1024
         {

@@ -1,5 +1,6 @@
 use std::io::{self, IsTerminal};
 
+use sha2::{Digest, Sha256};
 use slop_client::DaemonClient;
 use slop_protocol::chat::CreateSessionRequest;
 
@@ -33,8 +34,8 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         max_output_tokens,
         full_context,
         delivery,
-        project,
-        base,
+        workspace_id,
+        no_workspace,
     } = args;
     let input = prompt_value_optional(prompt, prompt_file).await?;
     let interactive = input.is_none() && io::stdin().is_terminal();
@@ -67,44 +68,56 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
     } else {
         TurnSelection::default()
     };
-    let execution = workspace
-        .map(|root| {
-            std::path::absolute(root).map(|root| slop_protocol::execution::WorkspacePolicy {
-                root: root.to_string_lossy().into_owned(),
-                allowed_tools: if tools.is_empty() {
-                    vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
-                } else {
-                    tools.clone()
-                },
-                shell_timeout_ms: 30_000,
-                max_output_bytes: 1024 * 1024,
-                max_tool_calls: u32::MAX,
-                max_model_requests: u32::MAX,
-            })
-        })
-        .transpose()?;
-    let project = project.map(
-        |project_id| slop_protocol::projects::ProjectWorkspaceRequest {
-            project_id,
-            base_ref: base,
-            allowed_tools: if tools.is_empty() {
-                vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
-            } else {
-                tools
-            },
+    let base_command_id = if session.is_none() {
+        Some(choose_command_id(command_id.clone())?)
+    } else {
+        None
+    };
+    let workspace = match (workspace, workspace_id, no_workspace) {
+        (Some(path), None, false) => {
+            if !path.is_absolute() {
+                return Err("workspace path must be absolute on the daemon's machine".into());
+            }
+            let base_id = base_command_id.as_deref().expect("new chat has command ID");
+            let open_id = derived_command_id(base_id, "workspace");
+            let opened = client
+                .open_workspace(&slop_protocol::workspaces::OpenWorkspaceRequest {
+                    command_id: open_id.clone(),
+                    path: path.to_str().ok_or("workspace path must be UTF-8")?.into(),
+                })
+                .await
+                .map_err(|error| mutation_error(error, base_id))?;
+            Some(opened.id)
+        }
+        (None, Some(id), false) => Some(id),
+        (None, None, _) => Some(slop_protocol::workspaces::DEFAULT_WORKSPACE_ID.into()),
+        _ => unreachable!("CLI enforces exclusive workspace selection"),
+    };
+    let workspace_id = workspace.expect("every session has a workspace");
+    if workspace_id == slop_protocol::workspaces::DEFAULT_WORKSPACE_ID && !tools.is_empty() {
+        return Err("the default workspace has no directory and cannot enable tools".into());
+    }
+    let workspace = slop_protocol::workspaces::WorkspaceSelection {
+        allowed_tools: if tools.is_empty()
+            && workspace_id != slop_protocol::workspaces::DEFAULT_WORKSPACE_ID
+        {
+            vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
+        } else {
+            tools.clone()
         },
-    );
+        workspace_id,
+        limits: None,
+    };
     let mut session_id = match session {
         Some(id) => id,
         None => {
             create_session(
                 &client,
                 model,
-                command_id.as_deref(),
+                base_command_id.as_deref(),
                 context.output,
                 settings,
-                execution,
-                project,
+                workspace,
             )
             .await?
         }
@@ -183,8 +196,7 @@ async fn create_session(
     command_id: Option<&str>,
     output: Output,
     settings: Option<slop_protocol::execution::GenerationSettings>,
-    execution: Option<slop_protocol::execution::WorkspacePolicy>,
-    project: Option<slop_protocol::projects::ProjectWorkspaceRequest>,
+    workspace: slop_protocol::workspaces::WorkspaceSelection,
 ) -> Result<String> {
     let (provider, model) = match model {
         Some(value) => parse_model(&value)?,
@@ -197,22 +209,21 @@ async fn create_session(
             (first.provider, first.model)
         }
     };
-    let base_command_id = choose_command_id(command_id.map(str::to_owned))?;
+    let base_command_id = command_id.ok_or("new chat command ID was not prepared")?;
     let request = CreateSessionRequest {
-        command_id: session_creation_command_id(&base_command_id),
+        command_id: session_creation_command_id(base_command_id),
         title: None,
         provider,
         model,
         max_tokens: None,
         settings,
-        execution,
-        project,
+        workspace,
         ..Default::default()
     };
     let receipt = client
         .create_session(&request)
         .await
-        .map_err(|error| mutation_error(error, &base_command_id))?;
+        .map_err(|error| mutation_error(error, base_command_id))?;
     output.session_receipt(&receipt);
     let session_id = receipt.session_id;
     eprintln!("session {session_id}");
@@ -230,7 +241,16 @@ fn parse_model(value: &str) -> Result<(String, String)> {
 }
 
 fn session_creation_command_id(base: &str) -> String {
-    format!("{base}:session")
+    derived_command_id(base, "session")
+}
+
+fn derived_command_id(base: &str, operation: &str) -> String {
+    let candidate = format!("{base}:{operation}");
+    if candidate.len() <= 128 {
+        return candidate;
+    }
+    let digest = Sha256::digest([base.as_bytes(), b"\0", operation.as_bytes()].concat());
+    format!("derived-{operation}-{:x}", digest)
 }
 
 #[cfg(test)]
@@ -253,8 +273,13 @@ mod tests {
         let base = "command-0123456789abcdef";
         assert_eq!(
             session_creation_command_id(base),
-            "command-0123456789abcdef:session"
+            derived_command_id(base, "session")
         );
         assert_ne!(session_creation_command_id(base), base);
+        let long = "x".repeat(128);
+        let workspace_id = derived_command_id(&long, "workspace");
+        assert!(workspace_id.len() <= 128);
+        assert_eq!(workspace_id, derived_command_id(&long, "workspace"));
+        assert_ne!(workspace_id, derived_command_id(&long, "session"));
     }
 }

@@ -4,7 +4,7 @@ These documents capture the application idea, accepted constraints, proposed
 design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
-**Status as of 2026-10-14:** milestone M0 is a repository/bootstrap foundation,
+**Status as of 2026-10-15:** milestone M0 is a repository/bootstrap foundation,
 with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
@@ -23,8 +23,11 @@ providers using canonical history without forwarding incompatible private replay
 Execution steering supports after-turn, next-boundary, and immediate
 delivery, plus durable pause/resume with explicit re-admission. Same-turn
 steering keeps its provider snapshot; a resumed pause takes a fresh snapshot.
-Managed projects/workspaces now add repository registration, frozen base commits,
-lazy detached worktrees, separate diffs, explicit cleanup, and Git recovery.
+Unified workspaces open existing canonical directories in place. Every session,
+task, and batch selects a workspace; the built-in `default` workspace supports
+directory-less work. Explicit Git worktree creation freezes a base commit, and
+sessions/orchestration never create worktrees implicitly. The registry is
+independent of sessions, and writes to a shared canonical root serialize.
 The 2026-10-09 tool update limits coding tools to `read`, `write`, `edit`, and
 `bash`. Persistent conversations/turns and deterministic matrices now add preview,
 atomic acceptance, bounded admission, explicit selective retries, and result
@@ -59,7 +62,7 @@ today, then read in this order:
 | [Structured execution](structured-execution.md) | Implemented tool loop, structured streaming, artifacts, frozen model/settings, and recovery |
 | [Tasks and batches](tasks-batches.md) | Implemented jobs, explicit attempts, matrix preview/submission, selective retries, and results |
 | [Child tasks](child-tasks.md) | Implemented native delegation policy, isolated children, context selection, waits, and recovery |
-| [Projects and workspaces](projects-workspaces.md) | Implemented registration, lazy worktrees, frozen bases, diffs, cleanup, and Git recovery |
+| [Workspaces](workspaces.md) | Unified directory registration, explicit worktrees, selection, diffs, cleanup, and recovery |
 | [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
 | [Codex connection](codex-connection.md) | Structured Codex tools/replay, reasoning settings, accounts and subscription restrictions |
 | [Provider checklist](provider-checklist.md) | Required native-provider behavior and explicit offline/live validation gates |
@@ -104,9 +107,9 @@ clients share the wire contract and can generate their own SDK.
 ## Current repository entry points
 
 - [Root manifest](../Cargo.toml): virtual Rust workspace and shared dependency versions.
-- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node, chat, structured execution, projects/workspaces, and task/batch DTOs.
+- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node, chat, structured execution, workspaces, and task/batch DTOs.
 - [Client library](../crates/slop-client/src/lib.rs): bounded requests, event streams, token files, and compatibility checks.
 - [Daemon](../crates/slop-daemon/src/main.rs): loopback HTTP service.
-- [CLI](../crates/slop-cli/src/main.rs): independent status, chat, session/turn, capability/artifact, project/workspace, and task/run/batch client.
+- [CLI](../crates/slop-cli/src/main.rs): independent status, chat, session/turn, capability/artifact, workspace, and task/run/batch client.
 - [Client placeholder directory](../clients/README.md): future frontend locations.
 - [Smoke script](../scripts/smoke.py): checks the real daemon and CLI together.

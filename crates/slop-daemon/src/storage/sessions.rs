@@ -4,7 +4,7 @@ pub(super) fn create_session(
     connection: &Connection,
     request: CreateSessionRequest,
     default_max_tokens: Option<u32>,
-    resolved: Option<projects::ResolvedWorkspace>,
+    resolved: Option<workspaces::ResolvedWorkspace>,
 ) -> StoreResult<CommandReceipt> {
     let tx = connection
         .unchecked_transaction()
@@ -54,7 +54,7 @@ pub(super) fn create_session_tx(
     tx: &Transaction<'_>,
     request: CreateSessionRequest,
     default_max_tokens: Option<u32>,
-    resolved: Option<projects::ResolvedWorkspace>,
+    resolved: Option<workspaces::ResolvedWorkspace>,
 ) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.provider.trim().is_empty()
@@ -82,7 +82,7 @@ pub(super) fn create_session_tx(
         prompt: request.prompt.clone().unwrap_or_default(),
         model: format!("{}/{}", request.provider, request.model),
         settings: request.settings.clone().unwrap_or_default(),
-        project: request.project.clone(),
+        workspace: request.workspace.clone(),
         budget: request.budget.clone(),
         orchestration: request.orchestration.clone(),
     };
@@ -112,41 +112,11 @@ pub(super) fn create_session_tx(
         .max_output_tokens
         .or(default_max_tokens)
         .unwrap_or(4096);
-    if request.project.is_some() && request.execution.is_some() {
-        return Err(StoreError::Invalid);
-    }
-    let managed = request
-        .project
-        .as_ref()
-        .filter(|_| {
-            resolved
-                .as_ref()
-                .is_some_and(|r| !r.project.git_common_dir.is_empty())
-        })
-        .map(|project| {
-            projects::reserve(
-                tx,
-                &session_id,
-                project,
-                resolved.as_ref().ok_or(StoreError::Invalid)?,
-            )
-        })
-        .transpose()?;
-    let policy = if let Some((_, policy)) = &managed {
-        Some(policy.clone())
-    } else if let (Some(selection), Some(resolved)) = (&request.project, &resolved) {
-        let policy = slop_runtime::tools::WorkspacePolicy {
-            root: resolved.project.path.clone(),
-            allowed_tools: selection.allowed_tools.clone(),
-            shell_timeout_ms: 30_000,
-            max_output_bytes: 1024 * 1024,
-            max_tool_calls: u32::MAX,
-            max_model_requests: u32::MAX,
-        };
-        Some(policy.canonicalize().map_err(|_| StoreError::Invalid)?)
-    } else {
-        execution::workspace(&request)?
-    };
+    let policy = workspaces::selection_policy(
+        tx,
+        &request.workspace,
+        resolved.as_ref().ok_or(StoreError::Invalid)?,
+    )?;
     let order: i64 = tx
         .query_row(
             "SELECT next_order FROM session_order WHERE singleton=1",
@@ -166,30 +136,25 @@ pub(super) fn create_session_tx(
         rusqlite::params![
             canonical(&settings)?,
             policy.as_ref().map(canonical).transpose()?,
-            policy.as_ref().map(|p| p.root.as_str()),
+            resolved.as_ref().and_then(|r| r.workspace.path.as_deref()),
             session_id
         ],
     )
     .map_err(|_| StoreError::Database)?;
     let mut spec = requested.clone();
     spec.settings = settings;
-    if let Some(resolved) = &resolved
-        && let Some(project) = &mut spec.project
-        && !resolved.base_commit.is_empty()
-    {
-        project.base_ref = Some(resolved.base_commit.clone());
-    }
     tx.execute(
         "UPDATE sessions SET spec=?1,requested_spec=?2,root_task_id=id WHERE id=?3",
         rusqlite::params![canonical(&spec)?, canonical(&requested)?, session_id],
     )
     .map_err(|_| StoreError::Database)?;
     governance::register(tx, &format!("session:{session_id}"), spec.budget.as_ref())?;
-    let (mut revision, mut sequence) =
-        append_event(tx, &session_id, "session_created", None, None)?;
-    if let Some((workspace, _)) = managed {
-        (revision, sequence) = projects::insert_workspace(tx, &workspace)?;
-    }
+    tx.execute(
+        "UPDATE sessions SET workspace_id=?1 WHERE id=?2",
+        rusqlite::params![&request.workspace.workspace_id, session_id],
+    )
+    .map_err(|_| StoreError::Database)?;
+    let (revision, sequence) = append_event(tx, &session_id, "session_created", None, None)?;
     let mut receipt = make_receipt(
         &request.command_id,
         &session_id,
@@ -241,7 +206,7 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
         last_event_sequence: row.get::<_, i64>(7)? as u64,
         settings,
         execution: execution::optional_json_column(row, 9)?,
-        managed_workspace_id: row.get(10)?,
+        workspace_id: row.get(10)?,
         spec: execution::json_column(row, 11)?,
         requested_spec: execution::json_column(row, 12)?,
         batch_id: row.get(13)?,
@@ -255,7 +220,7 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
 }
 
 pub(super) fn get_session(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
-    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork FROM sessions WHERE id=?1",[id],session_from_row)
+    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork FROM sessions WHERE id=?1",[id],session_from_row)
         .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
     enrich(connection, session)
 }
@@ -266,7 +231,7 @@ pub(super) fn list_sessions(
     limit: usize,
 ) -> StoreResult<Page<SessionResponse>> {
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,managed_workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
+    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
         .map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![after, (limit + 1) as i64])

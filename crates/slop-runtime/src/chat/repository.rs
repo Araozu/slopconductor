@@ -25,7 +25,7 @@ pub trait ChatRepository: Send + Sync + 'static {
             ))
         })
     }
-    /// Prepare a managed workspace only after admission. A committed Git
+    /// Validate the selected workspace after admission. A committed Git
     /// failure is a turn outcome; persistence failures stop the supervisor.
     fn prepare_workspace<'a>(
         &'a self,

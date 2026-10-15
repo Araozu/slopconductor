@@ -98,7 +98,7 @@ pub(super) fn send_message_tx(
     }
     children::check_reactivation_capacity(tx, session_id)?;
     let session = get_session(tx, session_id)?;
-    projects::require_available(tx, &session)?;
+    workspaces::require_available(tx, &session)?;
     if request
         .expected_revision
         .is_some_and(|revision| revision != session.revision)

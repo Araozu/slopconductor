@@ -108,7 +108,7 @@ fn io_response(result: std::io::Result<DirectoryResponse>) -> Response {
 #[utoipa::path(
     get,
     path = "/v1/filesystem",
-    tag = "projects",
+    tag = "workspaces",
     params(
         ("path" = Option<String>, Query, description = "Absolute directory path; defaults to the home directory"),
         ("after" = Option<String>, Query, description = "Entry name after which to page"),
@@ -137,7 +137,7 @@ pub async fn browse(Query(query): Query<DirectoryQuery>) -> Response {
 #[utoipa::path(
     post,
     path = "/v1/filesystem/directories",
-    tag = "projects",
+    tag = "workspaces",
     request_body = CreateDirectoryRequest,
     responses(
         (status = 200, description = "Created directory listing", body = DirectoryResponse),

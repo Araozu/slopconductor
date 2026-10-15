@@ -1,8 +1,8 @@
 use clap::Subcommand;
 
 use super::{
-    ArtifactCommand, BatchCommand, ChatArgs, ProjectCommand, ProviderCommand, RunCommand,
-    SessionCommand, TaskCommand, TurnCommand, WorkspaceCommand,
+    ArtifactCommand, BatchCommand, ChatArgs, ProviderCommand, RunCommand, SessionCommand,
+    TaskCommand, TurnCommand, WorkspaceCommand,
 };
 
 #[derive(Debug, Subcommand)]
@@ -35,12 +35,7 @@ pub enum Command {
     Models,
     /// Show structured execution and registered tool capabilities.
     Capabilities,
-    /// Register and inspect repositories on the daemon's machine.
-    Project {
-        #[command(subcommand)]
-        command: ProjectCommand,
-    },
-    /// Inspect or deliberately remove a managed session worktree.
+    /// Open, create, and inspect daemon-owned workspaces.
     Workspace {
         #[command(subcommand)]
         command: WorkspaceCommand,

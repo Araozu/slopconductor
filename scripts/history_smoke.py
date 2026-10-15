@@ -16,8 +16,8 @@ def check_history(daemon_binary, cli_binary, root):
     daemon = None
     try:
         env = isolated_env(root, fixture)
-        # Keep Git for Windows' worktree metadata paths short, as in the
-        # project smoke fixture. This remains below the private temp root.
+        # Keep Git paths short for Windows path limits. This remains below the
+        # private temp root.
         data = root / "data"
         daemon, endpoint, log = start_daemon(daemon_binary, root / "run", data, env)
         token_path = data / "credentials" / "local-api-token"
@@ -36,13 +36,13 @@ def check_history(daemon_binary, cli_binary, root):
             ], env=env, capture_output=True, text=True, timeout=20, check=True)
             return [json.loads(line) for line in result.stdout.splitlines()]
 
-        def wait_managed(receipt):
+        def wait_workspace_turn(receipt):
             turn = wait_turn(endpoint, token, receipt["turn_id"],
                              {"completed", "failed", "cancelled", "interrupted", "incomplete"})
             if turn["status"] != "completed":
                 session = api(path=f"/v1/sessions/{receipt['session_id']}")
-                workspace = api(path=f"/v1/workspaces/{session['managed_workspace_id']}")
-                raise RuntimeError(f"managed history turn failed: {turn}; workspace: {workspace}")
+                workspace = api(path=f"/v1/workspaces/{session['workspace_id']}")
+                raise RuntimeError(f"history turn failed: {turn}; workspace: {workspace}")
 
         source = api("POST", {"command_id": "history-source", "provider": "opencode-go",
                               "model": "glm-5.3-flash"}, "/v1/sessions", 202)["session_id"]
@@ -137,30 +137,38 @@ def check_history(daemon_binary, cli_binary, root):
                         follower.kill()
                         follower.communicate(timeout=5)
 
-        project = api("POST", {"command_id": "history-project", "parent": str(root),
-                               "name": "fork-project", "git": True}, "/v1/projects/create", 202)
-        managed = api("POST", {"command_id": "managed-source", "provider": "opencode-go",
-                               "model": "glm-5.3-flash", "prompt": "managed initial prompt",
-                               "project": {"project_id": project["id"], "allowed_tools": ["read"]}},
-                      "/v1/sessions", 202)
-        wait_managed(managed)
-        source_snapshot = api(path=f"/v1/sessions/{managed['session_id']}")
-        source_workspace = api(path=f"/v1/workspaces/{source_snapshot['managed_workspace_id']}")
-        managed_history = api(path=f"/v1/sessions/{managed['session_id']}/messages")["items"]
-        managed_fork = api("POST", {"command_id": "managed-fork", "message_id": managed_history[-1]["id"]},
-                           f"/v1/sessions/{managed['session_id']}/fork", 202)
-        fork_snapshot = api(path=f"/v1/sessions/{managed_fork['session_id']}")
-        fork_workspace = api(path=f"/v1/workspaces/{fork_snapshot['managed_workspace_id']}")
-        if (source_workspace["path"] == fork_workspace["path"]
-                or source_workspace["base_commit"] != fork_workspace["base_commit"]
-                or fork_workspace["status"] != "reserved"):
-            raise RuntimeError("Git-backed fork did not reserve an independent frozen-base worktree")
-        continued = api("POST", {"command_id": "managed-fork-follow", "text": "continue managed fork"},
-                        f"/v1/sessions/{managed_fork['session_id']}/messages", 202)
-        wait_managed(continued)
-        fork_workspace = api(path=f"/v1/workspaces/{fork_snapshot['managed_workspace_id']}")
-        if fork_workspace["status"] != "ready":
-            raise RuntimeError("managed fork could not allocate its worktree and continue")
+        repository = root / "history-repository"
+        repository.mkdir()
+        subprocess.run(["git", "init", str(repository)], env=env, check=True,
+                       capture_output=True, text=True, timeout=15)
+        subprocess.run(["git", "-C", str(repository), "-c", "user.name=Smoke",
+                        "-c", "user.email=smoke@example.invalid", "commit", "--allow-empty",
+                        "-m", "base"], env=env, check=True, capture_output=True,
+                       text=True, timeout=15)
+        workspace = cli("workspace", "open", str(repository), "--command-id", "history-open")[0]
+        workspace_id = workspace["id"]
+        selected = {"workspace_id": workspace_id, "allowed_tools": ["read"]}
+        with_workspace = api("POST", {"command_id": "workspace-source", "provider": "opencode-go",
+                                       "model": "glm-5.3-flash", "prompt": "workspace initial prompt",
+                                       "workspace": selected}, "/v1/sessions", 202)
+        wait_workspace_turn(with_workspace)
+        before_fork = fixture.count()
+        source_snapshot = api(path=f"/v1/sessions/{with_workspace['session_id']}")
+        source_workspace = api(path=f"/v1/workspaces/{source_snapshot['workspace_id']}")
+        workspace_history = api(path=f"/v1/sessions/{with_workspace['session_id']}/messages")["items"]
+        workspace_fork = api("POST", {"command_id": "workspace-fork", "message_id": workspace_history[-1]["id"]},
+                             f"/v1/sessions/{with_workspace['session_id']}/fork", 202)
+        if fixture.count() != before_fork:
+            raise RuntimeError("fork dispatched an inherited provider request")
+        fork_snapshot = api(path=f"/v1/sessions/{workspace_fork['session_id']}")
+        fork_workspace = api(path=f"/v1/workspaces/{fork_snapshot['workspace_id']}")
+        if (source_snapshot["workspace_id"] != fork_snapshot["workspace_id"]
+                or source_workspace["path"] != fork_workspace["path"]
+                or fork_workspace["id"] != workspace_id):
+            raise RuntimeError("history fork did not retain the selected workspace")
+        continued = api("POST", {"command_id": "workspace-fork-follow", "text": "continue workspace fork"},
+                        f"/v1/sessions/{workspace_fork['session_id']}/messages", 202)
+        wait_workspace_turn(continued)
         before_restart = fixture.count()
         stop_daemon(daemon, log)
         daemon, endpoint, log = start_daemon(daemon_binary, root / "restart", data, env)

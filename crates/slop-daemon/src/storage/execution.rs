@@ -140,19 +140,6 @@ pub(super) fn turn_settings(
     validate_settings(model, &settings)?;
     Ok(settings)
 }
-pub(super) fn workspace(request: &CreateSessionRequest) -> StoreResult<Option<WorkspacePolicy>> {
-    request
-        .execution
-        .as_ref()
-        .map(|policy| {
-            let runtime: WorkspacePolicy = serde_json::from_value(
-                serde_json::to_value(policy).map_err(|_| StoreError::Invalid)?,
-            )
-            .map_err(|_| StoreError::Invalid)?;
-            runtime.canonicalize().map_err(|_| StoreError::Invalid)
-        })
-        .transpose()
-}
 
 fn public_block(block: ContentBlock) -> wire::ContentBlock {
     wire::ContentBlock {

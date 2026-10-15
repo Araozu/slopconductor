@@ -153,10 +153,13 @@ def check_tools(daemon_binary, cli_binary, root):
             assert status == 202, (status, receipt)
             return receipt, payload
 
+        status, opened_workspace = request(endpoint, token, "POST", {"command_id": "open-tools", "path": str(workspace)}, "/v1/workspaces")
+        assert status == 202
+
         def create(command, **policy):
             status, receipt = request(endpoint, token, "POST", {
                 "command_id": command.replace(" ", "-"), "provider": "opencode-go", "model": "glm-5.3-flash",
-                "execution": {"root": str(workspace), "allowed_tools": ["read", "edit", "bash", "write"], **policy},
+                "workspace": {"workspace_id": opened_workspace["id"], "allowed_tools": ["read", "edit", "bash", "write"], "limits": policy},
             }, "/v1/sessions")
             assert status == 202, (status, receipt)
             return receipt["session_id"]
@@ -250,7 +253,7 @@ def check_tools(daemon_binary, cli_binary, root):
         assert {tool["function"]["name"] for tool in fixture.snapshot()[-1]["tools"]} == {"read"}
         status, error = request(endpoint, token, "POST", {
             "command_id": "unsupported-tool", "provider": "opencode-go", "model": "glm-5.3-flash",
-            "execution": {"root": str(workspace), "allowed_tools": ["list_files"]},
+            "workspace": {"workspace_id": opened_workspace["id"], "allowed_tools": ["list_files"]},
         }, "/v1/sessions")
         assert status == 400, (status, error)
         count = len(fixture.snapshot())

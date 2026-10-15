@@ -217,7 +217,18 @@ def stop_daemon(daemon, log):
     log.close()
 
 
-def request(endpoint, token, method="GET", payload=None, path=""):
+def request(endpoint, token, method="GET", payload=None, path="", workspace_defaults=True):
+    # Test clients explicitly select the built-in workspace for directory-less threads.
+    if workspace_defaults and payload is not None and method == "POST":
+        payload = json.loads(json.dumps(payload))
+        default = {"workspace_id": "default", "allowed_tools": []}
+        if path == "/v1/sessions":
+            payload.setdefault("workspace", default)
+        elif path in {"/v1/tasks", "/v1/batches"} or path.endswith("/children"):
+            if "spec" in payload:
+                payload["spec"].setdefault("workspace", default)
+        elif path == "/v1/batches/preview":
+            payload.setdefault("workspace", default)
     url = endpoint + path
     data = None if payload is None else json.dumps(payload).encode()
     headers = {} if token is None else {"Authorization": f"Bearer {token}"}
@@ -562,9 +573,11 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
         tool_root.mkdir(parents=True, exist_ok=True)
         policy = {"root": str(tool_root), "allowed_tools": ["bash", "write"], "shell_timeout_ms": 10000,
                   "max_output_bytes": 4096, "max_tool_calls": 4, "max_model_requests": 4}
+        status, tool_workspace = request(endpoint, token, "POST", {"command_id": "open-tool-steering", "path": str(tool_root)}, "/v1/workspaces")
+        assert status == 202
         status, tool_session = request(endpoint, token, "POST", {
             "command_id": "tool-steering-session", "title": "tool steering", "provider": PROVIDER,
-            "model": MODEL, "max_tokens": None, "execution": policy,
+            "model": MODEL, "max_tokens": None, "workspace": {"workspace_id": tool_workspace["id"], "allowed_tools": policy["allowed_tools"], "limits": {k: v for k, v in policy.items() if k not in {"root", "allowed_tools"}}},
         }, "/v1/sessions")
         if status != 202:
             raise RuntimeError(f"could not create steering tool session: {status} {tool_session}")
@@ -596,9 +609,11 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
         immediate_root = root / "immediate-workspace"
         immediate_root.mkdir(parents=True, exist_ok=True)
         immediate_policy = {**policy, "root": str(immediate_root)}
+        status, immediate_workspace = request(endpoint, token, "POST", {"command_id": "open-immediate-steering", "path": str(immediate_root)}, "/v1/workspaces")
+        assert status == 202
         status, immediate_session = request(endpoint, token, "POST", {
             "command_id": "immediate-tool-session", "title": "immediate tool", "provider": PROVIDER,
-            "model": MODEL, "max_tokens": None, "execution": immediate_policy,
+            "model": MODEL, "max_tokens": None, "workspace": {"workspace_id": immediate_workspace["id"], "allowed_tools": immediate_policy["allowed_tools"], "limits": {k: v for k, v in immediate_policy.items() if k not in {"root", "allowed_tools"}}},
         }, "/v1/sessions")
         if status != 202:
             raise RuntimeError(f"could not create immediate tool session: {status} {immediate_session}")

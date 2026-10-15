@@ -13,8 +13,12 @@ Schema version 2 added sessions, text turns, ordered messages, command receipts,
 and semantic events. Schema 3 adds structured blocks, private continuation,
 frozen settings, model requests, tool intents/results, workspace roots, and
 artifact metadata. Schema 4 adds durable steering instructions and
-pause/resume/usage-uncertainty state. Schema 5 adds projects, managed session
-workspaces, project events, and a session's managed-workspace reference.
+pause/resume/usage-uncertainty state. Schema 5 historically added project
+registrations, managed session workspaces, project events, and
+session-managed-workspace references. The unified workspace redesign removes
+that project ownership model: workspace records identify canonical directories
+independently of sessions, and worktrees are explicit workspace records. This is
+schema history, not the current wire contract; see [workspaces](workspaces.md).
 Schema 6 adds tasks with requested/effective inputs, run/session/turn links,
 task events, and batches with frozen matrix inputs and admission caps.
 Schema 7 adds persistent admission tickets/clock, task/batch operation ledgers,
@@ -55,8 +59,18 @@ sessions, messages, tools, and workspaces are retained during migration; histori
 retry sessions remain individually inspectable, while new retries stay in their
 conversation and workspace. Historical task/run identifiers change to the
 corresponding session/turn IDs.
+Schema 22 replaces the project and managed-workspace tables with one workspace
+registry and workspace event journal. Workspace identity is the canonical path;
+Git common-directory identity is optional metadata. Every session has a non-null
+workspace reference, including the permanent `default` record named **No workspace**
+whose path is null. Existing directories and worktrees retain their paths and
+provenance; old unallocated reservations become failed records rather than
+implicitly creating worktrees. Explicit directory/worktree creation reserves
+capacity and records its command receipt before filesystem work. Startup marks
+unfinished creation/removal failed with unknown effects and never replays it.
+
 See [structured execution](structured-execution.md) and
-[projects/workspaces](projects-workspaces.md). The worker
+[workspaces](workspaces.md). The worker
 uses bundled SQLite through `rusqlite`, WAL, FULL synchronization, foreign keys,
 and a bounded busy timeout. Node identity and display-name changes commit in a
 transaction before startup is announced.
@@ -84,15 +98,16 @@ linked version and relevant fixes when updating the binding.
   artifacts/
     <content-hash>/...       # bounded files and metadata references
   workspaces/
-    <project-id>/<workspace-id>/ # managed worktrees allocated on admission
+    <workspace-id>/...         # daemon-owned managed Git worktree directories
   transfer-staging/
     <transfer-id>/...        # validated future handoff packages
 ```
 
 The lock, database, SQLite sidecars when needed, local API credential, and
 [runtime provider credentials](provider-credentials.md) are implemented.
-Provider files are created only when configured. Artifacts and lazily allocated
-managed workspaces are implemented; transfer staging remains a future layout.
+Provider files are created only when configured. Ordinary workspace directories
+remain at their canonical external paths. Explicitly created managed worktrees
+are daemon-owned; transfer staging remains a future layout.
 
 Linux config is `$XDG_CONFIG_HOME/slopconductor/config.toml` (default
 `~/.config/slopconductor/config.toml`), and authoritative data is
@@ -112,8 +127,7 @@ operational output and must redact credentials.
 | Records | Important fields |
 | --- | --- |
 | Nodes | Stable ID, display name, OS, optional physical-machine group |
-| Projects | Logical ID, repository identity, local path mappings |
-| Workspaces | Project, base commit, branch, path, owner run, reservation mode |
+| Workspaces | Canonical path, owner node, optional Git common directory, worktree provenance, optional frozen base, lifecycle state |
 | Sessions | Stable ID, owner ID/epoch, title, lifecycle, context policy, revision |
 | Messages | Session, author/role, content/artifact refs, completion status |
 | Tasks | Session, goal, target, policy, budget, state, parent task |
@@ -224,8 +238,9 @@ multi-writer database synchronization.
 ## Future migration compatibility
 
 Keep absolute local paths and credential handles outside portable session
-content. A checkpoint refers to logical projects/workspaces and tool capabilities;
-the target supplies its mappings. Record provider-owned opaque context
+content. A checkpoint refers to workspace IDs, portable tool capabilities, and
+optional source-path metadata; the target supplies its own workspace-ID and
+path mappings. Record provider-owned opaque context
 separately so a destination can validate whether it is still usable.
 
 See [migration](migration.md) for handoff and workspace packaging.

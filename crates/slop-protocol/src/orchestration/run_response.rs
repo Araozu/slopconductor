@@ -8,7 +8,7 @@ pub struct RunResponse {
     pub attempt: u32,
     pub retry_of: Option<String>,
     pub session_id: String,
-    pub workspace_id: Option<String>,
+    pub workspace_id: String,
     pub effects_unknown: bool,
     pub turn: TurnResponse,
 }

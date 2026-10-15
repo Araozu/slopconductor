@@ -11,7 +11,7 @@ from chat_smoke import isolated_env, request, run, start_daemon, stop_daemon, wa
 
 class DelegationFixture:
     def __init__(self):
-        self.project_id = None
+        self.workspace_ids = []
         self.calls = []
         self.notification_visible = False
         self.any_join_seen = False
@@ -40,6 +40,8 @@ class DelegationFixture:
                         fixture.notification_visible = True
 
                 def call(name, args, index=0):
+                    if name == "child_create":
+                        args["spec"].setdefault("workspace", {"workspace_id": "default", "allowed_tools": []})
                     return {"index": index, "id": f"fixture-{len(results)}-{index}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
 
                 calls = []
@@ -78,7 +80,7 @@ class DelegationFixture:
                         for index, child_prompt in enumerate(prompts):
                             spec = {"prompt": child_prompt, "model": "opencode-go/glm-5.3-flash", "settings": {"max_output_tokens": 64}}
                             if prompt in {"delegate", "recovery-parent"}:
-                                spec["project"] = {"project_id": fixture.project_id, "allowed_tools": ["bash"] if prompt == "recovery-parent" else ["write"]}
+                                spec["workspace"] = {"workspace_id": fixture.workspace_ids[index if prompt == "delegate" else 2], "allowed_tools": ["bash"] if prompt == "recovery-parent" else ["write"]}
                             args = {"spec": spec}
                             if prompt == "delegate" and index == 0:
                                 args["context"] = {"artifact_ids": artifact_ids}
@@ -180,12 +182,15 @@ def check_delegation(daemon_binary, cli_binary, root):
                 time.sleep(0.03)
             raise RuntimeError(f"did not observe {description}")
 
-        project = cli("project", "register", str(repo), "--command-id", "delegation-project")
-        fixture.project_id = project["id"]
+        project = cli("workspace", "open", str(repo), "--command-id", "delegation-project")
+        for index in range(3):
+            created = cli("workspace", "worktree", project["id"], "--command-id", f"child-workspace-{index}")
+            wait_for(lambda: api(f"/v1/workspaces/{created['id']}")["status"] == "ready", "explicit child workspace creation")
+            fixture.workspace_ids.append(created["id"])
         policy = {"max_children": 4, "max_depth": 2, "allowed_models": ["opencode-go/glm-5.3-flash"], "allowed_tools": ["write", "bash"]}
         policy_file = root / "policy.json"
         policy_file.write_text(json.dumps(policy), encoding="utf-8")
-        parent = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--project", project["id"], "--orchestration-policy", str(policy_file), "--text", "delegate", "--command-id", "delegate")
+        parent = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--workspace-id", project["id"], "--orchestration-policy", str(policy_file), "--text", "delegate", "--command-id", "delegate")
         wait_for(lambda: cli("run", "show", parent["run_id"])["turn"]["status"] == "awaiting_children", "parent releasing its slot")
         children = cli("run", "children", parent["run_id"])["items"]
         assert len(children) == 2
@@ -241,7 +246,7 @@ def check_delegation(daemon_binary, cli_binary, root):
         cli("run", "pause", manual["run_id"], "--command-id", "pause-manual")
         manual_spec = api(f"/v1/runs/{manual['run_id']}")
         child_file = root / "manual-child.json"
-        child_file.write_text(json.dumps({"spec": {"prompt": "manual-child", "model": "opencode-go/glm-5.3-flash"}, "context": {"message_ids": [manual_spec["turn"]["user_message_id"]]}}), encoding="utf-8")
+        child_file.write_text(json.dumps({"spec": {"workspace": {"workspace_id": "default", "allowed_tools": []}, "prompt": "manual-child", "model": "opencode-go/glm-5.3-flash"}, "context": {"message_ids": [manual_spec["turn"]["user_message_id"]]}}), encoding="utf-8")
         manual_child = cli("run", "create-child", manual["run_id"], str(child_file), "--command-id", "manual-child")
         assert cli("run", "create-child", manual["run_id"], str(child_file), "--command-id", "manual-child") == manual_child
         parent_snapshot = cli("task", "show", manual["task_id"])
@@ -258,7 +263,7 @@ def check_delegation(daemon_binary, cli_binary, root):
         assert cli("run", "wait", manual["run_id"], "--child-run", manual_child["run_id"], "--command-id", "manual-wait") == waited
 
         # Tool budget denial happens before filesystem dispatch.
-        limited = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--project", project["id"], "--tool", "write", "--text", "budget-tool", "--max-model-requests", "1", "--max-tool-calls", "0", "--command-id", "budget-tool")
+        limited = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--workspace-id", project["id"], "--tool", "write", "--text", "budget-tool", "--max-model-requests", "1", "--max-tool-calls", "0", "--command-id", "budget-tool")
         failed = wait_turn(endpoint, token, limited["turn_id"], {"failed"})
         assert failed["error_code"] == "operation_budget_exhausted", failed
         task = cli("task", "show", limited["task_id"])
@@ -287,7 +292,7 @@ def check_delegation(daemon_binary, cli_binary, root):
 
         # Kill a real child shell after its side effect; preserve parent links and
         # the known wait, disclose uncertainty, and never repeat the old tool.
-        recovery = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--project", project["id"], "--orchestration-policy", str(policy_file), "--text", "recovery-parent", "--command-id", "recovery-parent")
+        recovery = cli("task", "create", "--model", "opencode-go/glm-5.3-flash", "--workspace-id", project["id"], "--orchestration-policy", str(policy_file), "--text", "recovery-parent", "--command-id", "recovery-parent")
         child = wait_for(lambda: (lambda items: items[0] if items else None)(cli("run", "children", recovery["run_id"])["items"]), "recovery child acceptance")
         workspace = api(f"/v1/workspaces/{child['latest_run']['workspace_id']}")
         marker = Path(workspace["path"]) / "marker.txt"

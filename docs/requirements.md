@@ -28,8 +28,10 @@ Priority orders work; it does not imply a future capability is already available
 | N14 | Tailscale required initially for remote access | Connectivity builds on an existing private network. |
 | N15 | API keys and supported subscriptions | Authentication must fit the provider's documented access path. |
 | N16 | Efficient many-session operation | Measure baseline and incremental session memory; bound retained data. |
-| N17 | Git worktree orchestration | Multiple writable coding tasks can use separate workspaces in one project. |
+| N17 | Git worktree orchestration | Users explicitly create separate workspaces for parallel writers; worktrees are never allocated implicitly by sessions or orchestration. |
 | N18 | Native child task creation | Agents can create sessions/tasks using the same controlled operations as clients. |
+| N19 | Every conversation belongs to a workspace | Thread creation requires an existing workspace ID; the permanent No workspace record contains directory-less threads. |
+| N20 | Worktree creation is explicit | Opening a directory uses it in place. Only an explicit operation from an existing workspace creates a worktree; lifecycle ownership is metadata. |
 
 N02 permits JS in a browser interface or optional Electron client. N03 permits
 supervised subprocesses for actual tools, such as Git, shell, tests, and browsers.
@@ -47,7 +49,7 @@ promise that an entire machine contains only one operating-system process.
 | F05 | Reconnectable events | M1, local slice implemented | A client catches up after disconnect without rerunning work. |
 | F06 | Steering and cancellation | M1, local slice implemented | Queued, accepted, applied, and interrupted states are distinct. |
 | F07 | Run/task lifecycle and recovery | M1, local slice implemented | Restarted attempts and uncertain operations are visible. |
-| F08 | Project registration and worktrees | M2, session slice implemented | Registered projects reserve frozen-base worktrees; independent sessions allocate lazily and expose diffs/cleanup. |
+| F08 | Workspace registry and explicit worktrees | M2, local slice implemented | Open canonical directories in place; sessions select existing workspace IDs; explicit Git worktree creation freezes a base and exposes diffs and conservative cleanup. |
 | F09 | Prompt/model/parameter matrices | M2, three-axis slice implemented | Expansion is deterministic, previewable, and bounded. |
 | F10 | Batch results and selective retries | M2, local slice implemented | Outputs preserve parameters; successful tasks are retained. |
 | F11 | Agent-created child tasks | M2, bounded local slice implemented | One-level delegation, provider-qualified model choice, independent concurrency/outstanding limits, durable completion notices, steering, and all/any/timeout joins share the native scheduler and public contract. |
@@ -103,7 +105,7 @@ before acknowledgment or dependent execution.
 ## Resource and concurrency requirements
 
 P01: Admission limits cover active runs, model requests, subprocesses, browser
-contexts, queued child tasks, and per-project writers.
+contexts, queued child tasks, and concurrent writers per canonical workspace root.
 
 P02: Inactive session histories are stored on disk. Listing sessions uses
 pagination rather than loading complete conversations.

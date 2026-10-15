@@ -491,6 +491,7 @@ async fn schema_eleven_migrates_without_changing_existing_history() {
     complete(&c, &source, "message", "old prompt", "old reply").await;
     let original = c.messages(&source, None, 200).await.unwrap().items;
     c.submit(|db|{
+        workspaces::legacy_fixture(db).unwrap();
         db.execute_batch("DROP INDEX messages_request; ALTER TABLE sessions DROP COLUMN fork; ALTER TABLE turns DROP COLUMN history_only; ALTER TABLE messages DROP COLUMN deleted; ALTER TABLE messages DROP COLUMN context_excluded; ALTER TABLE messages DROP COLUMN provider; ALTER TABLE messages DROP COLUMN model; DROP TABLE child_notifications; ALTER TABLE child_links DROP COLUMN spawned_at_ms; ALTER TABLE child_links DROP COLUMN detached; ALTER TABLE child_links DROP COLUMN notification_mode; ALTER TABLE child_waits DROP COLUMN result; ALTER TABLE child_waits DROP COLUMN deadline_ms; ALTER TABLE child_waits DROP COLUMN mode; PRAGMA user_version=11;").unwrap(); Ok(())
     }).await.unwrap();
     store.shutdown().await.unwrap();
@@ -679,41 +680,33 @@ async fn event_failure_rolls_back_history_mutations_and_deletion_does_not_refund
 }
 
 #[tokio::test]
-async fn legacy_managed_sessions_fork_into_a_separate_workspace() {
+async fn forks_retain_the_selected_workspace_without_allocating() {
     let dir = TempDir::new().unwrap();
     let store = open_test(&dir, None).await;
     let c = store.client();
-    let source = c
-        .create_session(create_request("legacy-source", None))
-        .await
-        .unwrap()
-        .session_id;
-    complete(&c, &source, "legacy-prompt", "prompt", "reply").await;
-    let messages = c.messages(&source, None, 200).await.unwrap().items;
-    let root = dir.path().join("legacy-workspace");
+    let root = dir.path().join("workspace");
     fs::create_dir(&root).unwrap();
-    let policy = slop_protocol::execution::WorkspacePolicy {
-        root: root.to_str().unwrap().into(),
+    let w = c
+        .open_workspace(slop_protocol::workspaces::OpenWorkspaceRequest {
+            command_id: "open-fork-workspace".into(),
+            path: root.to_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    let mut request = create_request("workspace-source", None);
+    request.workspace = slop_protocol::workspaces::WorkspaceSelection {
+        workspace_id: w.id.clone(),
         allowed_tools: vec!["read".into()],
-        shell_timeout_ms: 30_000,
-        max_output_bytes: 1024 * 1024,
-        max_tool_calls: 32,
-        max_model_requests: 16,
+        limits: None,
     };
-    let session = source.clone();
-    c.submit(move |db| {
-        let node=query_node(db)?;
-        db.execute("INSERT INTO projects(id,owner_node_id,path,git_common_dir) VALUES('legacy-project',?1,?2,?3)", rusqlite::params![node.node_id,policy.root,root.join(".git").to_str().unwrap()]).unwrap();
-        db.execute("INSERT INTO managed_workspaces(id,project_id,session_id,owner_node_id,path,base_commit,status) VALUES('legacy-workspace','legacy-project',?1,?2,?3,?4,'ready')",rusqlite::params![session,node.node_id,policy.root,"a".repeat(40)]).unwrap();
-        db.execute("UPDATE sessions SET managed_workspace_id='legacy-workspace',execution=?1,workspace_root=?2 WHERE id=?3",rusqlite::params![canonical(&policy)?,policy.root,session]).unwrap();
-        Ok(())
-    }).await.unwrap();
-    assert!(c.session(&source).await.unwrap().spec.project.is_none());
+    let source = c.create_session(request).await.unwrap().session_id;
+    complete(&c, &source, "prompt", "prompt", "reply").await;
+    let messages = c.messages(&source, None, 200).await.unwrap().items;
     let fork = c
         .fork_session(
             &source,
             ForkSessionRequest {
-                command_id: "legacy-fork".into(),
+                command_id: "workspace-fork".into(),
                 message_id: messages[1].id.clone(),
                 ..Default::default()
             },
@@ -721,17 +714,8 @@ async fn legacy_managed_sessions_fork_into_a_separate_workspace() {
         .await
         .unwrap();
     let branch = c.session(&fork.session_id).await.unwrap();
-    let workspace = c
-        .workspace(branch.managed_workspace_id.as_ref().unwrap())
-        .await
-        .unwrap();
-    assert_eq!(workspace.status, "reserved");
-    assert_eq!(workspace.base_commit, "a".repeat(40));
-    assert_ne!(workspace.id, "legacy-workspace");
-    assert_ne!(
-        workspace.path,
-        c.session(&source).await.unwrap().execution.unwrap().root
-    );
-    assert_eq!(branch.spec.project.unwrap().allowed_tools, vec!["read"]);
+    assert_eq!(branch.workspace_id, w.id);
+    assert_eq!(branch.execution.unwrap().root, w.path.unwrap());
+    assert_eq!(c.workspaces(None, 200).await.unwrap().items.len(), 2);
     store.shutdown().await.unwrap();
 }

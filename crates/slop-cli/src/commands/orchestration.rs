@@ -10,7 +10,7 @@ use slop_protocol::{
     chat::{DeliveryMode, SendMessageRequest, TurnControlRequest},
     execution::GenerationSettings,
     orchestration::*,
-    projects::ProjectWorkspaceRequest,
+    workspaces::WorkspaceSelection,
 };
 use std::{
     io::{Read, Write},
@@ -30,15 +30,39 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
             max_model_requests,
             max_tool_calls,
             orchestration_policy,
-            project,
-            base,
+            workspace_id,
+            no_workspace,
             tools,
             command_id,
         } => {
             let prompt = prompt_value(text, prompt_file).await?;
+            if workspace_id.as_deref() == Some(slop_protocol::workspaces::DEFAULT_WORKSPACE_ID)
+                && !tools.is_empty()
+            {
+                return Err(
+                    "the default workspace has no directory and cannot enable tools".into(),
+                );
+            }
             let command_id = choose_command_id(command_id)?;
             let orchestration: Option<OrchestrationPolicy> =
                 orchestration_policy.as_deref().map(read_json).transpose()?;
+            let workspace = if no_workspace {
+                WorkspaceSelection::default()
+            } else {
+                workspace_id.map_or_else(WorkspaceSelection::default, |workspace_id| {
+                    WorkspaceSelection {
+                        allowed_tools: if tools.is_empty()
+                            && workspace_id != slop_protocol::workspaces::DEFAULT_WORKSPACE_ID
+                        {
+                            vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
+                        } else {
+                            tools
+                        },
+                        workspace_id,
+                        limits: None,
+                    }
+                })
+            };
             let response = client
                 .create_task(&CreateTaskRequest {
                     command_id: command_id.clone(),
@@ -59,15 +83,7 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
                             reasoning_effort: effort,
                             full_context: None,
                         },
-                        project: project.map(|project_id| ProjectWorkspaceRequest {
-                            project_id,
-                            base_ref: base,
-                            allowed_tools: if tools.is_empty() {
-                                vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
-                            } else {
-                                tools
-                            },
-                        }),
+                        workspace,
                     },
                 })
                 .await
@@ -468,9 +484,7 @@ fn show_run(r: &RunResponse) {
         "{}\tattempt {}\t{}\nSession: {}\nTurn: {}",
         r.id, r.attempt, r.turn.status, r.session_id, r.turn.id
     );
-    if let Some(w) = &r.workspace_id {
-        println!("Workspace: {w}");
-    }
+    println!("Workspace: {}", r.workspace_id);
     if let Some(e) = &r.turn.error_code {
         println!("Error: {e}");
     }

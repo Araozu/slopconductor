@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
-
+/// Open an existing directory in place. Never creates a worktree.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RegisterProjectRequest {
+pub struct OpenWorkspaceRequest {
     pub command_id: String,
-    /// Absolute checkout path on the owner's machine.
+    /// Existing absolute directory on the authoritative daemon.
     pub path: String,
 }

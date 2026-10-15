@@ -23,8 +23,9 @@ incrementing any ledger. Keep reservations after failure, uncertain outcomes,
 retry, and restart. Budgets limit operations, not billing totals.
 
 Require an explicit delegation policy and finite root budget. Bound depth and
-total children, choose context and tools explicitly, and use fresh sessions and
-separate frozen-base workspaces. Commit child creation and its native tool result
+total children, choose context, workspace, and tools explicitly, and use fresh
+sessions. A child that needs independent filesystem state selects a worktree
+created beforehand through the workspace API. Commit child creation and its native tool result
 together under an invocation-derived command ID.
 
 Persist waits on exact child attempt IDs. Awaiting parents release execution

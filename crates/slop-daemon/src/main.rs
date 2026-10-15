@@ -147,7 +147,7 @@ async fn run(args: Args) -> Result<()> {
         .merge(api::chat::router(Arc::clone(&state.token)))
         .merge(api::peers::router(Arc::clone(&state.token)))
         .merge(api::providers::router(Arc::clone(&state.token)))
-        .merge(api::projects::router(Arc::clone(&state.token)))
+        .merge(api::workspaces::router(Arc::clone(&state.token)))
         .merge(api::orchestration::router(Arc::clone(&state.token)))
         .with_state(state.clone())
         .merge(api::openapi::router());
@@ -306,7 +306,7 @@ pub(crate) async fn health() -> Json<HealthResponse> {
             "per-turn-settings".to_owned(),
             "execution-steering".to_owned(),
             "turn-pause-resume".to_owned(),
-            "managed-workspaces".to_owned(),
+            "unified-workspaces".to_owned(),
             "filesystem-navigation".to_owned(),
             "persistent-conversations".to_owned(),
             "durable-inbox".to_owned(),

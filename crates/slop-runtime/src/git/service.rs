@@ -394,7 +394,11 @@ impl GitService {
         base: &str,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<WorkspaceDiff, GitError> {
-        self.verify_workspace(repo, Path::new(path), cancel).await?;
+        self.verify(repo, cancel).await?;
+        let selected = self.inspect_with_cancel(path, cancel).await?;
+        if selected.path != path || selected.common_dir != repo.common_dir {
+            return Err(GitError::known("workspace_path_denied"));
+        }
         if !valid_commit(base) {
             return Err(GitError::known("invalid_base"));
         }
@@ -453,6 +457,7 @@ impl GitService {
             lock = self.mutations.lock() => lock,
             _ = cancel.changed() => return Err(GitError::known("cancelled")),
         };
+        self.verify_workspace(repo, Path::new(path), cancel).await?;
         let diff = self.diff_with_cancel(repo, path, base, cancel).await?;
         if !diff.status.is_empty() {
             return Err(GitError::known("workspace_dirty"));

@@ -1,6 +1,6 @@
 # Slop Conductor overview
 
-**Status as of 2026-10-14.** This is the master high-level map. Detailed design
+**Status as of 2026-10-15.** This is the master high-level map. Detailed design
 lives in the documents linked below; this file summarizes what exists today per
 crate so a new developer can get oriented without reading everything first.
 
@@ -12,8 +12,8 @@ itself. Each node owns its data. Scoped [daemon peering](daemon-peering.md) now
 adds explicit remote inspection/control; mirroring remains a future track.
 
 Implemented local slice: loopback daemon + authenticated API, durable text chat,
-structured Go/Zen/Codex tool execution, registered projects with
-managed Git worktrees, durable tasks/run attempts, deterministic batch matrices,
+structured Go/Zen/Codex tool execution, canonical workspaces with explicitly
+created Git worktrees, durable tasks/run attempts, deterministic batch matrices,
 fair admission with aggregate budgets, batch cancellation, and bounded native
 child tasks with one-level delegation, completion notifications, steering, and
 durable all/any/timeout joins. Earlier Linux and native Windows offline CI passed;
@@ -71,7 +71,7 @@ No runtime state or rendering.
 
 Modules: `lib.rs` (health/node, chat/session/message/turn/event DTOs),
 `execution.rs` (blocks, model requests, tool invocations, artifacts,
-capabilities, per-turn model/settings), `projects.rs` (project/workspace DTOs),
+capabilities, per-turn model/settings), `workspaces.rs` (workspace DTOs),
 `orchestration.rs` (tasks, runs, batches, delegation policies, parent/child
 links, exact-attempt waits, budgets, batch cancellation receipts).
 
@@ -99,7 +99,7 @@ Key areas:
   `next-boundary`, `immediate`), durable pause/resume.
 - `tools.rs`: native `read`, `write`, `edit`, `bash` with workspace policy,
   output bounds, deadlines, and process-group/Job Object cleanup.
-- `git.rs`: supervised Git worktree allocation, frozen-base resolution,
+- `git.rs`: explicit supervised Git worktree creation, frozen-base resolution,
   diff/status, conservative cleanup.
 - `orchestration.rs`: task attempts, matrix admission, fair tickets, aggregate
   budgets, batch cancellation, child creation/waits with slot release.
@@ -118,19 +118,19 @@ credential ownership. No presentation logic. Binaries: `slopd`.
 Key areas: `main.rs` (startup order, health/node routes, shutdown),
 `config.rs` (XDG/`LOCALAPPDATA` paths, loopback-only listener, TOML bounds),
 `auth.rs` + `credentials.rs` (private bearer token, provider key/ChatGPT
-storage), `api/chat.rs|providers.rs|projects.rs|orchestration.rs` (thin
+storage), `api/chat.rs|providers.rs|workspaces.rs|orchestration.rs` (thin
 handlers: authenticate, validate, invoke store/runtime, render DTO),
 `storage*.rs` + `storage/` (bounded SQLite worker, schemas 1–8, transactions
 that commit state + events + receipts together).
 
 Health advertises: `health`, `node`, `sessions`, `text-chat`,
 `provider-credentials`, `structured-messages`, `tools`, `per-turn-settings`,
-`execution-steering`, `turn-pause-resume`, `managed-workspaces`, `tasks-runs`,
+`execution-steering`, `turn-pause-resume`, `unified-workspaces`, `tasks-runs`,
 `orchestration-controls`, `child-tasks`, `batch-matrices`.
 
 Data layout under `<data-dir>/`: `daemon.lock`, `state.sqlite3`,
 `credentials/` (local token, Go/Zen/Codex keys, ChatGPT record),
-`artifacts/` (content-addressed), `workspaces/<project>/<workspace>/`.
+`artifacts/` (content-addressed), and daemon-owned managed worktree directories.
 
 Read with [daemon startup](daemon-startup-plan.md), [storage](storage.md),
 [text chat](text-chat.md), [provider credentials](provider-credentials.md), and
@@ -142,8 +142,8 @@ Owns daemon request/response transport, compatibility checks, error
 interpretation, bounded NDJSON decoding, and typed operations. No execution.
 
 Files: `src/lib.rs` (endpoint/token selection, health/version checks, chat/
-session/turn/artifact/provider calls), `src/orchestration.rs` (project/
-workspace/task/run/batch/child calls).
+session/turn/artifact/provider calls), `src/workspaces.rs` (workspace API), and
+`src/orchestration.rs` (task/run/batch/child calls).
 
 The CLI and a future `slop-tui` share this crate. Browser clients use the HTTP
 contract directly.
@@ -155,7 +155,7 @@ scheduler, model calls, or database access. Binary: `slop`. Default workspace
 member, so plain `cargo run` targets it.
 
 Groups: `status`, `node`, `models`, `capabilities`, `artifact`, `provider`,
-`chat`, `session`, `task`, `run`, `batch`, `project`, `workspace`, `turn`.
+`chat`, `session`, `task`, `run`, `batch`, `workspace`, `turn`.
 Supports `--json`, `--daemon`, `--token-file`/`SLOP_TOKEN_FILE`,
 `--command-id` for idempotent retries, piped/stdin/file prompts, event
 following with detach-on-Ctrl-C, and explicit cancel/pause/resume commands.
@@ -176,9 +176,9 @@ Read with [clients](clients.md).
    started, leaves queued/paused work alone, and never replays unknown side
    effects. Continue with a new message, explicit resume, or explicit retry
    into a fresh attempt.
-4. **Isolate code work.** Register a repo, freeze its base commit at session
-   acceptance, allocate a detached worktree after admission, expose diffs, and
-   require explicit cleanup that refuses dirty files or new commits.
+4. **Select code workspaces.** Open a directory in place or explicitly create a
+   worktree with a frozen base. Sessions select an existing workspace; same-root
+   writers serialize. Expose diffs and conservatively remove managed worktrees.
 5. **Scale jobs.** Preview a `BatchSpec` (prompts × models × settings, max 256
    members), submit atomically, admit lazily, retry selected indexes only, and
    export JSON Lines results.
@@ -201,7 +201,7 @@ Read with [clients](clients.md).
   8,192 messages / 16 MiB context (275k token cost cap, opt-in full model window);
   1 MiB visible output; workspace call/request limits default to `u32::MAX`
   with explicit smaller caps supported; 30 s shell default (max 300 s);
-  200 rows/page; 256 projects/workspaces global, 32 workspaces/project; 1024
+  200 rows/page; 1024
   active attempts; batch 1–256 members, concurrency 1–16. Child policies bound
   1–32 outstanding children and 1–8 active children, defaulting to 4 active.
   Completed children do not exhaust a lifetime count; aggregate budgets still apply.
@@ -227,7 +227,7 @@ and native Windows Server 2025 with no provider secrets.
   [requirements](requirements.md), [architecture](architecture.md).
 - Build slices: [text chat](text-chat.md),
   [structured execution](structured-execution.md),
-  [projects/workspaces](projects-workspaces.md),
+  [workspaces](workspaces.md),
   [tasks/batches](tasks-batches.md), [child tasks](child-tasks.md).
 - Cross-cutting: [protocol](protocol.md), [runtime](runtime.md),
   [storage](storage.md), [provider credentials](provider-credentials.md),
