@@ -227,6 +227,28 @@ pub(crate) async fn create_session(
 }
 
 #[utoipa::path(
+    patch,
+    path = "/v1/sessions/{session_id}",
+    tag = "chat",
+    params(("session_id" = String, Path, description = "Session id")),
+    request_body = slop_protocol::chat::RenameSessionRequest,
+    responses(
+        (status = 202, description = "Session rename accepted", body = slop_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Session not found", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn rename_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<RenameSessionRequest>,
+) -> Response {
+    accepted(state.store.rename_session(&id, request).await)
+}
+
+#[utoipa::path(
     get,
     path = "/v1/sessions/{session_id}",
     tag = "chat",

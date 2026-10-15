@@ -15,7 +15,7 @@ use slop_protocol::{
     ErrorResponse,
     chat::{
         CancelTurnRequest, CreateSessionRequest, EventFrame, EventResponse, ModelResponse,
-        SendMessageRequest,
+        RenameSessionRequest, SendMessageRequest,
     },
 };
 
@@ -40,7 +40,10 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/models", get(models))
         .route("/v1/sessions", get(sessions).post(create_session))
-        .route("/v1/sessions/{session_id}", get(session))
+        .route(
+            "/v1/sessions/{session_id}",
+            get(session).patch(rename_session),
+        )
         .route("/v1/sessions/{session_id}/fork", post(fork_session))
         .route(
             "/v1/sessions/{session_id}/messages/{message_id}",

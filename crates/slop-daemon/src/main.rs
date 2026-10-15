@@ -311,6 +311,7 @@ pub(crate) async fn health() -> Json<HealthResponse> {
             "persistent-conversations".to_owned(),
             "durable-inbox".to_owned(),
             "chat-history-editing".to_owned(),
+            "session-title-rename".to_owned(),
             "orchestration-controls".to_owned(),
             "child-tasks".to_owned(),
             "subagent-v2".to_owned(),

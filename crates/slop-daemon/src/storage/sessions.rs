@@ -14,6 +14,42 @@ pub(super) fn create_session(
     Ok(receipt)
 }
 
+pub(super) fn rename_session(
+    connection: &Connection,
+    id: &str,
+    request: slop_protocol::chat::RenameSessionRequest,
+) -> StoreResult<CommandReceipt> {
+    if !valid_command_id(&request.command_id)
+        || request.title.trim().is_empty()
+        || request.title.len() > 256
+        || request.title.chars().any(char::is_control)
+    {
+        return Err(StoreError::Invalid);
+    }
+    let tx = connection
+        .unchecked_transaction()
+        .map_err(|_| StoreError::Database)?;
+    let scope = format!("session_rename:{id}");
+    let payload = canonical(&request)?;
+    if let Some(receipt) = prior_receipt(&tx, &request.command_id, &scope, &payload)? {
+        return Ok(receipt);
+    }
+    let title = request.title.trim();
+    tx.execute(
+        "UPDATE sessions SET title=?1 WHERE id=?2",
+        rusqlite::params![title, id],
+    )
+    .map_err(|_| StoreError::Database)?;
+    if tx.changes() == 0 {
+        return Err(StoreError::NotFound);
+    }
+    let (revision, sequence) = append_event(&tx, id, "session_renamed", None, None)?;
+    let receipt = make_receipt(&request.command_id, id, None, None, revision, sequence);
+    commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
+    tx.commit().map_err(|_| StoreError::Database)?;
+    Ok(receipt)
+}
+
 pub(super) fn create_session_tx(
     tx: &Transaction<'_>,
     request: CreateSessionRequest,

@@ -114,6 +114,20 @@ impl DaemonClient {
             .await
     }
 
+    pub async fn rename_session(
+        &self,
+        session_id: &str,
+        request: &RenameSessionRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("session-title-rename").await?;
+        self.mutate_json(
+            reqwest::Method::PATCH,
+            session_url(&self.endpoint, session_id, None)?,
+            request,
+        )
+        .await
+    }
+
     pub async fn history(
         &self,
         session_id: &str,

@@ -241,6 +241,16 @@ impl StoreClient {
             .await
     }
 
+    pub async fn rename_session(
+        &self,
+        id: &str,
+        request: slop_protocol::chat::RenameSessionRequest,
+    ) -> StoreResult<CommandReceipt> {
+        let id = id.to_owned();
+        self.submit(move |connection| rename_session(connection, &id, request))
+            .await
+    }
+
     pub async fn send_message(
         &self,
         session_id: &str,

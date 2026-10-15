@@ -10,7 +10,8 @@ use slop_protocol::{
     chat::{
         CancelTurnRequest, CommandReceipt, CreateSessionRequest, DeleteMessageRequest,
         EditMessageRequest, EventFrame, ForkSessionRequest, MessageResponse, ModelResponse, Page,
-        SendMessageRequest, SessionResponse, TurnResponse, UpdateSessionInboxRequest,
+        RenameSessionRequest, SendMessageRequest, SessionResponse, TurnResponse,
+        UpdateSessionInboxRequest,
     },
     providers::{
         LoginResponse, LoginStatus, ProviderAccount, ProviderCatalog, ProviderStatus,
