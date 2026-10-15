@@ -930,6 +930,7 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let checkout = temp.path().join("worktree");
         fs::create_dir(&checkout).unwrap();
+        let checkout = fs::canonicalize(checkout).unwrap();
         let store = open(data.clone()).await;
         let c = store.client();
         let directory = c
