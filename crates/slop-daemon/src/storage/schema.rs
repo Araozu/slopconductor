@@ -117,6 +117,10 @@ where
         if existing_version < 19 {
             peers::migrate(&tx)?;
         }
+        if existing_version < 20 {
+            tx.execute_batch("ALTER TABLE managed_workspaces ADD COLUMN name TEXT NOT NULL DEFAULT ''; UPDATE managed_workspaces SET name=id;")
+                .map_err(|_| StoreError::Database)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

@@ -151,6 +151,7 @@ impl utoipa::Modify for BearerSecurity {
         super::projects::workspace,
         super::projects::diff,
         super::projects::remove,
+        super::projects::rename,
     ),
     components(
         schemas(
@@ -228,6 +229,7 @@ impl utoipa::Modify for BearerSecurity {
             slop_protocol::projects::ProjectWorkspaceRequest,
             slop_protocol::projects::RegisterProjectRequest,
             slop_protocol::projects::RemoveWorkspaceRequest,
+            slop_protocol::projects::RenameWorkspaceRequest,
             slop_protocol::projects::WorkspaceDiffResponse,
             slop_protocol::projects::WorkspaceResponse,
             slop_protocol::providers::LoginResponse,
@@ -364,6 +366,7 @@ mod tests {
         "/v1/workspaces/{id}",
         "/v1/workspaces/{id}/diff",
         "/v1/workspaces/{id}/remove",
+        "/v1/workspaces/{id}/rename",
     ];
 
     #[test]

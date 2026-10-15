@@ -8,7 +8,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use slop_protocol::projects::{RegisterProjectRequest, RemoveWorkspaceRequest};
+use slop_protocol::projects::{
+    RegisterProjectRequest, RemoveWorkspaceRequest, RenameWorkspaceRequest,
+};
 use std::sync::{Arc, atomic::Ordering};
 
 pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
@@ -26,6 +28,7 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/workspaces/{id}", get(workspace))
         .route("/v1/workspaces/{id}/diff", get(diff))
         .route("/v1/workspaces/{id}/remove", post(remove))
+        .route("/v1/workspaces/{id}/rename", post(rename))
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024))
         .route_layer(middleware::from_fn(super::chat::normalize_rejections))
         .route_layer(middleware::from_fn_with_state(
@@ -214,6 +217,37 @@ pub(crate) async fn remove(
         );
     }
     accepted(state.store.remove_workspace(&id, request).await)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/workspaces/{id}/rename",
+    tag = "projects",
+    params(("id" = String, Path, description = "Workspace id")),
+    request_body = RenameWorkspaceRequest,
+    responses(
+        (status = 202, description = "Workspace renamed", body = slop_protocol::projects::WorkspaceResponse),
+        (status = 400, description = "Invalid request", body = slop_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
+        (status = 404, description = "Workspace not found", body = slop_protocol::ErrorResponse),
+        (status = 409, description = "Workspace or command state conflict", body = slop_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down", body = slop_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn rename(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<RenameWorkspaceRequest>,
+) -> Response {
+    if !state.accepting.load(Ordering::Acquire) {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "The daemon is shutting down.",
+        );
+    }
+    accepted(state.store.rename_workspace(&id, request).await)
 }
 
 #[utoipa::path(

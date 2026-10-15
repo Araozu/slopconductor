@@ -101,6 +101,26 @@ pub(super) async fn workspace(command: WorkspaceCommand, context: &Context) -> R
                 print!("{}{}", response.status, response.patch);
             })
         }
+        WorkspaceCommand::Rename {
+            id,
+            name,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let response = client
+                .rename_workspace(
+                    &id,
+                    &slop_protocol::projects::RenameWorkspaceRequest {
+                        command_id: command_id.clone(),
+                        name,
+                    },
+                )
+                .await
+                .map_err(|error| mutation_error(error, &command_id))?;
+            context
+                .output
+                .value(&response, || println!("{}\t{}", response.name, response.id))
+        }
         WorkspaceCommand::Remove { id, command_id } => {
             let command_id = choose_command_id(command_id)?;
             let response = client

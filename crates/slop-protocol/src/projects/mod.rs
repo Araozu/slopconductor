@@ -12,5 +12,7 @@ mod workspace_diff_response;
 pub use workspace_diff_response::WorkspaceDiffResponse;
 mod remove_workspace_request;
 pub use remove_workspace_request::RemoveWorkspaceRequest;
+mod rename_workspace_request;
+pub use rename_workspace_request::RenameWorkspaceRequest;
 mod project_event_response;
 pub use project_event_response::ProjectEventResponse;

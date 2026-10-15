@@ -22,6 +22,7 @@ slop chat --project PROJECT_ID --base main --prompt "Improve error handling." --
 slop project workspaces PROJECT_ID
 slop session show SESSION_ID
 slop workspace show WORKSPACE_ID
+slop workspace rename WORKSPACE_ID "Readable name" --command-id rename-a
 slop workspace diff WORKSPACE_ID
 slop project events PROJECT_ID
 slop workspace remove WORKSPACE_ID --command-id cleanup-a
@@ -141,7 +142,8 @@ or workspace mutations to older daemons.
 | `GET /v1/projects/{id}` | Project identity/local mapping |
 | `GET /v1/projects/{id}/workspaces` | Paginated workspace provenance/states |
 | `GET /v1/projects/{id}/events` | Paginated durable project/workspace events |
-| `GET /v1/workspaces/{id}` | Workspace state and failure details |
+| `GET /v1/workspaces/{id}` | Workspace state and failure details, including its display name |
+| `POST /v1/workspaces/{id}/rename` | Rename `{"command_id":"rename-1","name":"Readable name"}` without moving its path |
 | `GET /v1/workspaces/{id}/diff` | Bounded diff/status against the frozen base |
 | `POST /v1/workspaces/{id}/remove` | Accept `{"command_id":"cleanup-1"}` |
 

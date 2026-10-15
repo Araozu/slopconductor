@@ -8,6 +8,12 @@ pub enum WorkspaceCommand {
     Diff {
         id: String,
     },
+    Rename {
+        id: String,
+        name: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
     Remove {
         id: String,
         #[arg(long)]

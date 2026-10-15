@@ -53,14 +53,15 @@ fn project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectResponse> {
 fn workspace_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceResponse> {
     Ok(WorkspaceResponse {
         id: row.get(0)?,
-        project_id: row.get(1)?,
-        session_id: row.get(2)?,
-        owner_node_id: row.get(3)?,
-        path: row.get(4)?,
-        base_commit: row.get(5)?,
-        status: row.get(6)?,
-        error_code: row.get(7)?,
-        effects_unknown: row.get(8)?,
+        name: row.get(1)?,
+        project_id: row.get(2)?,
+        session_id: row.get(3)?,
+        owner_node_id: row.get(4)?,
+        path: row.get(5)?,
+        base_commit: row.get(6)?,
+        status: row.get(7)?,
+        error_code: row.get(8)?,
+        effects_unknown: row.get(9)?,
     })
 }
 pub(super) fn project(connection: &Connection, id: &str) -> StoreResult<ProjectResponse> {
@@ -75,7 +76,7 @@ pub(super) fn project(connection: &Connection, id: &str) -> StoreResult<ProjectR
         .ok_or(StoreError::NotFound)
 }
 pub(super) fn workspace(connection: &Connection, id: &str) -> StoreResult<WorkspaceResponse> {
-    connection.query_row("SELECT id,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown FROM managed_workspaces WHERE id=?1", [id], workspace_row)
+    connection.query_row("SELECT id,name,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown FROM managed_workspaces WHERE id=?1", [id], workspace_row)
         .optional().map_err(|_| StoreError::Database)?.ok_or(StoreError::NotFound)
 }
 pub(super) fn repository(project: &ProjectResponse) -> Repository {
@@ -185,6 +186,7 @@ pub(super) fn reserve(
     }
     Ok((
         WorkspaceResponse {
+            name: id.clone(),
             id,
             project_id: registered.id,
             session_id: session.to_owned(),
@@ -203,7 +205,7 @@ pub(super) fn insert_workspace(
     tx: &Transaction<'_>,
     workspace: &WorkspaceResponse,
 ) -> StoreResult<(u64, u64)> {
-    tx.execute("INSERT INTO managed_workspaces(id,project_id,session_id,owner_node_id,path,base_commit,status) VALUES(?1,?2,?3,?4,?5,?6,'reserved')", rusqlite::params![workspace.id, workspace.project_id, workspace.session_id, workspace.owner_node_id, workspace.path, workspace.base_commit]).map_err(|_| StoreError::Database)?;
+    tx.execute("INSERT INTO managed_workspaces(id,name,project_id,session_id,owner_node_id,path,base_commit,status) VALUES(?1,?1,?2,?3,?4,?5,?6,'reserved')", rusqlite::params![workspace.id, workspace.project_id, workspace.session_id, workspace.owner_node_id, workspace.path, workspace.base_commit]).map_err(|_| StoreError::Database)?;
     tx.execute(
         "UPDATE sessions SET managed_workspace_id=?1 WHERE id=?2",
         rusqlite::params![workspace.id, workspace.session_id],
@@ -262,7 +264,7 @@ pub(super) fn require_available(
 }
 
 pub(super) fn recover(tx: &Transaction<'_>) -> StoreResult<()> {
-    let mut statement = tx.prepare("SELECT id,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown FROM managed_workspaces WHERE status IN('allocating','removing')").map_err(|_| StoreError::Database)?;
+    let mut statement = tx.prepare("SELECT id,name,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown FROM managed_workspaces WHERE status IN('allocating','removing')").map_err(|_| StoreError::Database)?;
     let workspaces = statement
         .query_map([], workspace_row)
         .map_err(|_| StoreError::Database)?
@@ -434,6 +436,42 @@ impl StoreClient {
         self.submit(move |connection| workspace(connection, &id))
             .await
     }
+    pub async fn rename_workspace(
+        &self,
+        id: &str,
+        request: RenameWorkspaceRequest,
+    ) -> StoreResult<WorkspaceResponse> {
+        let id = id.to_owned();
+        let payload = canonical(&request)?;
+        self.submit(move |connection| {
+            let tx = connection
+                .unchecked_transaction()
+                .map_err(|_| StoreError::Database)?;
+            let scope = format!("workspace:{id}:rename");
+            if let Some(prior) = prior(&tx, &request.command_id, &scope, &payload)? {
+                return Ok(prior);
+            }
+            let current = workspace(&tx, &id)?;
+            let name = request.name.trim();
+            if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+                return Err(StoreError::Invalid);
+            }
+            if matches!(current.status.as_str(), "removed" | "removing") {
+                return Err(StoreError::Conflict);
+            }
+            tx.execute(
+                "UPDATE managed_workspaces SET name=?1 WHERE id=?2",
+                rusqlite::params![name, id],
+            )
+            .map_err(|_| StoreError::Database)?;
+            event(&tx, &current.project_id, Some(&id), "workspace_renamed")?;
+            let response = workspace(&tx, &id)?;
+            save(&tx, &request.command_id, &scope, &payload, &response)?;
+            tx.commit().map_err(|_| StoreError::Database)?;
+            Ok(response)
+        })
+        .await
+    }
     pub async fn projects(
         &self,
         after: Option<u64>,
@@ -454,7 +492,7 @@ impl StoreClient {
         let limit = page_limit(limit)?;
         self.submit(move |connection| {
             project(connection, &id)?;
-            page(connection, "SELECT id,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown,created_order FROM managed_workspaces WHERE created_order>?1 AND project_id=?3 ORDER BY created_order LIMIT ?2", Some(&id), after, limit, 9, workspace_row)
+            page(connection, "SELECT id,name,project_id,session_id,owner_node_id,path,base_commit,status,error_code,effects_unknown,created_order FROM managed_workspaces WHERE created_order>?1 AND project_id=?3 ORDER BY created_order LIMIT ?2", Some(&id), after, limit, 10, workspace_row)
         }).await
     }
     pub async fn project_events(
