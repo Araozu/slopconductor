@@ -59,7 +59,7 @@ pub fn validate(policy: &OrchestrationPolicy) -> bool {
             == policy.allowed_tools.len()
 }
 
-pub fn definitions(policy: &OrchestrationPolicy) -> Vec<ToolDefinition> {
+pub fn definitions(policy: &OrchestrationPolicy, workspace_id: &str) -> Vec<ToolDefinition> {
     let id = json!({"type":"string","minLength":1,"maxLength":128});
     let tool_names = if policy.allowed_tools.is_empty() {
         json!({"type":"array","items":{"type":"string"},"maxItems":0})
@@ -68,7 +68,11 @@ pub fn definitions(policy: &OrchestrationPolicy) -> Vec<ToolDefinition> {
     };
     let settings = json!({"type":"object","properties":{"max_output_tokens":{"type":["integer","null"],"minimum":1,"maximum":65536},"reasoning_effort":{"type":["string","null"]},"full_context":{"type":["boolean","null"]}},"additionalProperties":false});
     let budget = json!({"type":"object","properties":{"max_model_requests":{"type":"integer","minimum":0,"maximum":1000000},"max_tool_calls":{"type":"integer","minimum":0,"maximum":1000000}},"required":["max_model_requests","max_tool_calls"],"additionalProperties":false});
-    let workspace = json!({"type":"object","properties":{"workspace_id":id,"allowed_tools":tool_names},"required":["workspace_id","allowed_tools"],"additionalProperties":false});
+    let mut workspace_id_schema = id.clone();
+    workspace_id_schema["description"] = json!(format!(
+        "Existing workspace ID. The parent uses '{workspace_id}'. Use 'default' with an empty allowed_tools list for a directory-less child. Other choices must be pre-created workspaces descended from the parent's workspace. Creating a child never creates a workspace or worktree."
+    ));
+    let workspace = json!({"type":"object","properties":{"workspace_id":workspace_id_schema,"allowed_tools":tool_names},"required":["workspace_id","allowed_tools"],"additionalProperties":false});
     let mut spec = json!({"type":"object","properties":{"title":{"type":["string","null"]},"prompt":{"type":"string","minLength":1,"maxLength":65536},"model":{"type":"string"},"settings":settings,"budget":budget},"required":["prompt","model","workspace"],"additionalProperties":false});
     if !policy.allowed_models.is_empty() {
         spec["properties"]["model"]["enum"] = json!(policy.allowed_models);
@@ -235,12 +239,18 @@ mod tests {
                 allowed_models: vec!["opencode-go/glm-5.3-flash".into()],
                 allowed_tools: vec![],
             };
-            let definitions = definitions(&policy);
+            let definitions = definitions(&policy, "parent-workspace");
             for definition in &definitions {
                 valid_ranges(&definition.parameters);
             }
             let spec = &definitions[0].parameters["properties"]["spec"];
             assert!(spec["properties"].get("workspace").is_some());
+            let workspace_description =
+                spec["properties"]["workspace"]["properties"]["workspace_id"]["description"]
+                    .as_str()
+                    .unwrap();
+            assert!(workspace_description.contains("parent-workspace"));
+            assert!(workspace_description.contains("'default'"));
             assert!(spec["properties"].get("orchestration").is_none());
         }
     }

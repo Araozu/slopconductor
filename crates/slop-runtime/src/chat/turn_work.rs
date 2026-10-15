@@ -15,6 +15,8 @@ use super::ContextMessage;
 pub struct TurnWork {
     pub turn_id: String,
     pub session_id: String,
+    /// Authoritative workspace selected by the conversation, including the default.
+    pub workspace_id: String,
     pub requested_model: String,
     pub max_tokens: Option<u32>,
     /// Legacy text-only repository input. Structured repositories populate

@@ -153,7 +153,10 @@ pub(crate) async fn execute<R: ChatRepository>(
         })
         .unwrap_or_default();
     if let Some(policy) = &work.orchestration {
-        definitions.extend(crate::orchestration::definitions(policy));
+        definitions.extend(crate::orchestration::definitions(
+            policy,
+            &work.workspace_id,
+        ));
     }
     let max_requests = work.max_model_requests.max(1);
     let max_tools = work.execution.as_ref().map_or(

@@ -402,6 +402,14 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
         .unwrap();
     let work = client.claim_next_turn().await.unwrap().unwrap();
     assert_eq!(work.turn_id, sent.turn_id.clone().unwrap());
+    assert_eq!(
+        work.workspace_id,
+        client
+            .session(&first.session_id)
+            .await
+            .unwrap()
+            .workspace_id
+    );
     assert_eq!(work.requested_model, "opencode-go/glm-5.3");
     assert_eq!(work.settings.max_output_tokens, Some(512));
     assert_eq!(

@@ -66,7 +66,9 @@ slop task follow PARENT_TASK_ID
 
 If a CLI policy is supplied without aggregate limit flags, it supplies a budget
 of 64 model requests and 128 tool calls. API callers supply their budget explicitly.
-Children that share a workspace serialize writes by canonical root. Each child
+The model-facing child tool describes the parent workspace ID and the explicit
+`default` choice, so a model can select an existing workspace without inventing
+an identifier. Children that share a workspace serialize writes by canonical root. Each child
 can select a different existing workspace when appropriate.
 
 Clients can also create a child directly. Replace the workspace ID in the

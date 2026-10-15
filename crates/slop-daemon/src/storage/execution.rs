@@ -1043,8 +1043,16 @@ pub(super) fn claim_next_turn(
     .map_err(|_| StoreError::Database)?;
     super::governance::admitted(&tx, &turn_id)?;
     append_event(&tx, &session_id, "turn_started", Some(&turn_id), None)?;
+    let workspace_id = tx
+        .query_row(
+            "SELECT workspace_id FROM sessions WHERE id=?1",
+            [&session_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
     tx.commit().map_err(|_| StoreError::Database)?;
     Ok(Some(TurnWork {
+        workspace_id,
         turn_id,
         session_id,
         requested_model,
