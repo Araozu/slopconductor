@@ -161,13 +161,13 @@ tools.
 The new fork starts its own operation ledger; inherited history is not charged
 as new inference or tool execution.
 
-The CLI prints message IDs in `slop session history`. For example:
+The CLI prints message IDs in `hivectl session history`. For example:
 
 ```sh
-slop session fork SESSION --message MESSAGE --command-id fork-1
-slop session rename SESSION "Readable title" --command-id rename-1
-slop session edit SESSION --message MESSAGE --text "Revised prompt" --command-id edit-1
-slop session delete-message SESSION --message MESSAGE --command-id delete-1
+hivectl session fork SESSION --message MESSAGE --command-id fork-1
+hivectl session rename SESSION "Readable title" --command-id rename-1
+hivectl session edit SESSION --message MESSAGE --text "Revised prompt" --command-id edit-1
+hivectl session delete-message SESSION --message MESSAGE --command-id delete-1
 ```
 
 `session edit` follows a new user turn unless `--detach` is supplied. Its input

@@ -150,14 +150,14 @@ Runtime provider configuration/login is implemented separately in
 For the default Linux data path:
 
 ```sh
-slop --json status
-slop --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
+hivectl --json status
+hivectl --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
 ```
 
 The CLI discovers the default token in the platform data directory for loopback
 queries and accepts `SLOP_TOKEN_FILE` as an override. Other origins require
 an explicit `--token-file`, so a changed endpoint does not silently select a
-local credential. `slop status` never sends that token. Client debug/error output
+local credential. `hivectl status` never sends that token. Client debug/error output
 redacts it, and the token-file client checks service/API compatibility before
 sending authorization. This check is not server authentication: select a trusted
 endpoint and credential file.

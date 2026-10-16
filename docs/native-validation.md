@@ -30,7 +30,7 @@ Both jobs passed the independent CLI build, formatting, Clippy with warnings
 denied, workspace tests, and the complete real-binary daemon/CLI smoke suite:
 
 ```sh
-cargo build -p slop-cli --locked
+cargo build -p hive-cli --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
@@ -57,7 +57,7 @@ M1/M2 are still partial.
 The current Codex work was checked locally on Linux with:
 
 ```sh
-cargo build -p slop-cli --locked
+cargo build -p hive-cli --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
@@ -90,12 +90,12 @@ The audit patch, rebased onto `bf7487f` to include the concurrent chat-history
 changes, passed locally on Linux x86_64 with Rust 1.99.0:
 
 ```sh
-cargo build -p slop-cli --locked
+cargo build -p hive-cli --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python3 scripts/smoke.py
-cargo build --release -p slop-daemon -p slop-cli --locked
+cargo build --release -p hive-daemon -p hive-cli --locked
 python3 scripts/memory_audit.py --runs 3
 ```
 
@@ -118,13 +118,13 @@ measurements remain outstanding. These latest checks were not run on Windows.
 The local M3 peer slice passed on Linux x86_64 with Rust 1.99.0:
 
 ```sh
-cargo build -p slop-cli --locked
+cargo build -p hive-cli --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python3 scripts/smoke.py
-cargo test -p slop-client --locked
-cargo test -p slop-daemon api::openapi --locked
+cargo test -p hive-client --locked
+cargo test -p hive-daemon api::openapi --locked
 ```
 
 The full offline workspace run passed 237 tests; thirteen credentialed live tests

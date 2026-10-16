@@ -35,19 +35,19 @@ the same features.
 
 The repository currently contains:
 
-- [Provider identities](../crates/slop-core/src/provider.rs) in `slop-core`.
-- A [runtime registry and `Provider` trait](../crates/slop-runtime/src/providers/mod.rs)
+- [Provider identities](../crates/hive-core/src/provider.rs) in `hive-core`.
+- A [runtime registry and `Provider` trait](../crates/hive-runtime/src/providers/mod.rs)
   covering metadata, compiled fallback mappings, and wire-protocol lookup.
   [Go/Zen model discovery](model-catalog.md) adds bounded public Models.dev
   refreshes, explicit reasoning efforts, and new supported API mappings.
-- Concrete [OpenCode Go](../crates/slop-runtime/src/providers/opencode_go.rs) and
-  [OpenCode Zen](../crates/slop-runtime/src/providers/opencode_zen.rs) clients
+- Concrete [OpenCode Go](../crates/hive-runtime/src/providers/opencode_go.rs) and
+  [OpenCode Zen](../crates/hive-runtime/src/providers/opencode_zen.rs) clients
   with live model listing, non-streaming inference, and SSE text streaming over
   three wire shapes. Each supplies its own metadata, catalog, and credential
-  variable to a [shared internal transport/decoder](../crates/slop-runtime/src/providers/opencode.rs).
+  variable to a [shared internal transport/decoder](../crates/hive-runtime/src/providers/opencode.rs).
   Runtime callers supply keys explicitly or from the environment. The daemon
   owns [runtime credential configuration and private XDG storage](provider-credentials.md).
-- A [headless Codex client](../crates/slop-runtime/src/providers/codex.rs)
+- A [headless Codex client](../crates/hive-runtime/src/providers/codex.rs)
   through the public Responses API, with native ChatGPT subscription login,
   protected credential records and serialized token refresh. Platform API keys
   are also supported. See [Codex connection](codex-connection.md) for setup and
@@ -128,7 +128,7 @@ Zen inference was performed. An optional budgeted check is available:
 
 ```sh
 # Set OPENCODE_ZEN_API_KEY explicitly before opting in.
-cargo test -p slop-runtime --test opencode_zen_live --locked -- --ignored
+cargo test -p hive-runtime --test opencode_zen_live --locked -- --ignored
 ```
 
 That suite makes one model-list request and six inference requests, each with a
@@ -139,9 +139,9 @@ fixtures and leave all live tests ignored.
 
 ```mermaid
 flowchart LR
-    Clients[CLI / TUI / web / Electron] --> Wire[slop-protocol public contract]
-    Wire --> Service[slop-daemon service]
-    Service --> Runtime[slop-runtime supervisor]
+    Clients[CLI / TUI / web / Electron] --> Wire[hive-protocol public contract]
+    Wire --> Service[hive-daemon service]
+    Service --> Runtime[hive-runtime supervisor]
     Runtime --> Adapter[Shared provider interface]
     Adapter --> Transport[Rust SDK or HTTP adapter]
     Transport --> API[Supported provider API]
@@ -154,11 +154,11 @@ serializes SDK objects or exposes runtime trait objects.
 
 | Layer | Responsibility |
 | --- | --- |
-| `slop-core` | Pure identities and execution invariants; no HTTP, SDK, credentials, or rendering dependencies. |
-| `slop-runtime::providers` | Shared execution types, capability validation, transport translation, normalized streams/errors, and opaque continuation handling. |
+| `hive-core` | Pure identities and execution invariants; no HTTP, SDK, credentials, or rendering dependencies. |
+| `hive-runtime::providers` | Shared execution types, capability validation, transport translation, normalized streams/errors, and opaque continuation handling. |
 | Runtime supervisor | Context assembly, request intent, admission/budgets, retry decisions, persistence, cancellation ordering, tool authorization and dispatch. |
-| `slop-daemon` | Compose adapters, endpoint/account configuration and credential resolution; map runtime facts into API DTOs. |
-| `slop-protocol` | Versioned discovery, content, event, error, and configuration DTOs independent of runtime dependencies. |
+| `hive-daemon` | Compose adapters, endpoint/account configuration and credential resolution; map runtime facts into API DTOs. |
+| `hive-protocol` | Versioned discovery, content, event, error, and configuration DTOs independent of runtime dependencies. |
 | Clients | Discover capabilities, submit commands, render canonical data, and reconnect through the public API. |
 
 Adapters are compiled in, following the current registry. This proposal adds no
@@ -486,7 +486,7 @@ DTOs. Existing session/task/run/message/event proposals carry selected
 provider/account/model references, requested/effective configuration, structured
 content, usage and normalized outcomes. This document adds no separate
 provider-specific conversation routes. Exact DTO and route details stabilize
-with implementation in `slop-protocol`.
+with implementation in `hive-protocol`.
 
 All clients must be able to perform the same common workflow:
 
@@ -504,7 +504,7 @@ Preserve core execution/status meaning across compatible clients. New incompatib
 required behavior needs API version handling, not an extension that older clients
 will unknowingly misinterpret.
 
-Wire schemas and native SDKs come from `slop-protocol`, never an upstream SDK or
+Wire schemas and native SDKs come from `hive-protocol`, never an upstream SDK or
 runtime struct. Health, configured auth, account readiness, model support and
 available admission capacity are separate facts. A client should not need a
 provider-name condition to implement the common workflow.
@@ -544,7 +544,7 @@ rejection, not by claiming simulated parity.
    safe-error, optional-usage and bound behavior; add explicit capability
    discovery and cancellation. Declare other features unsupported until shipped.
 4. Wire a persisted one-turn daemon request through the supervisor, then map its
-   canonical data to `slop-protocol`. This depends on the planned identity,
+   canonical data to `hive-protocol`. This depends on the planned identity,
    storage and authenticated API work; provider refactoring alone is insufficient.
 5. Add structured tools/context/continuation incrementally, with failure and
    recovery fixtures before enabling side effects. Add another adapter early
@@ -566,11 +566,11 @@ capability, or client-independence requirements above.
 This review covers the one-turn adapters and the implemented structured Go
 session/tool service. New structured execution checks use offline fixtures;
 the historical live results below apply to the earlier text-only adapter slice.
-The [provider surface fixtures](../crates/slop-runtime/tests/provider_surface.rs)
+The [provider surface fixtures](../crates/hive-runtime/tests/provider_surface.rs)
 exercise the shared trait with both real clients rejected before network dispatch
 and a deterministic fixture adapter. Decoder regression fixtures live in the
 shared OpenCode implementation, and
-[local HTTP fixtures](../crates/slop-runtime/src/providers/opencode/http_tests.rs)
+[local HTTP fixtures](../crates/hive-runtime/src/providers/opencode/http_tests.rs)
 exercise both concrete adapters with the same consumer. Live checks also use
 the shared trait and are ignored by default; their documented opt-in command requires a credential and
 names the request/output-token bounds.

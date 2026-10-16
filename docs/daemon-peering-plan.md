@@ -20,7 +20,7 @@ The implementation at the start of this work had useful prerequisites:
 - Durable node IDs and `owner_node_id` on conversations.
 - Existing session/history/event and turn-control operations, durable command
   receipts, revision checks, and reconnectable NDJSON events.
-- `slop-client` HTTP(S) transport with bounded responses, timeouts, no redirects,
+- `hive-client` HTTP(S) transport with bounded responses, timeouts, no redirects,
   no automatic transport retries, and explicit token files.
 - A loopback-only service and private local administrator token. This token
   grants broad access; it alone did not provide peer principals or scoped grants.
@@ -49,7 +49,7 @@ flowchart LR
 
 Deliver session listing, canonical history, event following, text steering, and
 pause/resume/cancel. Keep the first target explicit with a proposed CLI selector
-such as `slop --peer home session list`; this goes through the local daemon.
+such as `hivectl --peer home session list`; this goes through the local daemon.
 All command examples and route names here are illustrative.
 
 Remote creation of tasks/workspaces, cross-node agent delegation,
@@ -157,9 +157,9 @@ possible. Expose supported peer capabilities accurately.
    `read+control`, unchanged owner receipts, revision checks, and explicit
    unknown-delivery handling. Stop here for the first useful integration.
 
-Keep each step reviewable. Use `slop-protocol` for wire contracts,
-`slop-daemon` for listeners/policy/registry/storage/forwarding, `slop-client` for
-typed outbound transport, and `slop-cli` for commands. The daemon can depend on
+Keep each step reviewable. Use `hive-protocol` for wire contracts,
+`hive-daemon` for listeners/policy/registry/storage/forwarding, `hive-client` for
+typed outbound transport, and `hive-cli` for commands. The daemon can depend on
 the public client library for outbound requests; clients must still never depend
 on the runtime or daemon. Record that dependency in the architecture diagram
 when implemented. No scheduler or provider rewrite is needed.

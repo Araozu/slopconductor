@@ -71,7 +71,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Build independent CLI
-        run: cargo build -p slop-cli --locked
+        run: cargo build -p hive-cli --locked
 
       - name: Check Clippy
         run: python scripts/ci_check.py cargo clippy --workspace --all-targets --locked -- -D warnings

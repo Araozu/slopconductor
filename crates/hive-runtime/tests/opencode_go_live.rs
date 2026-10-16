@@ -1,0 +1,143 @@
+//! Live OpenCode Go checks. Run with `OPENCODE_GO_API_KEY` set:
+//!
+//! ```sh
+//! set -a; source .env; set +a
+//! cargo test -p hive-runtime --test opencode_go_live --locked -- --ignored
+//! ```
+//!
+//! Ignored by default: choose credentials and a live test budget explicitly.
+//! The full suite makes one model-list request and six inference requests:
+//! streaming and non-streaming turns each use output caps of 512 (Chat),
+//! 64 (Messages), and 512 (Responses) tokens; these are not billing caps.
+//! An explicitly selected live run fails if its credential is missing.
+
+use hive_runtime::providers::{
+    ChatMessage, ChatRequest, ChatResponse, ProviderClient, TurnOutcome, WireProtocol,
+    opencode_go::OpencodeGoClient,
+};
+
+fn live_client() -> Box<dyn ProviderClient> {
+    Box::new(OpencodeGoClient::from_env().expect("live checks require OPENCODE_GO_API_KEY"))
+}
+
+fn request(model: &str, text: &str, max_tokens: u32) -> ChatRequest {
+    ChatRequest {
+        model: model.to_owned(),
+        messages: vec![ChatMessage::user(text)],
+        max_tokens: Some(max_tokens),
+        session_id: format!("slop-live-{}", model.replace('.', "-")),
+    }
+}
+
+fn assert_completed_response(response: &ChatResponse, model: &str, wire: WireProtocol) {
+    assert_eq!(response.model, model);
+    assert_eq!(response.wire, wire);
+    assert_eq!(response.outcome, TurnOutcome::Completed);
+    assert!(!response.text.trim().is_empty());
+}
+
+async fn assert_streaming_turn(model: &str, max_tokens: u32, wire: WireProtocol) {
+    let client = live_client();
+    let request = request(model, "Reply with exactly: ok", max_tokens);
+    assert_eq!(
+        client.validate(&request).expect("validate streaming turn"),
+        wire
+    );
+    let mut deltas = 0;
+    let mut visible = String::new();
+    let response = client
+        .complete_streaming(&request, &mut |delta| {
+            deltas += 1;
+            visible.push_str(&delta.text);
+        })
+        .await
+        .expect("streaming completion");
+    assert!(deltas > 0, "expected at least one streaming delta");
+    assert_completed_response(&response, model, wire);
+    assert_eq!(
+        visible, response.text,
+        "deltas must match the assembled turn"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly selected live credential and test budget"]
+async fn live_model_list_contains_catalog_ids() {
+    let client = live_client();
+    let ids = client.list_models().await.expect("list_models");
+    assert!(!ids.is_empty());
+    for known in ["glm-5.3-flash", "claude-haiku-5-5", "gpt-6-luna"] {
+        assert!(
+            ids.iter().any(|id| id == known),
+            "live list is missing documented model {known}"
+        );
+    }
+    // Every catalog id must resolve to its documented wire shape.
+    for model in client.descriptor().models() {
+        assert!(client.descriptor().wire_protocol(model.id).is_ok());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly selected live credential and test budget"]
+async fn live_chat_completions_turn() {
+    let client = live_client();
+    // Reasoning models can spend a small budget on thinking before producing
+    // visible text; 512 tokens leaves room for both.
+    let response = client
+        .complete(&request("glm-5.3-flash", "Reply with exactly: ok", 512))
+        .await
+        .expect("chat completion");
+    assert_completed_response(
+        &response,
+        "glm-5.3-flash",
+        WireProtocol::OpenAiChatCompletions,
+    );
+    assert!(response.usage.total_tokens.is_some_and(|tokens| tokens > 0));
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly selected live credential and test budget"]
+async fn live_anthropic_messages_turn() {
+    let client = live_client();
+    let response = client
+        .complete(&request("claude-haiku-5-5", "Reply with exactly: ok", 64))
+        .await
+        .expect("messages completion");
+    assert_completed_response(
+        &response,
+        "claude-haiku-5-5",
+        WireProtocol::AnthropicMessages,
+    );
+    assert!(response.usage.total_tokens.is_some_and(|tokens| tokens > 0));
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly selected live credential and test budget"]
+async fn live_responses_turn() {
+    let client = live_client();
+    let response = client
+        .complete(&request("gpt-6-luna", "Reply with exactly: ok", 512))
+        .await
+        .expect("responses completion");
+    assert_completed_response(&response, "gpt-6-luna", WireProtocol::OpenAiResponses);
+    assert!(response.usage.total_tokens.is_some_and(|tokens| tokens > 0));
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly selected live credential and test budget"]
+async fn live_chat_streaming_assembles_text() {
+    assert_streaming_turn("glm-5.3-flash", 512, WireProtocol::OpenAiChatCompletions).await;
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly selected live credential and test budget"]
+async fn live_anthropic_streaming_assembles_text() {
+    assert_streaming_turn("claude-haiku-5-5", 64, WireProtocol::AnthropicMessages).await;
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly selected live credential and test budget"]
+async fn live_responses_streaming_assembles_text() {
+    assert_streaming_turn("gpt-6-luna", 512, WireProtocol::OpenAiResponses).await;
+}

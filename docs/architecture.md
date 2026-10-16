@@ -30,12 +30,12 @@ with multiple asynchronous sessions and supervised tool processes.
 
 | Crate | Owns | Must not own |
 | --- | --- | --- |
-| `slop-core` | Domain identities, transitions, budgets, ownership invariants | HTTP, SQL, provider SDKs, UI |
-| `slop-protocol` | Versioned DTOs, error shapes, event envelopes, capability schemas | Runtime state or client rendering |
-| `slop-runtime` | Agent loop, scheduling, tools, provider integrations, repository ports | CLI/TUI/web state |
-| `slop-daemon` | Service composition, API handlers, configuration, startup/shutdown | Presentation logic |
-| `slop-client` | Native API transport, compatibility, command/event convenience methods | Agent execution |
-| `slop-cli` | Argument parsing, terminal formatting, script exit behavior | Scheduler, model calls, database access |
+| `hive-core` | Domain identities, transitions, budgets, ownership invariants | HTTP, SQL, provider SDKs, UI |
+| `hive-protocol` | Versioned DTOs, error shapes, event envelopes, capability schemas | Runtime state or client rendering |
+| `hive-runtime` | Agent loop, scheduling, tools, provider integrations, repository ports | CLI/TUI/web state |
+| `hive-daemon` | Service composition, API handlers, configuration, startup/shutdown | Presentation logic |
+| `hive-client` | Native API transport, compatibility, command/event convenience methods | Agent execution |
+| `hive-cli` | Argument parsing, terminal formatting, script exit behavior | Scheduler, model calls, database access |
 
 The domain contains provider identities and the runtime contains native provider
 adapters. The protocol, daemon, client, and CLI implement health/status plus an
@@ -73,14 +73,14 @@ affects new admissions while active turns finish with their original connection.
 
 ```mermaid
 flowchart TD
-    CLI[slop-cli] --> Client[slop-client]
-    CLI --> Protocol[slop-protocol]
+    CLI[hive-cli] --> Client[hive-client]
+    CLI --> Protocol[hive-protocol]
     Client --> Protocol
-    Daemon[slop-daemon] --> Client[slop-client]
+    Daemon[hive-daemon] --> Client[hive-client]
     Daemon --> Protocol
-    Daemon --> Runtime[slop-runtime]
-    Daemon --> Core[slop-core]
-    Runtime --> Core[slop-core]
+    Daemon --> Runtime[hive-runtime]
+    Daemon --> Core[hive-core]
+    Runtime --> Core[hive-core]
 ```
 
 Arrows denote dependencies. Future native TUI code follows the CLI path.
@@ -88,15 +88,15 @@ A browser/Electron client consumes the HTTP contract, not Rust runtime internals
 
 The optional [peer listener and gateway](daemon-peering.md) share this daemon's
 application services, storage, and runtime. Outbound peer requests use
-`slop-client`; no execution crosses into a client or changes owner. Scoped peer
+`hive-client`; no execution crosses into a client or changes owner. Scoped peer
 credentials and an allowlisted listener keep local administration separate.
 
 ## How code can grow
 
-Keep provider and tool modules inside `slop-runtime` initially. Add dedicated
+Keep provider and tool modules inside `hive-runtime` initially. Add dedicated
 crates only when there is a concrete reason: independent reuse, build isolation,
 a platform dependency, or a clearly owned subsystem. Candidate later packages
-include `slop-store`, `slop-provider-openai`, and `slop-tui`.
+include `hive-store`, `hive-provider-openai`, and `hive-tui`.
 
 Interfaces for storage and providers live beside the code that needs them.
 The concrete local-store implementation is composed by the daemon. Core domain

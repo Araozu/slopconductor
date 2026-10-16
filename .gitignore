@@ -12,6 +12,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 # Generated OpenAPI document; regenerate with
-# `cargo run -p slop-daemon -- --dump-openapi`. Never check it in.
+# `cargo run -p hive-daemon -- --dump-openapi`. Never check it in.
 openapi.json
 **/openapi.json

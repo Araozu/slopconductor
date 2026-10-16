@@ -30,7 +30,7 @@ On the owner, create a grant and save its secret privately before requesting
 acceptance. The command ID is required so an ambiguous response can be retried:
 
 ```sh
-slop peer grant --label work --scope control \
+hivectl peer grant --label work --scope control \
   --token-output /private/work-peer-token --command-id work-grant-1
 ```
 
@@ -45,18 +45,18 @@ Transfer the token file privately to the requesting machine, retaining private
 permissions (0600 on Unix). On that machine, import it into the local daemon:
 
 ```sh
-slop peer add home --origin https://HOME.TAILNET.ts.net \
+hivectl peer add home --origin https://HOME.TAILNET.ts.net \
   --owner-node-id OWNER_NODE_ID --credential-file /private/work-peer-token
-slop peer probe home
-slop --peer home node
-slop --peer home session list
-slop --peer home session history SESSION_ID
-slop --peer home session follow SESSION_ID --after 0
-slop --peer home session send SESSION_ID --text "Focus on the failing test" \
+hivectl peer probe home
+hivectl --peer home node
+hivectl --peer home session list
+hivectl --peer home session history SESSION_ID
+hivectl --peer home session follow SESSION_ID --after 0
+hivectl --peer home session send SESSION_ID --text "Focus on the failing test" \
   --delivery next-boundary --detach --command-id correction-1
-slop --peer home turn pause TURN_ID --command-id pause-1
-slop --peer home turn resume TURN_ID --command-id resume-1
-slop --peer home turn cancel TURN_ID --command-id cancel-1
+hivectl --peer home turn pause TURN_ID --command-id pause-1
+hivectl --peer home turn resume TURN_ID --command-id resume-1
+hivectl --peer home turn cancel TURN_ID --command-id cancel-1
 ```
 
 The `--daemon` and `--token-file` flags still select the local gateway and its
@@ -65,8 +65,8 @@ only the gateway uses the remote credential. Existing CLI following and Ctrl-C
 detach behavior applies. Steering retains the session's model/settings; changing
 those through peering is outside this slice.
 
-`slop peer list`, `slop peer grants`, `slop peer remove home`, and
-`slop peer revoke work-grant-1` inspect or remove the corresponding outbound
+`hivectl peer list`, `hivectl peer grants`, `hivectl peer remove home`, and
+`hivectl peer revoke work-grant-1` inspect or remove the corresponding outbound
 registration/inbound grant. These administration commands target the selected
 local administrator API and reject `--peer`.
 

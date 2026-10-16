@@ -54,14 +54,14 @@ The [policy example](../examples/child-policy.json) authorizes writing in the
 selected workspace. Open a directory, then submit a parent:
 
 ```sh
-slop workspace open /absolute/repository
-slop task create --model opencode-go/glm-5.3-flash --workspace-id WORKSPACE_ID \
+hivectl workspace open /absolute/repository
+hivectl task create --model opencode-go/glm-5.3-flash --workspace-id WORKSPACE_ID \
   --orchestration-policy examples/child-policy.json \
   --max-model-requests 32 --max-tool-calls 64 \
   --text "Delegate two independent implementations and compare their results." \
   --command-id delegated-job
-slop run children PARENT_RUN_ID
-slop task follow PARENT_TASK_ID
+hivectl run children PARENT_RUN_ID
+hivectl task follow PARENT_TASK_ID
 ```
 
 If a CLI policy is supplied without aggregate limit flags, it supplies a budget
@@ -76,10 +76,10 @@ Clients can also create a child directly. Replace the workspace ID in the
 and the CLI supplies its command ID:
 
 ```sh
-slop run create-child PARENT_RUN_ID examples/child-request.json --command-id child-1
-slop run wait PARENT_RUN_ID --child-run CHILD_RUN_ID --command-id wait-child-1
-slop run result CHILD_RUN_ID
-slop run cancel CHILD_RUN_ID --command-id cancel-child-1
+hivectl run create-child PARENT_RUN_ID examples/child-request.json --command-id child-1
+hivectl run wait PARENT_RUN_ID --child-run CHILD_RUN_ID --command-id wait-child-1
+hivectl run result CHILD_RUN_ID
+hivectl run cancel CHILD_RUN_ID --command-id cancel-child-1
 ```
 
 Creation requires the parent's latest attempt to be queued, running, paused,

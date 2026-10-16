@@ -1,0 +1,495 @@
+use super::Context;
+use crate::{
+    Result,
+    args::{BatchCommand, RunCommand, TaskCommand},
+    input::prompt_value,
+    mutation::{choose_command_id, mutation_error},
+};
+use hive_protocol::chat::SessionResponse;
+use hive_protocol::{
+    chat::{DeliveryMode, SendMessageRequest, TurnControlRequest},
+    execution::GenerationSettings,
+    orchestration::*,
+    workspaces::WorkspaceSelection,
+};
+use std::{
+    io::{Read, Write},
+    path::Path,
+};
+
+pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> {
+    let client = context.client()?;
+    match command {
+        TaskCommand::Create {
+            model,
+            title,
+            text,
+            prompt_file,
+            effort,
+            max_output_tokens,
+            max_model_requests,
+            max_tool_calls,
+            orchestration_policy,
+            workspace_id,
+            no_workspace,
+            tools,
+            command_id,
+        } => {
+            let prompt = prompt_value(text, prompt_file).await?;
+            if workspace_id.as_deref() == Some(hive_protocol::workspaces::DEFAULT_WORKSPACE_ID)
+                && !tools.is_empty()
+            {
+                return Err(
+                    "the default workspace has no directory and cannot enable tools".into(),
+                );
+            }
+            let command_id = choose_command_id(command_id)?;
+            let orchestration: Option<OrchestrationPolicy> =
+                orchestration_policy.as_deref().map(read_json).transpose()?;
+            let workspace = if no_workspace {
+                WorkspaceSelection::default()
+            } else {
+                workspace_id.map_or_else(WorkspaceSelection::default, |workspace_id| {
+                    WorkspaceSelection {
+                        allowed_tools: if tools.is_empty()
+                            && workspace_id != hive_protocol::workspaces::DEFAULT_WORKSPACE_ID
+                        {
+                            vec!["read".into(), "write".into(), "edit".into(), "bash".into()]
+                        } else {
+                            tools
+                        },
+                        workspace_id,
+                        limits: None,
+                    }
+                })
+            };
+            let response = client
+                .create_task(&CreateTaskRequest {
+                    command_id: command_id.clone(),
+                    spec: SessionSpec {
+                        budget: (max_model_requests.is_some()
+                            || max_tool_calls.is_some()
+                            || orchestration.is_some())
+                        .then_some(OperationBudget {
+                            max_model_requests: max_model_requests.unwrap_or(64),
+                            max_tool_calls: max_tool_calls.unwrap_or(128),
+                        }),
+                        orchestration,
+                        title,
+                        prompt,
+                        model,
+                        settings: GenerationSettings {
+                            max_output_tokens,
+                            reasoning_effort: effort,
+                            full_context: None,
+                        },
+                        workspace,
+                    },
+                })
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            context.output.value(&response, || {
+                println!(
+                    "Task: {}\nRun: {}\nSession: {}\nTurn: {}",
+                    response.task_id, response.run_id, response.session_id, response.turn_id
+                )
+            })
+        }
+        TaskCommand::Show { id } => {
+            let response = client.task(&id).await?;
+            context.output.value(&response, || show_task(&response))
+        }
+        TaskCommand::List { after, limit } => {
+            let response = client.tasks(after, Some(limit)).await?;
+            context.output.value(&response, || {
+                for t in &response.items {
+                    show_task(t);
+                }
+            })
+        }
+        TaskCommand::Runs { id, after, limit } => {
+            let response = client.runs(&id, after, Some(limit)).await?;
+            context.output.value(&response, || {
+                for r in &response.items {
+                    show_run(r);
+                }
+            })
+        }
+        TaskCommand::Events { id, after, limit } => {
+            let response = client.task_events(&id, after, Some(limit)).await?;
+            context.output.value(&response, || {
+                for e in &response.items {
+                    println!("{}\t{}\t{}\t{}", e.sequence, e.run_id, e.kind, e.status);
+                }
+            })
+        }
+        TaskCommand::Follow { id, after } => {
+            let response = client.task(&id).await?;
+            crate::follow::follow_turn(
+                &client,
+                &response.id,
+                &response
+                    .latest_run
+                    .as_ref()
+                    .ok_or("Conversation has no turns.")?
+                    .turn
+                    .id,
+                after,
+                context.output,
+            )
+            .await
+        }
+        TaskCommand::Send {
+            id,
+            text,
+            prompt_file,
+            delivery,
+            command_id,
+        } => {
+            let text = prompt_value(text, prompt_file).await?;
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .task_instruction(
+                    &id,
+                    &SendMessageRequest {
+                        command_id: command_id.clone(),
+                        text,
+                        delivery: Some(match delivery.as_str() {
+                            "immediate" => DeliveryMode::Immediate,
+                            "next-boundary" => DeliveryMode::NextBoundary,
+                            "after-finish" => DeliveryMode::AfterFinish,
+                            _ => DeliveryMode::AfterTurn,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            context.output.value(&receipt, || {
+                println!(
+                    "Instruction accepted for turn {}",
+                    receipt.turn_id.as_deref().unwrap_or("pending")
+                )
+            })
+        }
+    }
+}
+
+pub(super) async fn run(command: RunCommand, context: &Context) -> Result<()> {
+    let client = context.client()?;
+    let (id, command_id, action) = match command {
+        RunCommand::CreateChild {
+            id,
+            file,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let mut value: serde_json::Value = read_json(&file)?;
+            let object = value
+                .as_object_mut()
+                .ok_or("child input must be a JSON object")?;
+            if object.contains_key("command_id") {
+                return Err("use --command-id rather than a command ID in the child file".into());
+            }
+            object.insert(
+                "command_id".into(),
+                serde_json::Value::String(command_id.clone()),
+            );
+            let request = serde_json::from_value(value)?;
+            let receipt = client
+                .create_child(&id, &request)
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            return context.output.value(&receipt, || {
+                println!("Child task: {}\nRun: {}", receipt.task_id, receipt.run_id)
+            });
+        }
+        RunCommand::Children { id, after, limit } => {
+            let page = client.children(&id, after, Some(limit)).await?;
+            return context.output.value(&page, || {
+                for task in &page.items {
+                    show_task(task);
+                }
+            });
+        }
+        RunCommand::Wait {
+            id,
+            child_run_ids,
+            mode,
+            timeout_ms,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .wait_children(
+                    &id,
+                    &WaitChildrenRequest {
+                        command_id: command_id.clone(),
+                        child_run_ids,
+                        mode,
+                        timeout_ms,
+                    },
+                )
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            return context
+                .output
+                .value(&receipt, || println!("Child wait accepted for run {id}"));
+        }
+        RunCommand::Result { id } => {
+            let result = client.run_result(&id).await?;
+            return context.output.value(&result, || {
+                show_run(&result.run);
+                if let Some(output) = &result.output {
+                    println!("{}", output.text);
+                }
+            });
+        }
+        RunCommand::Show { id } => {
+            let response = client.run(&id).await?;
+            return context.output.value(&response, || show_run(&response));
+        }
+        RunCommand::Retry {
+            id,
+            command_id,
+            acknowledge_unknown_effects,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let response = client
+                .retry_run(
+                    &id,
+                    &RetryRunRequest {
+                        command_id: command_id.clone(),
+                        acknowledge_unknown_effects,
+                    },
+                )
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            return context.output.value(&response, || {
+                println!(
+                    "Task: {}\nRun: {}\nSession: {}",
+                    response.task_id, response.run_id, response.session_id
+                )
+            });
+        }
+        RunCommand::Pause { id, command_id } => (id, command_id, "pause"),
+        RunCommand::Resume { id, command_id } => (id, command_id, "resume"),
+        RunCommand::Cancel { id, command_id } => (id, command_id, "cancel"),
+    };
+    let command_id = choose_command_id(command_id)?;
+    let response = client
+        .control_run(
+            &id,
+            action,
+            &TurnControlRequest {
+                command_id: command_id.clone(),
+            },
+        )
+        .await
+        .map_err(|e| mutation_error(e, &command_id))?;
+    context
+        .output
+        .value(&response, || println!("{action} accepted for run {id}"))
+}
+
+pub(super) async fn batch(command: BatchCommand, context: &Context) -> Result<()> {
+    let client = context.client()?;
+    match command {
+        BatchCommand::Cancel { id, command_id } => {
+            let command_id = choose_command_id(command_id)?;
+            let receipt = client
+                .cancel_batch(
+                    &id,
+                    &TurnControlRequest {
+                        command_id: command_id.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            context.output.value(&receipt, || {
+                println!(
+                    "Batch: {}\nCancellation accepted for {} runs",
+                    receipt.batch_id,
+                    receipt.run_ids.len()
+                )
+            })
+        }
+        BatchCommand::Preview { file, output } => {
+            let response = client.preview_batch(&read_spec(&file)?).await?;
+            if let Some(path) = output {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)?;
+                serde_json::to_writer_pretty(&mut file, &response.spec)?;
+                file.write_all(b"\n")?;
+            }
+            context.output.value(&response, || {
+                println!(
+                    "{} combinations; at most {} active runs",
+                    response.combinations.len(),
+                    response.spec.max_concurrent_runs
+                );
+                for c in &response.combinations {
+                    println!(
+                        "{}\tprompt {}\t{}\t{:?}",
+                        c.index, c.prompt_index, c.spec.model, c.spec.settings
+                    );
+                }
+            })
+        }
+        BatchCommand::Submit { file, command_id } => {
+            let command_id = choose_command_id(command_id)?;
+            let response = client
+                .create_batch(&CreateBatchRequest {
+                    command_id: command_id.clone(),
+                    spec: read_spec(&file)?,
+                })
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            context.output.value(&response, || {
+                println!(
+                    "Batch: {}\nMembers: {}",
+                    response.batch_id,
+                    response.members.len()
+                )
+            })
+        }
+        BatchCommand::Show { id } => {
+            let response = client.batch(&id).await?;
+            context.output.value(&response, || {
+                println!(
+                    "{}\t{}\t{:?}",
+                    response.id, response.spec.name, response.statuses
+                )
+            })
+        }
+        BatchCommand::List { after, limit } => {
+            let response = client.batches(after, Some(limit)).await?;
+            context.output.value(&response, || {
+                for b in &response.items {
+                    println!("{}\t{}\t{:?}", b.id, b.spec.name, b.statuses);
+                }
+            })
+        }
+        BatchCommand::Members { id, after, limit } => {
+            let response = client.batch_members(&id, after, Some(limit)).await?;
+            context.output.value(&response, || {
+                for t in &response.items {
+                    show_task(t);
+                }
+            })
+        }
+        BatchCommand::Results { id, after, limit } => {
+            let response = client.batch_results(&id, after, Some(limit)).await?;
+            context.output.value(&response, || {
+                for r in &response.items {
+                    show_task(&r.task);
+                    if let Some(o) = &r.output {
+                        println!("{}", o.text);
+                    }
+                }
+            })
+        }
+        BatchCommand::Export { id, output } => {
+            let mut file = std::io::BufWriter::new(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&output)?,
+            );
+            let mut after = None;
+            let mut count = 0;
+            let result: Result<()> = async {
+                loop {
+                    let page = client.batch_results(&id, after, Some(50)).await?;
+                    for value in &page.items {
+                        serde_json::to_writer(&mut file, value)?;
+                        file.write_all(b"\n")?;
+                        count += 1;
+                    }
+                    if page.next_after.is_none() {
+                        break;
+                    }
+                    after = page.next_after;
+                }
+                file.flush()?;
+                Ok(())
+            }
+            .await;
+            drop(file);
+            if let Err(e) = result {
+                let _ = std::fs::remove_file(&output);
+                return Err(e);
+            }
+            context.output.value(
+                &serde_json::json!({"batch_id":id,"members":count,"output":output}),
+                || println!("Exported {count} members to {}", output.display()),
+            )
+        }
+        BatchCommand::Retry {
+            id,
+            indices,
+            command_id,
+            acknowledge_unknown_effects,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let response = client
+                .retry_batch(
+                    &id,
+                    &RetryBatchRequest {
+                        command_id: command_id.clone(),
+                        indices,
+                        acknowledge_unknown_effects,
+                    },
+                )
+                .await
+                .map_err(|e| mutation_error(e, &command_id))?;
+            context.output.value(&response, || {
+                println!(
+                    "Batch: {}\nRetried members: {}",
+                    response.batch_id,
+                    response.members.len()
+                )
+            })
+        }
+    }
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err("JSON input exceeds 2 MiB".into());
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+fn read_spec(path: &Path) -> Result<BatchSpec> {
+    read_json(path)
+}
+fn show_task(t: &SessionResponse) {
+    println!(
+        "{}\t{}\t{}\t{}",
+        t.id,
+        t.latest_run
+            .as_ref()
+            .map_or("ready", |r| r.turn.status.as_str()),
+        t.spec.model,
+        t.latest_run.as_ref().map_or("-", |r| r.id.as_str())
+    );
+}
+fn show_run(r: &RunResponse) {
+    println!(
+        "{}\tattempt {}\t{}\nSession: {}\nTurn: {}",
+        r.id, r.attempt, r.turn.status, r.session_id, r.turn.id
+    );
+    println!("Workspace: {}", r.workspace_id);
+    if let Some(e) = &r.turn.error_code {
+        println!("Error: {e}");
+    }
+    if r.effects_unknown {
+        println!("Effects unknown: true");
+    }
+}

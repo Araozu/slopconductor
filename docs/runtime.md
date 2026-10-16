@@ -7,8 +7,8 @@ state transitions, admission, and recovery checkpoints. The daemon composes it
 with concrete configuration and persistence. Frontends provide commands and
 presentation; they never run the agent loop.
 
-At M0, `slop-runtime` was an empty boundary crate. The provider registry
-(`slop-runtime::providers`) now implements OpenCode Go and Zen: separate static
+At M0, `hive-runtime` was an empty boundary crate. The provider registry
+(`hive-runtime::providers`) now implements OpenCode Go and Zen: separate static
 catalogs mapping each executable model to its documented wire shape (OpenAI
 Chat Completions, OpenAI Responses, or Anthropic Messages), `OPENCODE_GO_API_KEY`
 and `OPENCODE_ZEN_API_KEY` authentication, live model listing, and non-streaming

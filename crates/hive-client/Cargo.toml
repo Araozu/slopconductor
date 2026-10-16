@@ -1,0 +1,26 @@
+[package]
+name = "hive-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Reusable daemon API client for native Hive frontends"
+
+[dependencies]
+getrandom.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+hive-protocol.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "io-util"] }
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

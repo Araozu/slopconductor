@@ -104,15 +104,15 @@ provider eligibility and supported API behavior when implementing an integration
 
 A client can be developed, built, released, stopped, and replaced without moving
 agent execution into that client. It consumes the same versioned API used by
-scripts. The native CLI and a future native TUI share `slop-client`; browser
+scripts. The native CLI and a future native TUI share `hive-client`; browser
 clients share the wire contract and can generate their own SDK.
 
 ## Current repository entry points
 
 - [Root manifest](../Cargo.toml): virtual Rust workspace and shared dependency versions.
-- [Public protocol](../crates/slop-protocol/src/lib.rs): health/node, chat, structured execution, workspaces, and task/batch DTOs.
-- [Client library](../crates/slop-client/src/lib.rs): bounded requests, event streams, token files, and compatibility checks.
-- [Daemon](../crates/slop-daemon/src/main.rs): loopback HTTP service.
-- [CLI](../crates/slop-cli/src/main.rs): independent status, chat, session/turn, capability/artifact, workspace, and task/run/batch client.
+- [Public protocol](../crates/hive-protocol/src/lib.rs): health/node, chat, structured execution, workspaces, and task/batch DTOs.
+- [Client library](../crates/hive-client/src/lib.rs): bounded requests, event streams, token files, and compatibility checks.
+- [Daemon](../crates/hive-daemon/src/main.rs): loopback HTTP service.
+- [CLI](../crates/hive-cli/src/main.rs): independent status, chat, session/turn, capability/artifact, workspace, and task/run/batch client.
 - [Client placeholder directory](../clients/README.md): future frontend locations.
 - [Smoke script](../scripts/smoke.py): checks the real daemon and CLI together.

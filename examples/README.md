@@ -1,11 +1,11 @@
 # Example inputs
 
 [batch-request.json](batch-request.json) matches the implemented `BatchSpec`.
-Replace its workspace ID with one returned by `slop workspace open`, then run:
+Replace its workspace ID with one returned by `hivectl workspace open`, then run:
 
 ```sh
-slop --json batch preview examples/batch-request.json --output frozen-batch.json
-slop batch submit frozen-batch.json --command-id example-sweep
+hivectl --json batch preview examples/batch-request.json --output frozen-batch.json
+hivectl batch submit frozen-batch.json --command-id example-sweep
 ```
 
 Preview creates no jobs or worktrees. See [tasks and batches](../docs/tasks-batches.md)

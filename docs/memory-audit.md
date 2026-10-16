@@ -61,7 +61,7 @@ from retaining several full histories throughout normal inference.
 ## Reproduce release RSS measurements
 
 ```sh
-cargo build --release -p slop-daemon -p slop-cli --locked
+cargo build --release -p hive-daemon -p hive-cli --locked
 python3 scripts/memory_audit.py --daemon target/release/hived --runs 3
 ```
 

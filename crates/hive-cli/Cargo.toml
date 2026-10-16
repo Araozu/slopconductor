@@ -1,0 +1,23 @@
+[package]
+name = "hive-cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Scriptable Hive command-line client"
+
+[[bin]]
+name = "hivectl"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+hive-client.workspace = true
+hive-protocol.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "fs"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

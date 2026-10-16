@@ -25,9 +25,9 @@ capacity validation remain outstanding. See
 
 ```mermaid
 flowchart LR
-    CLI[slop-cli] --> Client[slop-client]
-    Client --> API[slop-daemon public API]
-    API --> Runtime[slop-runtime]
+    CLI[hive-cli] --> Client[hive-client]
+    Client --> API[hive-daemon public API]
+    API --> Runtime[hive-runtime]
     Runtime --> Providers[Go / Zen / Codex APIs]
     Runtime --> Tools[read write edit bash + child tools]
     API --> Store[SQLite + artifacts + worktrees]
@@ -37,34 +37,34 @@ Crate dependency direction:
 
 ```mermaid
 flowchart TD
-    CLI[slop-cli] --> Client[slop-client]
-    CLI --> Protocol[slop-protocol]
+    CLI[hive-cli] --> Client[hive-client]
+    CLI --> Protocol[hive-protocol]
     Client --> Protocol
-    Daemon[slop-daemon] --> Client
+    Daemon[hive-daemon] --> Client
     Daemon --> Protocol
-    Daemon --> Runtime[slop-runtime]
-    Daemon --> Core[slop-core]
+    Daemon --> Runtime[hive-runtime]
+    Daemon --> Core[hive-core]
     Runtime --> Core
 ```
 
-Rules: clients never depend on `slop-runtime`/`slop-daemon`. `slop-core` and
-`slop-protocol` have no presentation, networking, or persistence dependencies.
+Rules: clients never depend on `hive-runtime`/`hive-daemon`. `hive-core` and
+`hive-protocol` have no presentation, networking, or persistence dependencies.
 Native builds never require web/Electron toolchains.
 
 ## Per-crate overview
 
-### `slop-core` — pure domain logic
+### `hive-core` — pure domain logic
 
 Owns transport-independent identities, transitions, budgets, and ownership
 invariants. No HTTP, SQL, provider SDKs, or UI.
 
-Key files: `crates/slop-core/src/lib.rs`, `provider.rs` (provider/model
+Key files: `crates/hive-core/src/lib.rs`, `provider.rs` (provider/model
 identity used by the runtime registry), `orchestration.rs` (task/batch/child
 policy types).
 
 Read with [architecture](architecture.md) and [requirements](requirements.md).
 
-### `slop-protocol` — public wire contract
+### `hive-protocol` — public wire contract
 
 Owns versioned DTOs, error shapes, event envelopes, and capability schemas.
 No runtime state or rendering.
@@ -81,7 +81,7 @@ scripts survive uncertain delivery without duplicating work.
 
 Read with [protocol](protocol.md).
 
-### `slop-runtime` — native execution
+### `hive-runtime` — native execution
 
 Owns the agent loop, scheduling, tools, provider integrations, and repository
 ports. No CLI/TUI/web state.
@@ -110,7 +110,7 @@ Read with [runtime](runtime.md), [shared provider interface](provider-interface.
 [structured execution](structured-execution.md), [tasks/batches](tasks-batches.md),
 [child tasks](child-tasks.md).
 
-### `slop-daemon` — service composition
+### `hive-daemon` — service composition
 
 Owns API handlers, configuration, startup/shutdown, storage composition, and
 credential ownership. No presentation logic. Binaries: `hived`.
@@ -134,9 +134,9 @@ Data layout under `<data-dir>/`: `daemon.lock`, `state.sqlite3`,
 
 Read with [daemon startup](daemon-startup-plan.md), [storage](storage.md),
 [text chat](text-chat.md), [provider credentials](provider-credentials.md), and
-the [daemon guide](../crates/slop-daemon/slop-daemon-guide.md).
+the [daemon guide](../crates/hive-daemon/hive-daemon-guide.md).
 
-### `slop-client` — native API transport
+### `hive-client` — native API transport
 
 Owns daemon request/response transport, compatibility checks, error
 interpretation, bounded NDJSON decoding, and typed operations. No execution.
@@ -145,13 +145,13 @@ Files: `src/lib.rs` (endpoint/token selection, health/version checks, chat/
 session/turn/artifact/provider calls), `src/workspaces.rs` (workspace API), and
 `src/orchestration.rs` (task/run/batch/child calls).
 
-The CLI and a future `slop-tui` share this crate. Browser clients use the HTTP
+The CLI and a future `hive-tui` share this crate. Browser clients use the HTTP
 contract directly.
 
-### `slop-cli` — scriptable frontend
+### `hive-cli` — scriptable frontend
 
 Owns argument parsing, terminal formatting, and script exit behavior. No
-scheduler, model calls, or database access. Binary: `slop`. Default workspace
+scheduler, model calls, or database access. Binary: `hivectl`. Default workspace
 member, so plain `cargo run` targets it.
 
 Groups: `status`, `node`, `models`, `capabilities`, `artifact`, `provider`,
@@ -209,7 +209,7 @@ Read with [clients](clients.md).
 ## Run and verify
 
 ```sh
-cargo run -p slop-daemon
+cargo run -p hive-daemon
 cargo run -- status
 cargo run -- chat --prompt "Reply with a short greeting."
 cargo fmt --all -- --check

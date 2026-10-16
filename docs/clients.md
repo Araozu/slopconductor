@@ -30,14 +30,14 @@ CLI discovers the token in the platform data directory; `--token-file` and
 These work after building/installing the CLI or through Cargo:
 
 ```sh
-cargo run -p slop-cli -- --json status
-cargo run -p slop-cli -- --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
-cargo run -p slop-cli -- chat --prompt "Reply briefly."
-cargo run -p slop-cli -- chat --session SESSION_ID --prompt-file prompt.md
-cargo run -p slop-cli -- --json session history SESSION_ID
-cargo run -p slop-cli -- turn cancel TURN_ID
-cargo run -p slop-cli -- provider set-key opencode-go --key-file /path/to/key
-cargo run -p slop-cli -- provider login codex
+cargo run -p hive-cli -- --json status
+cargo run -p hive-cli -- --token-file ~/.local/share/slopconductor/credentials/local-api-token --json node
+cargo run -p hive-cli -- chat --prompt "Reply briefly."
+cargo run -p hive-cli -- chat --session SESSION_ID --prompt-file prompt.md
+cargo run -p hive-cli -- --json session history SESSION_ID
+cargo run -p hive-cli -- turn cancel TURN_ID
+cargo run -p hive-cli -- provider set-key opencode-go --key-file /path/to/key
+cargo run -p hive-cli -- provider login codex
 ```
 
 Text chat supports interactive input, one-shot prompts, files, and piped stdin.
@@ -70,7 +70,7 @@ exit status. Command handlers are separated from connection/token selection,
 bounded prompt input, history lookup, event following, and output rendering.
 The [implemented module layout and extension steps](implementation.md#suggested-module-growth)
 describe where new command groups belong. These remain CLI concerns;
-`slop-client` stays independent of argument parsing and terminal presentation.
+`hive-client` stays independent of argument parsing and terminal presentation.
 
 The command groups and remaining extensions are:
 
@@ -89,23 +89,23 @@ The command groups and remaining extensions are:
 These execution controls are implemented by the current CLI:
 
 ```sh
-slop session send SESSION_ID --text "Keep the public API unchanged" --delivery after-turn
-slop session send SESSION_ID --text "Use the new endpoint" --delivery next-boundary
-slop session send SESSION_ID --text "Stop the command and reconsider" --delivery immediate
-slop turn pause TURN_ID
-slop turn resume TURN_ID
+hivectl session send SESSION_ID --text "Keep the public API unchanged" --delivery after-turn
+hivectl session send SESSION_ID --text "Use the new endpoint" --delivery next-boundary
+hivectl session send SESSION_ID --text "Stop the command and reconsider" --delivery immediate
+hivectl turn pause TURN_ID
+hivectl turn resume TURN_ID
 ```
 
 These job and matrix operations are also implemented; see
 [tasks and batches](tasks-batches.md):
 
 ```sh
-slop workspace open /absolute/repo
-slop task create --workspace-id WORKSPACE_ID --model opencode-go/glm-5.3-flash --prompt-file task.md
-slop task follow TASK_ID
-slop batch preview examples/batch-request.json --output frozen-batch.json --json
-slop batch submit frozen-batch.json --json
-slop run cancel RUN_ID
+hivectl workspace open /absolute/repo
+hivectl task create --workspace-id WORKSPACE_ID --model opencode-go/glm-5.3-flash --prompt-file task.md
+hivectl task follow TASK_ID
+hivectl batch preview examples/batch-request.json --output frozen-batch.json --json
+hivectl batch submit frozen-batch.json --json
+hivectl run cancel RUN_ID
 ```
 
 Task submission defaults to returning durable IDs after acceptance. Following
@@ -131,12 +131,12 @@ Windows. Do not depend on shell expansion to create matrices or serialize JSON.
 
 ## Native client library
 
-`slop-client` owns daemon request/response transport, API compatibility checks,
+`hive-client` owns daemon request/response transport, API compatibility checks,
 structured error interpretation, bounded NDJSON decoding, and typed chat
 operations. It is UI-agnostic. Clients replay events from durable cursors and
 reconcile canonical messages; they do not repeat inference on reconnect.
 
-A future `slop-tui` depends on this library and the protocol. It need not depend
+A future `hive-tui` depends on this library and the protocol. It need not depend
 on the CLI's argument parser or terminal output renderer. Share domain-neutral
 client projections only when both interfaces actually need them.
 
@@ -198,8 +198,8 @@ rendering are deliberately unsettled until this milestone.
 
 ## Build and release isolation
 
-- `cargo build -p slop-cli` requires no daemon or frontend build.
-- `cargo build -p slop-daemon` requires no CLI/TUI/web/Electron build.
+- `cargo build -p hive-cli` requires no daemon or frontend build.
+- `cargo build -p hive-daemon` requires no CLI/TUI/web/Electron build.
 - A later TUI is a separate Cargo package.
 - Browser and desktop packages have separate build commands and dependencies.
 - Generated SDKs follow the API schema; compatibility does not require matching

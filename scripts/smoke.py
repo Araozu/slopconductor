@@ -50,13 +50,13 @@ def check_boundaries(metadata):
                 dependencies(child, seen)
         return seen
 
-    forbidden = {"slop-core", "slop-runtime", "slop-daemon"}
-    for frontend in ("slop-cli", "slop-client"):
+    forbidden = {"hive-core", "hive-runtime", "hive-daemon"}
+    for frontend in ("hive-cli", "hive-client"):
         violations = dependencies(frontend) & forbidden
         if violations:
             raise RuntimeError(f"{frontend} embeds execution dependencies: {violations}")
 
-    for name in ("slop-core", "slop-protocol"):
+    for name in ("hive-core", "hive-protocol"):
         if dependencies(name):
             raise RuntimeError(f"{name} must be independent of other workspace crates")
 
@@ -380,7 +380,7 @@ def main():
     suffix = ".exe" if os.name == "nt" else ""
     binaries = Path(metadata["target_directory"]) / "debug"
     daemon_binary = binaries / ("hived" + suffix)
-    cli_binary = binaries / ("slop" + suffix)
+    cli_binary = binaries / ("hivectl" + suffix)
 
     # Git for Windows bounds $GIT_DIR even when long tracked paths are enabled.
     prefix = "sc-" if os.name == "nt" else "slop-smoke-"

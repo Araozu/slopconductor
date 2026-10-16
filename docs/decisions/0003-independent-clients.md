@@ -11,11 +11,11 @@ native builds.
 ## Decision
 
 The daemon exposes one public versioned command/query/event protocol.
-`slop-protocol` contains wire types; `slop-client` is a reusable native API SDK.
+`hive-protocol` contains wire types; `hive-client` is a reusable native API SDK.
 The CLI and future TUI use that SDK. Browser/Electron code consumes the HTTP
 contract and may later use generated SDKs.
 
-Native clients do not depend on `slop-daemon`, `slop-runtime`, or its domain
+Native clients do not depend on `hive-daemon`, `hive-runtime`, or its domain
 internals. Optional frontend assets are separate build/release artifacts.
 
 ## Consequences

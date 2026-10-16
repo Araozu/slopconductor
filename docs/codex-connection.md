@@ -25,7 +25,7 @@ eligibility and available models remain upstream decisions.
 Start the daemon, then authorize through its public API using the native CLI:
 
 ```sh
-cargo run -p slop-daemon --locked
+cargo run -p hive-daemon --locked
 # In another terminal:
 cargo run --locked -- provider login codex --command-id my-login-1
 ```
@@ -58,8 +58,8 @@ Load the record into a daemon-owned connection and share it across sessions:
 
 ```rust,ignore
 use std::sync::Arc;
-use slop_runtime::providers::{ChatMessage, ChatRequest, ProviderClient};
-use slop_runtime::providers::{chatgpt_auth::ChatGptConnection, codex::CodexClient};
+use hive_runtime::providers::{ChatMessage, ChatRequest, ProviderClient};
+use hive_runtime::providers::{chatgpt_auth::ChatGptConnection, codex::CodexClient};
 
 let connection = Arc::new(ChatGptConnection::load(credential_path).await?);
 let client: Box<dyn ProviderClient> = Box::new(CodexClient::from_chatgpt(connection)?);
@@ -149,8 +149,8 @@ by a daemon during the check. Select a live credential and usage budget before
 running either check explicitly:
 
 ```sh
-cargo test -p slop-runtime --test codex_live --locked live_subscription_stream_uses_shared_interface -- --ignored
-cargo test -p slop-runtime --test codex_live --locked live_subscription_tool_result_round_trip -- --ignored
+cargo test -p hive-runtime --test codex_live --locked live_subscription_stream_uses_shared_interface -- --ignored
+cargo test -p hive-runtime --test codex_live --locked live_subscription_tool_result_round_trip -- --ignored
 ```
 
 Neither ignored live check was run for this change.
@@ -186,7 +186,7 @@ acceptance/dispatch. The API exposes these same capabilities and freezes the
 effective settings for every model request in a turn.
 
 ```sh
-slop chat --model codex/gpt-6.1-sol --workspace /absolute/workspace \
+hivectl chat --model codex/gpt-6.1-sol --workspace /absolute/workspace \
   --effort high --prompt "Inspect the project, make the change, and run checks."
 ```
 
@@ -196,13 +196,13 @@ These commands use authenticated public daemon endpoints; clients never read
 the provider credential records:
 
 ```sh
-slop provider accounts
-slop provider login codex --account work --command-id login-work
-slop provider select chatgpt --account work
-slop provider select api_key
-slop provider discover codex
-slop provider logout work
-slop provider remove-key codex
+hivectl provider accounts
+hivectl provider login codex --account work --command-id login-work
+hivectl provider select chatgpt --account work
+hivectl provider select api_key
+hivectl provider discover codex
+hivectl provider logout work
+hivectl provider remove-key codex
 ```
 
 A new account label starts a distinct dynamic registration. An existing label

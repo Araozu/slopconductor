@@ -36,18 +36,18 @@ worktree explicitly when independent writable state is needed. Closing a client
 leaves accepted work running.
 
 ```sh
-slop task create --model opencode-go/glm-5.3-flash \
+hivectl task create --model opencode-go/glm-5.3-flash \
   --workspace-id WORKSPACE_ID --text "Fix the failing test." \
   --command-id fix-test
-slop task show TASK_ID
-slop task follow TASK_ID
-slop task send TASK_ID --text "Keep the public interface." --command-id correction
-slop run pause RUN_ID --command-id pause-fix
-slop run resume RUN_ID --command-id resume-fix
-slop run cancel RUN_ID --command-id cancel-fix
-slop task runs TASK_ID
-slop task events TASK_ID
-slop workspace diff WORKSPACE_ID
+hivectl task show TASK_ID
+hivectl task follow TASK_ID
+hivectl task send TASK_ID --text "Keep the public interface." --command-id correction
+hivectl run pause RUN_ID --command-id pause-fix
+hivectl run resume RUN_ID --command-id resume-fix
+hivectl run cancel RUN_ID --command-id cancel-fix
+hivectl task runs TASK_ID
+hivectl task events TASK_ID
+hivectl workspace diff WORKSPACE_ID
 ```
 
 `task create` returns immediately. `task follow` attaches to the turn current
@@ -74,9 +74,9 @@ failure records, possibly with unknown effects; unfinished Git operations fail
 conservatively. Recovery does not replay them or automatically create attempts.
 
 ```sh
-slop run retry FAILED_RUN_ID --command-id retry-fix
+hivectl run retry FAILED_RUN_ID --command-id retry-fix
 # After inspecting an attempt with unknown effects:
-slop run retry INTERRUPTED_RUN_ID --command-id retry-inspected \
+hivectl run retry INTERRUPTED_RUN_ID --command-id retry-inspected \
   --acknowledge-unknown-effects
 ```
 
@@ -113,10 +113,10 @@ operations rather than tokens or billing totals. A delegation policy requires
 an explicit finite budget; see [child tasks](child-tasks.md).
 
 ```sh
-slop task create --model opencode-go/glm-5.3-flash --workspace-id WORKSPACE_ID \
+hivectl task create --model opencode-go/glm-5.3-flash --workspace-id WORKSPACE_ID \
   --text "Fix the failing test." --max-model-requests 16 --max-tool-calls 32 \
   --command-id bounded-job
-slop batch cancel BATCH_ID --command-id cancel-sweep
+hivectl batch cancel BATCH_ID --command-id cancel-sweep
 ```
 
 Supplying only one task limit flag defaults the other to 64 requests or 128 tool
@@ -150,13 +150,13 @@ changing dimension. Duplicate input values retain distinct indexes.
 ```
 
 ```sh
-slop --json batch preview batch.json --output frozen-batch.json
-slop --json batch submit frozen-batch.json --command-id sweep-1
-slop batch show BATCH_ID
-slop batch members BATCH_ID
-slop batch results BATCH_ID
-slop batch export BATCH_ID --output results.jsonl
-slop batch retry BATCH_ID --index 3 --index 6 --command-id retry-selected
+hivectl --json batch preview batch.json --output frozen-batch.json
+hivectl --json batch submit frozen-batch.json --command-id sweep-1
+hivectl batch show BATCH_ID
+hivectl batch members BATCH_ID
+hivectl batch results BATCH_ID
+hivectl batch export BATCH_ID --output results.jsonl
+hivectl batch retry BATCH_ID --index 3 --index 6 --command-id retry-selected
 ```
 
 Preview validates every model/settings/tool combination, checks cardinality and

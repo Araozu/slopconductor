@@ -1,12 +1,12 @@
 # Independent clients
 
-The initial native CLI lives in `crates/slop-cli`. A future native TUI should be
-added as `crates/slop-tui` and use `slop-client`. Future browser and Electron
+The initial native CLI lives in `crates/hive-cli`. A future native TUI should be
+added as `crates/hive-tui` and use `hive-client`. Future browser and Electron
 projects belong in `clients/web/` and `clients/desktop/` respectively when work on
 those interfaces actually starts.
 
 There are deliberately no frontend package manifests or build dependencies yet.
-Running `cargo build -p slop-cli` does not require a web toolchain, Electron, or
+Running `cargo build -p hive-cli` does not require a web toolchain, Electron, or
 the daemon implementation. Every client uses the public daemon API; none owns
 agent execution.
 

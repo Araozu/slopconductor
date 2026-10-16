@@ -333,16 +333,16 @@ These are bounds, not a
 memory/performance benchmark.
 
 ```sh
-slop chat --workspace /absolute/repository --prompt "Inspect this repository."
-slop chat --workspace-id WORKSPACE_ID --tool read --prompt "Review this repository without changing files."
-slop chat --workspace-id WORKSPACE_ID --tool read --tool edit --tool bash --prompt "Fix the failing test."
-slop chat --session SESSION_ID --model opencode-go/glm-5.3 --max-output-tokens 512 --prompt "Review this."
-slop chat --full-context --prompt "Work with the model's full context window."
-slop session send SESSION_ID --full-context=false --text "Use the cost cap for this turn."
-slop capabilities
-slop turn requests TURN_ID
-slop turn tools TURN_ID
-slop artifact download ARTIFACT_ID --output output.json
+hivectl chat --workspace /absolute/repository --prompt "Inspect this repository."
+hivectl chat --workspace-id WORKSPACE_ID --tool read --prompt "Review this repository without changing files."
+hivectl chat --workspace-id WORKSPACE_ID --tool read --tool edit --tool bash --prompt "Fix the failing test."
+hivectl chat --session SESSION_ID --model opencode-go/glm-5.3 --max-output-tokens 512 --prompt "Review this."
+hivectl chat --full-context --prompt "Work with the model's full context window."
+hivectl session send SESSION_ID --full-context=false --text "Use the cost cap for this turn."
+hivectl capabilities
+hivectl turn requests TURN_ID
+hivectl turn tools TURN_ID
+hivectl artifact download ARTIFACT_ID --output output.json
 ```
 
 `--workspace PATH` opens the existing directory before creating the session;
@@ -355,7 +355,7 @@ without a workspace selection keep plain text behavior. Workspace policy is
 chosen at session creation. `--model`/settings on a new chat set its
 defaults; on a resumed chat they override the next turn. JSON following includes
 canonical message/tool snapshots, deltas, receipts, and terminal records.
-Closing the CLI detaches; `slop turn cancel TURN_ID` explicitly cancels execution.
+Closing the CLI detaches; `hivectl turn cancel TURN_ID` explicitly cancels execution.
 
 ## Verification and remaining scope
 

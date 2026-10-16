@@ -1,0 +1,36 @@
+[package]
+name = "hive-daemon"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Machine-local Hive service"
+
+[[bin]]
+name = "hived"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+getrandom.workspace = true
+futures-util.workspace = true
+rusqlite.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hive-core.workspace = true
+hive-protocol.workspace = true
+hive-runtime.workspace = true
+hive-client.workspace = true
+sha2 = "0.10"
+url.workspace = true
+subtle.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+toml.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+
+[lints]
+workspace = true

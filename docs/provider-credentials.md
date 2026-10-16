@@ -13,7 +13,7 @@ which mode is active (`api_key` or `chatgpt`) across restart.
 Start the daemon without a provider key:
 
 ```sh
-cargo run -p slop-daemon --locked
+cargo run -p hive-daemon --locked
 ```
 
 In another terminal, supply a key on stdin or from a file. The CLI forwards it to
@@ -57,13 +57,13 @@ enables Codex subscription chat after authorization succeeds; see
 Select or inspect configured accounts without resupplying credentials:
 
 ```sh
-slop provider accounts
-slop provider login codex --account work --command-id login-work
-slop provider select chatgpt --account work
-slop provider select api_key
-slop provider discover codex
-slop provider logout work
-slop provider remove-key codex
+hivectl provider accounts
+hivectl provider login codex --account work --command-id login-work
+hivectl provider select chatgpt --account work
+hivectl provider select api_key
+hivectl provider discover codex
+hivectl provider logout work
+hivectl provider remove-key codex
 ```
 
 At most sixteen separate subscription registrations are retained. Local labels

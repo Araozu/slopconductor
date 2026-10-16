@@ -23,7 +23,7 @@ Implemented:
   visible checkpoints, terminal replies/usage, and restart reconciliation.
 - Automatic token-aware context compaction with durable working memory, full
   transcript retention, cached-input accounting, and bounded provider recovery.
-  The default cost cap is 275,000 tokens; `slop chat --full-context` explicitly
+  The default cost cap is 275,000 tokens; `hivectl chat --full-context` explicitly
   opts in to the model's full available window.
 - Daemon-owned OpenCode Go, OpenCode Zen, and Codex inference with bounded concurrency, one active turn
   per session, and explicit cancellation. CLI exit leaves accepted work alive.
@@ -82,7 +82,7 @@ Clippy through `rust-toolchain.toml`.
 In one terminal:
 
 ```sh
-cargo run -p slop-daemon
+cargo run -p hive-daemon
 ```
 
 In another:
@@ -101,12 +101,12 @@ cargo run -- turn cancel TURN_ID
 ```
 
 The CLI is the default workspace member, so plain `cargo build` and `cargo run`
-target it. The binaries are named `hived` and `slop`. The default endpoint is
+target it. The binaries are named `hived` and `hivectl`. The default endpoint is
 `http://127.0.0.1:7331`. Override the loopback address when necessary:
 
 ```sh
-cargo run -p slop-daemon -- --listen 127.0.0.1:7441
-cargo run -p slop-cli -- --daemon http://127.0.0.1:7441 status
+cargo run -p hive-daemon -- --listen 127.0.0.1:7441
+cargo run -p hive-cli -- --daemon http://127.0.0.1:7441 status
 ```
 
 On Linux, configuration defaults to
@@ -210,8 +210,8 @@ Assume both machines are already on your tailnet. The **owner** runs the session
 the **connecting machine** runs its own local daemon as a gateway. Connections
 are directional: configure the reverse direction separately if you need it.
 The following Linux shell examples run from the repository on each machine.
-If the binaries are on your PATH, replace `cargo run -p slop-daemon --` with
-`hived` and `cargo run --` with `slop`. On Windows, use credential paths beneath
+If the binaries are on your PATH, replace `cargo run -p hive-daemon --` with
+`hived` and `cargo run --` with `hivectl`. On Windows, use credential paths beneath
 `%LOCALAPPDATA%` and your shell's equivalent commands.
 
 ### On the owner
@@ -220,7 +220,7 @@ Start the daemon with its separate peer listener, or restart your existing daemo
 with this flag:
 
 ```sh
-cargo run -p slop-daemon -- --peer-listen 127.0.0.1:7332
+cargo run -p hive-daemon -- --peer-listen 127.0.0.1:7332
 ```
 
 In another terminal, expose port **7332** through
@@ -254,7 +254,7 @@ Start your local daemon if it is not already running. It needs no peer listener
 or provider credentials to inspect and control the owner:
 
 ```sh
-cargo run -p slop-daemon
+cargo run -p hive-daemon
 ```
 
 In another terminal, put the transferred token at
@@ -299,8 +299,8 @@ validation remains open.
 ## Build and check
 
 ```sh
-cargo build -p slop-cli --locked
-cargo build -p slop-daemon --locked
+cargo build -p hive-cli --locked
+cargo build -p hive-daemon --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
@@ -324,14 +324,14 @@ Rust compiler and Clippy errors appear as annotations with source locations.
 Failed Clippy, test, and smoke checks also annotate a bounded tail of their output
 while retaining their original exit status.
 
-The [OpenCode Go live checks](crates/slop-runtime/tests/opencode_go_live.rs)
+The [OpenCode Go live checks](crates/hive-runtime/tests/opencode_go_live.rs)
 require `OPENCODE_GO_API_KEY` and an explicit opt-in; normal workspace tests skip
 them. They use the shared provider interface and document their request/token
 bounds. See the [provider conformance review](docs/provider-interface.md#conformance-review-of-the-current-slice)
 for verified behavior and the remaining daemon/API work.
 
 For a walkthrough of daemon concepts and the implemented request, persistence,
-streaming, cancellation, and restart flows, see the [slop-daemon guide](crates/slop-daemon/slop-daemon-guide.md).
+streaming, cancellation, and restart flows, see the [hive-daemon guide](crates/hive-daemon/hive-daemon-guide.md).
 
 ## API reference (OpenAPI)
 
@@ -340,11 +340,11 @@ A running daemon serves its full OpenAPI document at
 To regenerate the document without starting the daemon:
 
 ```sh
-cargo run -p slop-daemon -- --dump-openapi > /tmp/openapi.json
+cargo run -p hive-daemon -- --dump-openapi > /tmp/openapi.json
 ```
 
 The generated JSON is a local artifact and is git-ignored; the source of
-truth is the `utoipa` annotations in `crates/slop-daemon/src/api/`.
+truth is the `utoipa` annotations in `crates/hive-daemon/src/api/`.
 
 Building the CLI does not build the daemon, its execution layer, or a frontend.
 Browser and Electron projects will have their own builds when introduced.

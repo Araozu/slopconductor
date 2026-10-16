@@ -798,6 +798,100 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hive-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hive-client",
+ "hive-protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "hive-client"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "getrandom 0.4.3",
+ "hive-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "hive-core"
+version = "0.1.0"
+
+[[package]]
+name = "hive-daemon"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "futures-util",
+ "getrandom 0.4.3",
+ "hive-client",
+ "hive-core",
+ "hive-protocol",
+ "hive-runtime",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "url",
+ "utoipa",
+ "utoipa-swagger-ui",
+]
+
+[[package]]
+name = "hive-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "utoipa",
+]
+
+[[package]]
+name = "hive-runtime"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "cap-std",
+ "futures-util",
+ "getrandom 0.4.3",
+ "hive-core",
+ "jsonwebtoken",
+ "process-wrap",
+ "reqwest",
+ "rsa",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2054,100 +2148,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "slop-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "serde",
- "serde_json",
- "sha2",
- "slop-client",
- "slop-protocol",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "slop-client"
-version = "0.1.0"
-dependencies = [
- "axum",
- "getrandom 0.4.3",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "slop-protocol",
- "tempfile",
- "thiserror",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "slop-core"
-version = "0.1.0"
-
-[[package]]
-name = "slop-daemon"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "futures-util",
- "getrandom 0.4.3",
- "rusqlite",
- "rustix",
- "serde",
- "serde_json",
- "sha2",
- "slop-client",
- "slop-core",
- "slop-protocol",
- "slop-runtime",
- "subtle",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "url",
- "utoipa",
- "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "slop-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "utoipa",
-]
-
-[[package]]
-name = "slop-runtime"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "cap-std",
- "futures-util",
- "getrandom 0.4.3",
- "jsonwebtoken",
- "process-wrap",
- "reqwest",
- "rsa",
- "rustix",
- "serde",
- "serde_json",
- "sha2",
- "slop-core",
- "tempfile",
- "thiserror",
- "tokio",
-]
 
 [[package]]
 name = "smallvec"

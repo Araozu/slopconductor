@@ -3,15 +3,15 @@
 ## Current implementation
 
 The workspace has six crates. `hived` serves anonymous loopback health and an
-authenticated node and text-chat APIs. `slop` calls these through `slop-client`, checks
+authenticated node and text-chat APIs. `hivectl` calls these through `hive-client`, checks
 identity/version, and renders human or JSON output. The daemon implements
 XDG-aware startup config, exclusive directory ownership, SQLite schema/node
 identity, private local bearer credentials, and bounded shutdown. The protocol
 includes durable session/message receipts, paginated history/events, models,
 and turn inspection/cancellation.
 
-`slop-core` contains domain identities (including the static provider/model
-identity used by the runtime registry) and `slop-runtime` contains the provider
+`hive-core` contains domain identities (including the static provider/model
+identity used by the runtime registry) and `hive-runtime` contains the provider
 registry with OpenCode Go, Zen, and headless Codex integrations (separate model
 catalogs, authenticated clients, collected/streaming inference, usage reporting).
 Codex adds native ChatGPT registration, signed ID-token validation, protected
@@ -43,19 +43,19 @@ The public crate paths remain stable; the following files separate the main
 domain records and subsystem implementations behind their existing facades:
 
 ```text
-crates/slop-core/src/provider/
+crates/hive-core/src/provider/
   identity_error.rs
   model_ref.rs
   provider_id.rs
 
-crates/slop-protocol/src/
+crates/hive-protocol/src/
   chat/                 # one wire DTO per file
   execution/            # one wire DTO per file
   orchestration/        # one wire DTO per file
   workspaces/           # one wire DTO per file
   providers/            # one wire DTO per file
 
-crates/slop-client/src/
+crates/hive-client/src/
   error.rs
   execution.rs
   orchestration.rs
@@ -67,13 +67,13 @@ crates/slop-client/src/
   turns.rs
   urls.rs
 
-crates/slop-daemon/src/
+crates/hive-daemon/src/
   api/chat/              # chat routes and handlers
   config/                # config records, environment, and loading
   credentials/           # credential loading and provider login flows
   storage/               # schema, lifecycle, and repository operations
 
-crates/slop-runtime/src/
+crates/hive-runtime/src/
   agent/                 # request, tool, and completion records
   chat/                  # repository interface and turn records
   git/                   # Git records and bounded service
@@ -84,7 +84,7 @@ crates/slop-runtime/src/
   providers/structured_wire/
   tools/                 # policy, outcomes, arguments, and dispatch
 
-crates/slop-cli/src/args/
+crates/hive-cli/src/args/
   command.rs
   chat.rs
   options.rs
@@ -101,14 +101,14 @@ Add modules as behavior arrives, rather than empty trees for every hypothetical
 feature:
 
 ```text
-crates/slop-core/src/
+crates/hive-core/src/
   identity.rs             # node/session/task/run IDs and validated values
   session.rs              # conversation/domain revisions
   task.rs                 # task/run transitions and retry classification
   budget.rs               # enforceable limits and recorded consumption
   ownership.rs            # owner and later transfer transitions
 
-crates/slop-protocol/src/
+crates/hive-protocol/src/
   version.rs
   commands.rs
   queries.rs
@@ -116,7 +116,7 @@ crates/slop-protocol/src/
   errors.rs
   capabilities.rs
 
-crates/slop-runtime/src/
+crates/hive-runtime/src/
   supervisor.rs           # serial run loop and control inbox
   scheduler.rs            # admission, fairness, resource reservations
   context.rs
@@ -125,7 +125,7 @@ crates/slop-runtime/src/
   persistence.rs          # runtime-facing repository interfaces
   recovery.rs
 
-crates/slop-daemon/src/
+crates/hive-daemon/src/
   main.rs
   config.rs
   service.rs
@@ -133,13 +133,13 @@ crates/slop-daemon/src/
   storage/mod.rs          # initial concrete SQLite repository
   peers.rs                # M3 onward
 
-crates/slop-client/src/
+crates/hive-client/src/
   lib.rs
   commands.rs
   events.rs
   projections.rs          # only genuinely shared client interpretation
 
-crates/slop-cli/src/      # implemented CLI organization
+crates/hive-cli/src/      # implemented CLI organization
   main.rs                 # process entry point and exit status
   args.rs                 # command grammar and global options
   commands/mod.rs         # dispatch and shared command context
@@ -162,7 +162,7 @@ boundary.
 
 To add a CLI command group, define its grammar in `args.rs`, add a handler module
 under `commands/`, and register it in `commands/mod.rs`. Handlers use the shared
-connection/output context and typed `slop-client` operations. Add missing API
+connection/output context and typed `hive-client` operations. Add missing API
 operations to the protocol/client and their daemon implementation before exposing
 them as commands. Keep prompt reading, command identity, event following, and
 stream rendering in their existing modules rather than copying those concerns
@@ -231,7 +231,7 @@ Implement session creation/list/show, task creation/state, command status, and
 event replay. Add NDJSON follow with bounded client buffering and snapshot
 watermarks. Expose structured errors and version/capability negotiation.
 
-Extend `slop-client` with typed operations and replay/dedup helpers. Do not retry
+Extend `hive-client` with typed operations and replay/dedup helpers. Do not retry
 mutations under a new command ID. Update schema fixtures once the real contract
 exists.
 
@@ -389,7 +389,7 @@ accurately pending, and cached views cannot silently execute replicated tasks.
 ## Independent client work
 
 A native TUI can start after session/event operations stabilize; it shares
-`slop-client`, not CLI rendering. A web client can start from generated wire
+`hive-client`, not CLI rendering. A web client can start from generated wire
 schemas and a stable authenticated API. Electron can wrap/extend the web
 presentation later.
 

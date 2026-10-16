@@ -246,7 +246,7 @@ cursors, handle retention gaps, label freshness, enforce storage quotas, and
 keep replicas read-only.
 
 **TUI track:** a native session/peer browser, structured tool and diff views,
-steering input, reconnect, and client-side view state using `slop-client`.
+steering input, reconnect, and client-side view state using `hive-client`.
 
 **Web track:** a separately built responsive interface, phone-oriented task
 inspection and steering, API compatibility, authentication, and reconnect.

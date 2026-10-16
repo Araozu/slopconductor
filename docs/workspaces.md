@@ -24,11 +24,11 @@ the unified workspace API below.
 Open an existing absolute directory on the daemon's machine:
 
 ```sh
-slop workspace open /absolute/repository --command-id open-repo
-slop workspace list
-slop workspace show WORKSPACE_ID
-slop workspace rename WORKSPACE_ID "Readable name" --command-id rename-workspace
-slop workspace events WORKSPACE_ID
+hivectl workspace open /absolute/repository --command-id open-repo
+hivectl workspace list
+hivectl workspace show WORKSPACE_ID
+hivectl workspace rename WORKSPACE_ID "Readable name" --command-id rename-workspace
+hivectl workspace events WORKSPACE_ID
 ```
 
 Workspace identity is based on the canonical path. Reopening the same path
@@ -40,8 +40,8 @@ Create a new directory under an existing absolute parent, optionally initializin
 Git:
 
 ```sh
-slop workspace create /absolute/parent new-folder --command-id create-folder
-slop workspace create /absolute/parent new-repo --git --command-id create-repo
+hivectl workspace create /absolute/parent new-folder --command-id create-folder
+hivectl workspace create /absolute/parent new-repo --git --command-id create-repo
 ```
 
 The daemon uses the paths on its own machine. A client on another machine must
@@ -63,15 +63,15 @@ returns an `allocating` workspace record. Poll `workspace show` or its events
 until the status is `ready` or a terminal failure is recorded.
 
 ```sh
-slop workspace worktree WORKSPACE_ID --base main --name "fix failing test" \
+hivectl workspace worktree WORKSPACE_ID --base main --name "fix failing test" \
   --command-id create-fix-worktree
-slop workspace show WORKTREE_ID
-slop workspace diff WORKTREE_ID
+hivectl workspace show WORKTREE_ID
+hivectl workspace diff WORKTREE_ID
 ```
 
 Omitting `--base` selects the source workspace's current `HEAD`. The resulting
 `base_commit` is the exact commit frozen for that worktree. `source_workspace_id`
-records where it came from, and `managed_worktree` says whether Slop owns the
+records where it came from, and `managed_worktree` says whether Hive owns the
 worktree lifecycle. These are provenance fields; every directory is still a
 workspace.
 
@@ -119,8 +119,8 @@ operation result. Git status also reports untracked and ignored paths; the patch
 contains tracked changes.
 
 ```sh
-slop workspace diff WORKSPACE_ID
-slop workspace remove WORKSPACE_ID --command-id remove-workspace
+hivectl workspace diff WORKSPACE_ID
+hivectl workspace remove WORKSPACE_ID --command-id remove-workspace
 ```
 
 The built-in `default` workspace is always present, has `path: null`, enables no
@@ -136,7 +136,7 @@ the command is not automatically replayed after an uncertain outcome.
 
 All workspace routes require local bearer authentication and advertise the
 `unified-workspaces` capability. There are no `/v1/projects` routes or aliases.
-The public DTOs live in `slop_protocol::workspaces`.
+The public DTOs live in `hive_protocol::workspaces`.
 
 | Route | Behavior |
 | --- | --- |

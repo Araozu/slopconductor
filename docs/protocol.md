@@ -10,18 +10,18 @@ added without changing event meaning.
 **Implemented:** anonymous health, authenticated node identity, and the
 [text-chat surface](text-chat.md#public-surface): models, sessions, messages,
 history, event replay/follow, and turn inspection/cancellation. The wire structs
-are in `slop_protocol::chat`. Mutations use explicit command IDs and return
+are in `hive_protocol::chat`. Mutations use explicit command IDs and return
 durable acceptance receipts. Errors use `ErrorResponse { code, message }`.
 [Structured execution](structured-execution.md) also adds message blocks,
 model requests, tool invocations, artifacts, capability discovery, causal delta
-IDs, and per-turn model/settings. Its DTOs live in `slop_protocol::execution`.
+IDs, and per-turn model/settings. Its DTOs live in `hive_protocol::execution`.
 Message DTOs also expose persisted `provider` and `model` fields; these describe
 each message's frozen selection or originating request's reported model, even
 when subsequent turns select a different provider.
 The unified [workspace API](workspaces.md) and durable
 [tasks/run attempts and matrices](tasks-batches.md) are also implemented. Workspace
-wire structs live in `slop_protocol::workspaces`; orchestration structs live in
-`slop_protocol::orchestration`.
+wire structs live in `hive_protocol::workspaces`; orchestration structs live in
+`hive_protocol::orchestration`.
 The orchestration contract includes cumulative budgets, batch cancellation,
 one-level delegation policies, parent/child links, exact-attempt all/any/deadline waits, notification/detachment settings, and public run
 results; see [child tasks](child-tasks.md#public-api-and-validation). Health
@@ -31,7 +31,7 @@ defaults, detached lifecycle, or extended join semantics; older daemons can
 continue serving read-only child queries. Awaiting children is a nonterminal run status.
 Resource summaries and the larger command/error envelope below remain proposed.
 The [provider credential surface](provider-credentials.md#public-api) is also
-implemented, with wire structs in `slop_protocol::providers`: private API-key
+implemented, with wire structs in `hive_protocol::providers`: private API-key
 replacement, safe credential status, and daemon-owned ChatGPT login. Saved Go,
 Zen, and Codex credentials enable execution through the common session surface.
 
@@ -62,7 +62,7 @@ objects and raw transport events stay inside runtime adapters; every client uses
 the same canonical public surface.
 
 Generated schema files and SDKs are release artifacts. Do not generate an SDK
-from runtime-private structures. Rust clients use `slop-protocol` directly.
+from runtime-private structures. Rust clients use `hive-protocol` directly.
 
 ## Command identity and proposed broader envelope
 
@@ -311,9 +311,9 @@ Retryable transport failure does not imply the command was unaccepted. Recheck
 using the same command identity. A non-idempotent operation gets no hidden
 automatic retry beyond the command acceptance mechanism.
 
-Human diagnostics go to stderr; JSON output goes to stdout. `slop session send`
-and `slop chat --session` accept `--delivery after-turn|next-boundary|immediate`;
-`slop turn pause|resume` controls durable pauses. The CLI can exit after
+Human diagnostics go to stderr; JSON output goes to stdout. `hivectl session send`
+and `hivectl chat --session` accept `--delivery after-turn|next-boundary|immediate`;
+`hivectl turn pause|resume` controls durable pauses. The CLI can exit after
 acceptance, follow events, or explicitly wait for completion. These modes do
 not change daemon ownership.
 

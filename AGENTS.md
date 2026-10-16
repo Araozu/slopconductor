@@ -25,11 +25,11 @@ implemented behavior. Update documentation when implementation changes a plan.
 
 ## Workspace boundaries
 
-`slop-core` is pure domain logic. `slop-protocol` is the public wire contract.
-`slop-runtime` implements native execution. `slop-daemon` composes the service.
-`slop-client` implements the public API client. `slop-cli` is a frontend.
+`hive-core` is pure domain logic. `hive-protocol` is the public wire contract.
+`hive-runtime` implements native execution. `hive-daemon` composes the service.
+`hive-client` implements the public API client. `hive-cli` is a frontend.
 
-Clients must not depend on `slop-runtime` or `slop-daemon`. Domain and protocol
+Clients must not depend on `hive-runtime` or `hive-daemon`. Domain and protocol
 crates must not acquire presentation, networking, or persistence dependencies.
 Do not make generated web assets a prerequisite for compiling the daemon or CLI.
 
@@ -37,22 +37,22 @@ Do not make generated web assets a prerequisite for compiling the daemon or CLI.
 
 The daemon publishes a compile-time OpenAPI document via `utoipa`:
 `GET /api-docs/openapi.json` and interactive Swagger UI at `GET /docs`.
-Source of truth is `crates/slop-daemon/src/api/openapi.rs` (`ApiDoc`),
+Source of truth is `crates/hive-daemon/src/api/openapi.rs` (`ApiDoc`),
 which covers every administrator route (including the peer gateway). A coverage test fails if a
 route is added without registering it.
 
 Generate the document locally; never check the generated JSON into source
 control (it is git-ignored):
 
-- `cargo run -p slop-daemon -- --dump-openapi > /tmp/openapi.json` — no
+- `cargo run -p hive-daemon -- --dump-openapi > /tmp/openapi.json` — no
   storage, socket, or runtime needed; prints the document and exits.
 - Or, with a daemon running: `curl http://127.0.0.1:7331/api-docs/openapi.json`.
 
 When you touch the public HTTP API, keep the annotations in sync:
 
-- Derive `utoipa::ToSchema` on every new or changed `slop-protocol`
+- Derive `utoipa::ToSchema` on every new or changed `hive-protocol`
   request/response type. `utoipa` is the only presentation-adjacent
-  dependency allowed in `slop-protocol`, solely for schema generation.
+  dependency allowed in `hive-protocol`, solely for schema generation.
 - Annotate every new or changed handler with `#[utoipa::path(...)]`
   (method, `path = "..."`, `tag`, `params` for path/query args,
   `request_body` for JSON bodies, `security` for authenticated routes,
@@ -62,7 +62,7 @@ When you touch the public HTTP API, keep the annotations in sync:
   `components(schemas(...))` in `ApiDoc`, and extend `EXPECTED_API_PATHS`
   in the coverage test. Unregistered handlers/types silently disappear
   from the published document.
-- Run `cargo test -p slop-daemon api::openapi` and regenerate the JSON
+- Run `cargo test -p hive-daemon api::openapi` and regenerate the JSON
   to eyeball the diff when routes change.
 
 ## Validation
