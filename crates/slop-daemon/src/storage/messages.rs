@@ -84,6 +84,24 @@ pub(super) fn send_message_tx(
     effective_settings: Option<slop_protocol::execution::GenerationSettings>,
     idle_failure: Option<(&'static str, &'static str)>,
 ) -> StoreResult<CommandReceipt> {
+    send_direct_tx(
+        tx,
+        session_id,
+        request,
+        effective_settings,
+        idle_failure,
+        None,
+    )
+}
+
+pub(super) fn send_direct_tx(
+    tx: &Transaction<'_>,
+    session_id: &str,
+    request: SendMessageRequest,
+    effective_settings: Option<slop_protocol::execution::GenerationSettings>,
+    idle_failure: Option<(&'static str, &'static str)>,
+    queued_ids: Option<(&str, &str)>,
+) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.text.trim().is_empty()
         || request.text.len() > MAX_MESSAGE_BYTES
@@ -106,7 +124,25 @@ pub(super) fn send_message_tx(
         return Err(StoreError::Conflict);
     }
     let delivery = request.delivery.unwrap_or_default();
-    if delivery != DeliveryMode::AfterTurn {
+    if queued_ids.is_none()
+        && matches!(
+            delivery,
+            DeliveryMode::AfterTurn | DeliveryMode::AfterFinish
+        )
+    {
+        if let Some((code, message)) = idle_failure {
+            return Err(StoreError::Preflight(code, message));
+        }
+        if let Some(receipt) =
+            queue::accept_tx(tx, &session, &request, effective_settings.as_ref())?
+        {
+            return Ok(receipt);
+        }
+    }
+    if matches!(
+        delivery,
+        DeliveryMode::NextBoundary | DeliveryMode::Immediate
+    ) {
         let active_turn: Option<String> = tx
             .query_row(
                 "SELECT id FROM turns t WHERE session_id=?1 AND (status='running' OR status='paused' OR status='awaiting_children' OR (status='queued' AND EXISTS(SELECT 1 FROM model_requests r WHERE r.turn_id=t.id))) ORDER BY ordinal LIMIT 1",
@@ -141,7 +177,7 @@ pub(super) fn send_message_tx(
                     match delivery {
                         DeliveryMode::NextBoundary => "next-boundary",
                         DeliveryMode::Immediate => "immediate",
-                        DeliveryMode::AfterTurn => unreachable!(),
+                        DeliveryMode::AfterTurn | DeliveryMode::AfterFinish => unreachable!(),
                     }
                 ],
             )
@@ -192,8 +228,12 @@ pub(super) fn send_message_tx(
     if queued_session >= MAX_QUEUE_PER_SESSION || queued_global >= MAX_QUEUE_GLOBAL {
         return Err(StoreError::Limit);
     }
-    let turn_id = opaque_id()?;
-    let message_id = opaque_id()?;
+    let turn_id = queued_ids
+        .map(|(_, turn)| turn.to_owned())
+        .map_or_else(opaque_id, Ok)?;
+    let message_id = queued_ids
+        .map(|(id, _)| id.to_owned())
+        .map_or_else(opaque_id, Ok)?;
     let ordinal: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(ordinal),0)+1 FROM turns WHERE session_id=?1",

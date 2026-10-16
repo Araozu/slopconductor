@@ -26,7 +26,7 @@ pub struct ChatArgs {
     /// Opt in to the model's full window; =false restores the local cost cap.
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub full_context: Option<bool>,
-    #[arg(long, value_parser=["after-turn", "next-boundary", "immediate"], requires="session")]
+    #[arg(long, value_parser=["after-turn", "after-finish", "next-boundary", "immediate"], requires="session")]
     pub delivery: Option<String>,
     #[arg(long, conflicts_with = "prompt_file")]
     pub prompt: Option<String>,

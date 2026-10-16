@@ -157,6 +157,8 @@ document covers all administrator routes, including workspace and peer routes.
 | GET /v1/sessions/{id}/events | Implemented: catch up and optionally follow NDJSON session events |
 | GET /v1/turns/{id} | Implemented: turn status, message/request/invocation IDs, frozen settings, model, and usage |
 | POST /v1/turns/{id}/cancel | Implemented: durable turn cancellation |
+| GET /v1/sessions/{id}/queue | Implemented: inspect the durable FIFO of unsent messages |
+| POST /v1/sessions/{id}/interrupt | Implemented: cancel active execution and send the leading queued batch |
 | POST /v1/turns/{id}/pause, /resume | Implemented: pause at safe boundaries and explicitly readmit paused turns |
 | GET /v1/messages/{id} | Implemented: canonical structured message |
 | GET /v1/turns/{id}/requests | Implemented: paginated model requests/settings/usage |
@@ -248,36 +250,54 @@ tool outputs are streamed artifacts or chunk references, with bounded previews.
 
 ## Steering semantics
 
-Text chat supports three delivery modes on `POST /v1/sessions/{id}/messages`:
+The daemon owns a durable FIFO of unsent messages for each session. Closing or
+replacing a client does not change delivery. `POST /v1/sessions/{id}/messages`
+accepts these delivery modes:
 
-- `after-turn` (omitted by default) queues a regular turn after current work.
-- `next-boundary` targets the active logical turn and applies the instruction
-  after the current inference or tool has reached a completed boundary and
-  before its next model request or tool launch. It does not act at token-level
-  streaming boundaries. A yielded continuation and paused turn remain valid
-  targets.
-- `immediate` interrupts in-flight inference or signals cancellation to
-  supervised Bash, then waits for the operation's actual outcome. File
-  operations already started finish and record their result. Interrupted
-  inference usage is unknown; incomplete reasoning and private continuation are
-  discarded.
+- `after-turn` (the default) waits for the current model response and its tool
+  results, then applies all consecutive after-turn messages before the next
+  model request. It keeps the active run's frozen model/settings. It does not
+  interrupt reasoning, response streaming, or tools.
+- `after-finish` waits for the active run's final response, then immediately
+  starts a fresh run with that one message and its submitted model/settings.
+- `next-boundary` and `immediate` remain explicit instruction delivery modes.
+  Next-boundary waits for an operation boundary; immediate cancels inference or
+  supervised Bash before replanning. Started atomic file operations record their
+  actual result. Neither mode requires a pause/resume interaction.
 
-Idle delivery falls back to ordinary turn admission. Instructions have durable
-IDs, accepted/applied/rejected status, and semantic events. `GET
-/v1/sessions/{id}/instructions` lists their bounded history. `POST
-/v1/turns/{id}/pause` and `/resume` persist pause state; a paused turn releases
-the execution slot, prevents later same-session turns from overtaking it, and
-never resumes automatically after restart. Resume reuses committed steps and
-cumulative budgets without replaying tools. Model/settings overrides are
-rejected for instructions attached to an active logical turn.
+The FIFO never overtakes an after-finish message. For example, `A (after turn),
+B (after turn), F (after finish), C (after turn)` applies A and B together at the
+next completed model/tool boundary, starts F after the final response, and
+applies C at F's first completed model/tool boundary. Idle input starts
+immediately. Sending to a legacy paused run automatically readmits it.
 
-After a model response proposes multiple tools, steering is applied only after
-all proposals have explicit paired results. Pending, unstarted side effects are
-recorded as skipped before a fresh model decision. Unknown tool outcomes are
-never replayed.
+`GET /v1/sessions/{id}/queue` lists unsent messages, including their stable IDs,
+text and delivery modes. Acceptance emits `message_queued`; delivery atomically
+writes the canonical user message and emits `queued_message_sent`. A finish
+message reserves its future turn ID at acceptance, so existing turn inspection
+and waiting clients can follow it before admission. Command retries return the
+original receipt without duplicating input.
+
+`POST /v1/sessions/{id}/interrupt` is the Ctrl-C operation. It requests immediate
+cancellation of inference and active tools, waits only for cancellation cleanup,
+and immediately admits the leading FIFO batch: all consecutive after-turn
+messages, or exactly one after-finish message when that is first. Later messages
+stay queued for their own boundary. A new run makes its first model request
+before draining more messages, so interrupting a finish message cannot send the
+messages behind it at the same time. With an empty queue, execution stops.
+The request can pin the observed `turn_id`; a late or retried interruption never
+cancels a successor. It can also carry pending `messages` with their original
+command IDs, closing the race between rapid sends and interruption. Invalid
+pending prompts do not prevent cancellation.
+
+Explicit instructions retain durable accepted/applied/rejected status through
+`GET /v1/sessions/{id}/instructions`. Tool proposals always have paired results;
+unstarted effects are skipped before explicit immediate replanning. Interrupted
+inference has unknown usage, and incomplete reasoning/private continuation is
+excluded from the next request. Unknown tool outcomes are never replayed.
 
 Concurrent messages are sequenced by the owner. An expected revision can prevent
-an instruction based on stale state from being silently applied.
+input based on stale state from being silently applied.
 
 ## Errors and client behavior
 

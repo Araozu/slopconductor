@@ -83,7 +83,7 @@ pub enum SessionCommand {
         /// Opt in to the model's full window; =false restores the local cost cap.
         #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
         full_context: Option<bool>,
-        #[arg(long, value_parser=["after-turn", "next-boundary", "immediate"])]
+        #[arg(long, value_parser=["after-turn", "after-finish", "next-boundary", "immediate"])]
         delivery: Option<String>,
     },
     Follow {

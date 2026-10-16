@@ -305,6 +305,7 @@ pub(crate) async fn health() -> Json<HealthResponse> {
             "tools".to_owned(),
             "per-turn-settings".to_owned(),
             "execution-steering".to_owned(),
+            "message-queue".to_owned(),
             "turn-pause-resume".to_owned(),
             "unified-workspaces".to_owned(),
             "filesystem-navigation".to_owned(),

@@ -101,7 +101,7 @@ pub fn definitions(policy: &OrchestrationPolicy, workspace_id: &str) -> Vec<Tool
         ),
     ] {
         let parameters = if name == "child_send" {
-            json!({"type":"object","properties":{"task_id":id,"text":{"type":"string","minLength":1,"maxLength":65536},"delivery":{"type":"string","enum":["next-boundary","after-turn"]}},"required":["task_id","text"],"additionalProperties":false})
+            json!({"type":"object","properties":{"task_id":id,"text":{"type":"string","minLength":1,"maxLength":65536},"delivery":{"type":"string","enum":["next-boundary","after-turn","after-finish"]}},"required":["task_id","text"],"additionalProperties":false})
         } else if name == "child_inspect" {
             json!({"type":"object","properties":{"task_id":id,"event_after":{"type":"integer","minimum":0},"event_limit":{"type":"integer","minimum":1,"maximum":16}},"required":["task_id"],"additionalProperties":false})
         } else {
@@ -181,9 +181,12 @@ pub fn validate_arguments(name: &str, value: &Value) -> bool {
                     .get("text")
                     .and_then(Value::as_str)
                     .is_some_and(|s| !s.trim().is_empty() && s.len() <= 65536)
-                && object
-                    .get("delivery")
-                    .is_none_or(|v| matches!(v.as_str(), Some("next-boundary" | "after-turn")))
+                && object.get("delivery").is_none_or(|v| {
+                    matches!(
+                        v.as_str(),
+                        Some("next-boundary" | "after-turn" | "after-finish")
+                    )
+                })
         }
         "child_inspect" | "child_result" | "child_cancel" => {
             object

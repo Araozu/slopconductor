@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum DeliveryMode {
     #[default]
     AfterTurn,
+    AfterFinish,
     NextBoundary,
     Immediate,
 }

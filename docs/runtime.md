@@ -33,7 +33,10 @@ The following is the target general task loop. The implemented user-turn loop
 covers model intent, structured completion, tool policy/dispatch/results, budgets,
 streaming, cancellation, boundary/immediate steering, explicit pause/resume, and
 terminal/recovery records. All work lives in persistent conversations; execution turns share one
-steering/control inbox per turn. Follow-ups queue within the same conversation. Child creation and awaiting-children states are
+steering/control inbox per turn. Follow-ups use the daemon-owned FIFO described in [the protocol](protocol.md#steering-semantics).
+After-turn batches enter only after a completed model response and all of its
+tools; after-finish starts a fresh run after the final response. Interrupt
+cancels active execution and admits only the leading batch automatically. Child creation and awaiting-children states are
 implemented; awaiting-input states remain proposed.
 
 Steering instructions are durably accepted with command IDs and applied once at

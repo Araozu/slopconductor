@@ -144,6 +144,9 @@ where
         if existing_version < 22 {
             workspaces::migrate(&tx)?;
         }
+        if existing_version < 23 {
+            queue::migrate(&tx)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

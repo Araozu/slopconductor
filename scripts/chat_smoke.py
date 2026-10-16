@@ -529,7 +529,7 @@ def check_chat_lifecycle(daemon_binary, cli_binary, root):
             raise RuntimeError(f"could not start after-turn holder: {status} {after_holder}")
         fixture.wait_for_count(7)
         status, after_turn = request(endpoint, token, "POST", {
-            "command_id": "after-turn-message", "text": "after turn only", "delivery": "after-turn",
+            "command_id": "after-turn-message", "text": "after turn only", "delivery": "after-finish",
             "expected_revision": None,
         }, f"/v1/sessions/{session_id}/messages")
         if status != 202 or after_turn["turn_id"] == after_holder["turn_id"]:

@@ -299,7 +299,7 @@ pub(super) fn begin_request(
             |row| row.get(0),
         )
         .map_err(|_| StoreError::Database)?;
-    if yielding {
+    if yielding || queue::boundary_pending(&tx, turn)? {
         tx.commit().map_err(|_| StoreError::Database)?;
         return Ok(false);
     }
@@ -1104,7 +1104,11 @@ fn ids(connection: &Connection, sql: &str, id: &str) -> StoreResult<Vec<String>>
         .map_err(|_| StoreError::Database)
 }
 pub(super) fn get_turn(connection: &Connection, id: &str) -> StoreResult<TurnResponse> {
-    let mut turn = get_base_turn(connection, id)?;
+    let mut turn = match get_base_turn(connection, id) {
+        Ok(turn) => turn,
+        Err(StoreError::NotFound) => return queue::virtual_turn(connection, id),
+        Err(error) => return Err(error),
+    };
     turn.settings = connection
         .query_row("SELECT settings FROM turns WHERE id=?1", [id], |r| {
             json_column(r, 0)

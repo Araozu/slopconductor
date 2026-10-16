@@ -35,6 +35,9 @@ pub(super) fn cancel_turn_tx(
 ) -> StoreResult<CommandReceipt> {
     let scope = format!("turn:{turn_id}:cancel");
     let payload = canonical(&request)?;
+    if let Some(receipt) = queue::cancel_pending_tx(tx, turn_id, &request)? {
+        return Ok(receipt);
+    }
     let (session_id, status): (String, String) = tx
         .query_row(
             "SELECT session_id,status FROM turns WHERE id=?1",
@@ -83,6 +86,7 @@ pub(super) fn cancel_turn_tx(
     children::cancel_descendants(tx, turn_id)?;
     children::enqueue_completion(tx, turn_id)?;
     children::wake(tx)?;
+    queue::release_tx(tx, &session_id)?;
     Ok(receipt)
 }
 
@@ -114,6 +118,7 @@ pub(super) fn recover_interrupted(connection: &Connection) -> StoreResult<()> {
         reject_steering_tx(&tx, &turn_id, "daemon_restarted")?;
         append_event(&tx, &session_id, "turn_interrupted", Some(&turn_id), None)?;
         children::enqueue_completion(&tx, &turn_id)?;
+        queue::release_tx(&tx, &session_id)?;
     }
     children::wake(&tx)?;
     workspaces::recover(&tx)?;
@@ -247,7 +252,7 @@ pub(super) fn turn_control_state(
     connection: &Connection,
     turn_id: &str,
 ) -> StoreResult<slop_runtime::chat::TurnControl> {
-    connection
+    let mut control = connection
         .query_row(
             "SELECT cancellation_requested,immediate_requested,pause_requested,EXISTS(SELECT 1 FROM steering_instructions WHERE turn_id=?1 AND status='accepted'),budget_exhausted,EXISTS(SELECT 1 FROM child_waits w WHERE w.parent_turn_id=?1 AND w.completed=0) FROM turns WHERE id=?1",
             [turn_id],
@@ -264,7 +269,9 @@ pub(super) fn turn_control_state(
         )
         .optional()
         .map_err(|_| StoreError::Database)?
-        .ok_or(StoreError::NotFound)
+        .ok_or(StoreError::NotFound)?;
+    control.steering_pending |= queue::boundary_pending(connection, turn_id)?;
+    Ok(control)
 }
 
 pub(super) fn apply_steering_tx(tx: &Transaction<'_>, turn_id: &str) -> StoreResult<usize> {
@@ -314,7 +321,7 @@ pub(super) fn apply_steering_tx(tx: &Transaction<'_>, turn_id: &str) -> StoreRes
         [turn_id],
     )
     .map_err(|_| StoreError::Database)?;
-    Ok(instructions.len())
+    Ok(instructions.len() + queue::apply_boundary_tx(tx, turn_id)?)
 }
 
 pub(super) fn reject_steering_tx(
@@ -454,7 +461,8 @@ pub(super) fn finish_turn(
             [turn_id],
             |row| row.get(0),
         )
-        .map_err(|_| StoreError::Database)?;
+        .map_err(|_| StoreError::Database)?
+        || queue::boundary_pending(&tx, turn_id)?;
     let steering_yield = matches!(
         outcome.error_code.as_deref(),
         Some("steering_resume" | "steering_resume_unknown" | "context_compaction_resume")
@@ -650,6 +658,7 @@ pub(super) fn finish_turn(
     )?;
     children::enqueue_completion(&tx, turn_id)?;
     children::wake(&tx)?;
+    queue::release_tx(&tx, &session_id)?;
     tx.commit().map_err(|_| StoreError::Database)
 }
 

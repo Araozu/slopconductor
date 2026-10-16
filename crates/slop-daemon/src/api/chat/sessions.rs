@@ -348,8 +348,11 @@ pub(crate) async fn send_message(
         Ok(settings) => (settings, None),
         Err((code, message)) => (session.settings.clone(), Some((code, message))),
     };
-    if request.delivery.unwrap_or_default() == slop_protocol::chat::DeliveryMode::AfterTurn
-        && let Some((code, message)) = fallback_error
+    if matches!(
+        request.delivery.unwrap_or_default(),
+        slop_protocol::chat::DeliveryMode::AfterTurn
+            | slop_protocol::chat::DeliveryMode::AfterFinish
+    ) && let Some((code, message)) = fallback_error
     {
         return error(StatusCode::BAD_REQUEST, code, message);
     }

@@ -20,8 +20,10 @@ probes. Structured Go/Zen/Codex execution adds explicit workspace tools, durable
 request/invocation records, artifacts, block-aware streaming, and per-turn model
 settings. Every message retains its provider/model, and new turns can switch
 providers using canonical history without forwarding incompatible private replay.
-Execution steering supports after-turn, next-boundary, and immediate
-delivery, plus durable pause/resume with explicit re-admission. Same-turn
+Message delivery uses a daemon-owned FIFO: after-turn at completed model/tool
+boundaries, after-finish at final responses, and session interruption that
+cancels active work and dispatches only the leading queued batch. Explicit
+next-boundary/immediate instructions and legacy orchestration controls remain. Same-turn
 steering keeps its provider snapshot; a resumed pause takes a fresh snapshot.
 Unified workspaces open existing canonical directories in place. Every session,
 task, and batch selects a workspace; the built-in `default` workspace supports

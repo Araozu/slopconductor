@@ -1233,6 +1233,7 @@ async fn claim_context_is_ordered_and_excludes_later_queued_users() {
             &created.session_id,
             SendMessageRequest {
                 command_id: "send-2b".into(),
+                delivery: Some(DeliveryMode::AfterFinish),
                 text: "later queued question".into(),
                 expected_revision: Some(first.revision),
 

@@ -811,6 +811,7 @@ fn tool_intent(c: &Connection, id: &str) -> StoreResult<ToolIntent> {
 }
 
 pub(super) fn cancel_descendants(tx: &Transaction<'_>, parent_turn: &str) -> StoreResult<()> {
+    tx.execute("UPDATE message_queue SET status='cancelled' WHERE status='pending' AND session_id IN(SELECT child_task_id FROM child_links WHERE parent_run_id=?1 AND cancel_with_parent=1)", [parent_turn]).map_err(|_|StoreError::Database)?;
     let mut stmt=tx.prepare("SELECT t.id FROM child_links l JOIN turns parent ON parent.id=l.parent_run_id JOIN turns r ON r.session_id=l.child_task_id JOIN turns t ON t.id=r.id WHERE parent.id=?1 AND l.cancel_with_parent=1 AND t.status IN('queued','running','paused','awaiting_children')").map_err(|_|StoreError::Database)?;
     let ids = stmt
         .query_map([parent_turn], |r| r.get::<_, String>(0))
@@ -1110,6 +1111,7 @@ impl StoreClient {
                     let delivery = match intent.arguments["delivery"].as_str().unwrap_or("next-boundary") {
                         "next-boundary" => DeliveryMode::NextBoundary,
                         "after-turn" => DeliveryMode::AfterTurn,
+                        "after-finish" => DeliveryMode::AfterFinish,
                         _ => return Err(StoreError::Invalid),
                     };
                     let request = SendMessageRequest {
@@ -1175,7 +1177,13 @@ impl StoreClient {
                             tx.commit().map_err(|_|StoreError::Database)?;
                             return Ok(OrchestrationResult::Completed(outcome));
                         }
-                        let runs=unfinished_child_turns(&tx,&child.id)?;
+                        let mut runs=unfinished_child_turns(&tx,&child.id)?;
+                        let mut stmt=tx.prepare("SELECT turn_id FROM message_queue WHERE session_id=?1 AND status='pending' ORDER BY sequence").map_err(|_|StoreError::Database)?;
+                        let pending=stmt.query_map([&child.id],|r|r.get::<_,String>(0)).map_err(|_|StoreError::Database)?.collect::<rusqlite::Result<Vec<_>>>().map_err(|_|StoreError::Database)?;
+                        drop(stmt);
+                        // Pending queue IDs come first so no cancelled run can
+                        // automatically release its unsent messages.
+                        runs.splice(0..0,pending);
                         let total=runs.len();
                         let mut cancelled=Vec::new();
                         for (index, run_id) in runs.iter().enumerate() {
@@ -1898,7 +1906,7 @@ mod tests {
             SendMessageRequest {
                 command_id: "implicit-wait-followup".into(),
                 text: "continue after this turn".into(),
-                delivery: Some(DeliveryMode::AfterTurn),
+                delivery: Some(DeliveryMode::AfterFinish),
                 ..Default::default()
             },
         )
@@ -1909,7 +1917,7 @@ mod tests {
                 let session = child.session_id.clone();
                 move |db| {
                     db.query_row(
-                        "SELECT id FROM turns WHERE session_id=?1 AND status='queued' ORDER BY ordinal DESC LIMIT 1",
+                        "SELECT turn_id FROM message_queue WHERE session_id=?1 AND status='pending' ORDER BY sequence DESC LIMIT 1",
                         [session],
                         |r| r.get(0),
                     )
@@ -2025,7 +2033,7 @@ mod tests {
             SendMessageRequest {
                 command_id: "reactivate-child".into(),
                 text: "continue".into(),
-                delivery: Some(DeliveryMode::AfterTurn),
+                delivery: Some(DeliveryMode::AfterFinish),
                 ..Default::default()
             },
         )
@@ -2102,7 +2110,7 @@ mod tests {
                 SendMessageRequest {
                     command_id: command_id.into(),
                     text: text.into(),
-                    delivery: Some(DeliveryMode::AfterTurn),
+                    delivery: Some(DeliveryMode::AfterFinish),
                     ..Default::default()
                 },
             )
@@ -2113,7 +2121,7 @@ mod tests {
             .submit({
                 let session = child.session_id.clone();
                 move |db| {
-                    let mut stmt = db.prepare("SELECT id FROM turns WHERE session_id=?1 AND status='queued' ORDER BY ordinal").map_err(|_|StoreError::Database)?;
+                    let mut stmt = db.prepare("SELECT turn_id FROM message_queue WHERE session_id=?1 AND status='pending' ORDER BY sequence").map_err(|_|StoreError::Database)?;
                     stmt.query_map([session],|r|r.get(0)).map_err(|_|StoreError::Database)?.collect::<Result<Vec<_>,_>>().map_err(|_|StoreError::Database)
                 }
             })
@@ -2124,7 +2132,7 @@ mod tests {
             let later = queued[1].clone();
             move |db| {
                 db.execute(
-                    "UPDATE turns SET requested_model='openai/gpt-4.1-mini' WHERE id=?1",
+                    "UPDATE message_queue SET request=json_set(request,'$.model','openai/gpt-4.1-mini') WHERE turn_id=?1",
                     [later],
                 )
                 .map_err(|_| StoreError::Database)?;
@@ -2215,7 +2223,7 @@ mod tests {
         };
         let progress: serde_json::Value = serde_json::from_str(&progress.output).unwrap();
         assert_eq!(progress["run_id"], child.run_id);
-        assert_ne!(progress["latest_run_id"], child.run_id);
+        assert_eq!(progress["latest_run_id"], child.run_id);
         assert_eq!(progress["status"], "running");
         assert_eq!(progress["model"], "opencode-go/glm-5.3-flash");
 

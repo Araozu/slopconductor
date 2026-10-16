@@ -184,6 +184,7 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
                 model,
                 delivery: delivery.map(|value| match value.as_str() {
                     "after-turn" => slop_protocol::chat::DeliveryMode::AfterTurn,
+                    "after-finish" => slop_protocol::chat::DeliveryMode::AfterFinish,
                     "next-boundary" => slop_protocol::chat::DeliveryMode::NextBoundary,
                     "immediate" => slop_protocol::chat::DeliveryMode::Immediate,
                     _ => unreachable!("CLI validates delivery mode"),

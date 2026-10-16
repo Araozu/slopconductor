@@ -157,6 +157,7 @@ pub(super) async fn task(command: TaskCommand, context: &Context) -> Result<()> 
                         delivery: Some(match delivery.as_str() {
                             "immediate" => DeliveryMode::Immediate,
                             "next-boundary" => DeliveryMode::NextBoundary,
+                            "after-finish" => DeliveryMode::AfterFinish,
                             _ => DeliveryMode::AfterTurn,
                         }),
                         ..Default::default()

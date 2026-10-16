@@ -67,6 +67,14 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
             get(steering_instructions),
         )
         .route("/v1/sessions/{session_id}/events", get(events))
+        .route(
+            "/v1/sessions/{session_id}/queue",
+            get(queue::queued_messages),
+        )
+        .route(
+            "/v1/sessions/{session_id}/interrupt",
+            post(queue::interrupt_session),
+        )
         .route("/v1/turns/{turn_id}", get(turn))
         .route("/v1/turns/{turn_id}/requests", get(model_requests))
         .route("/v1/turns/{turn_id}/tools", get(tool_invocations))
@@ -96,6 +104,7 @@ pub struct EventQuery {
 pub(crate) mod events;
 pub(crate) mod execution;
 pub(crate) mod history;
+pub(crate) mod queue;
 pub(crate) mod sessions;
 mod support;
 pub(crate) mod turns;

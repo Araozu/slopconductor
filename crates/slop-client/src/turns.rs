@@ -1,6 +1,28 @@
 use super::*;
 
 impl DaemonClient {
+    pub async fn queued_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<slop_protocol::chat::QueuedMessageResponse>, ClientError> {
+        self.require_feature("message-queue").await?;
+        self.get_json(session_url(&self.endpoint, session_id, Some("queue"))?)
+            .await
+    }
+
+    pub async fn interrupt_session(
+        &self,
+        session_id: &str,
+        request: &slop_protocol::chat::InterruptSessionRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("message-queue").await?;
+        self.post_json(
+            session_url(&self.endpoint, session_id, Some("interrupt"))?,
+            request,
+        )
+        .await
+    }
+
     pub async fn turn(&self, turn_id: &str) -> Result<TurnResponse, ClientError> {
         self.get_json(id_url(&self.endpoint, "/v1/turns", turn_id, None)?)
             .await

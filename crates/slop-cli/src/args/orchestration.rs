@@ -70,7 +70,7 @@ pub enum TaskCommand {
         text: Option<String>,
         #[arg(long)]
         prompt_file: Option<PathBuf>,
-        #[arg(long,value_parser=["after-turn","next-boundary","immediate"],default_value="after-turn")]
+        #[arg(long,value_parser=["after-turn", "after-finish","next-boundary","immediate"],default_value="after-turn")]
         delivery: String,
         #[arg(long)]
         command_id: Option<String>,

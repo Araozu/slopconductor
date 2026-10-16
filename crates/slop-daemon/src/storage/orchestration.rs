@@ -34,7 +34,7 @@ pub(super) fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse>
         Option<String>,
         String,
         String,
-    ) = connection
+    ) = match connection
         .query_row(
             "SELECT session_id,ordinal,retry_of,session_id,id FROM turns WHERE id=?1",
             [id],
@@ -42,7 +42,23 @@ pub(super) fn run(connection: &Connection, id: &str) -> StoreResult<RunResponse>
         )
         .optional()
         .map_err(|_| StoreError::Database)?
-        .ok_or(StoreError::NotFound)?;
+    {
+        Some(row) => row,
+        None => {
+            let turn = queue::virtual_turn(connection, id)?;
+            let session = get_session(connection, &turn.session_id)?;
+            return Ok(RunResponse {
+                id: id.into(),
+                task_id: turn.session_id.clone(),
+                attempt: 0,
+                retry_of: None,
+                session_id: turn.session_id.clone(),
+                workspace_id: session.workspace_id,
+                effects_unknown: false,
+                turn,
+            });
+        }
+    };
     let workspace_id = connection
         .query_row(
             "SELECT workspace_id FROM sessions WHERE id=?1",
@@ -284,6 +300,7 @@ impl StoreClient {
             if let Some(receipt) = workspaces::prior(&tx,&request.command_id,&scope,&payload)? { return Ok(receipt); }
             get_batch(&tx,&id)?;
             tx.execute("UPDATE batches SET cancellation_requested=1 WHERE id=?1",[&id]).map_err(|_|StoreError::Database)?;
+            tx.execute("UPDATE message_queue SET status='cancelled' WHERE status='pending' AND session_id IN(SELECT id FROM sessions WHERE admission_batch_id=?1)",[&id]).map_err(|_|StoreError::Database)?;
             let mut stmt = tx.prepare("SELECT r.id,r.id FROM turns r JOIN sessions k ON k.id=r.session_id JOIN turns t ON t.id=r.id WHERE k.admission_batch_id=?1 AND t.status IN('queued','running','paused','awaiting_children') ORDER BY k.created_order,r.ordinal").map_err(|_|StoreError::Database)?;
             let rows = stmt.query_map([&id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|_|StoreError::Database)?
                 .collect::<Result<Vec<_>,_>>().map_err(|_|StoreError::Database)?;
@@ -1175,6 +1192,7 @@ mod tests {
         assert_eq!(receipt.turn_id.as_deref(), Some(first.turn_id.as_str()));
         let queue = SendMessageRequest {
             command_id: "queue".into(),
+            delivery: Some(DeliveryMode::AfterFinish),
             text: "second".into(),
             ..Default::default()
         };
@@ -1194,6 +1212,7 @@ mod tests {
                 &receipt.session_id,
                 SendMessageRequest {
                     command_id: "queue-third".into(),
+                    delivery: Some(DeliveryMode::AfterFinish),
                     text: "third".into(),
                     ..Default::default()
                 },

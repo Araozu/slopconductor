@@ -35,6 +35,7 @@ async fn default_workspace_can_pass_old_step_and_message_limits_with_a_queued_fo
             &session,
             SendMessageRequest {
                 command_id: "long-second".into(),
+                delivery: Some(DeliveryMode::AfterFinish),
                 text: "queued followup".into(),
                 ..Default::default()
             },
