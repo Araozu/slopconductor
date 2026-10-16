@@ -1,6 +1,38 @@
 use super::*;
 
 impl DaemonClient {
+    pub async fn update_queued_message(
+        &self,
+        session: &str,
+        message: &str,
+        request: &hive_protocol::chat::UpdateQueuedMessageRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("queue-editing").await?;
+        let base = session_url(&self.endpoint, session, Some("queue"))?;
+        self.mutate_json(
+            reqwest::Method::PATCH,
+            id_url(&self.endpoint, base.path(), message, None)?,
+            request,
+        )
+        .await
+    }
+
+    pub async fn cancel_queued_message(
+        &self,
+        session: &str,
+        message: &str,
+        request: &CancelTurnRequest,
+    ) -> Result<CommandReceipt, ClientError> {
+        self.require_feature("queue-editing").await?;
+        let base = session_url(&self.endpoint, session, Some("queue"))?;
+        self.mutate_json(
+            reqwest::Method::DELETE,
+            id_url(&self.endpoint, base.path(), message, None)?,
+            request,
+        )
+        .await
+    }
+
     pub async fn queued_messages(
         &self,
         session_id: &str,

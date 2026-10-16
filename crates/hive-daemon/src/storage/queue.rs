@@ -1,6 +1,8 @@
 //! The owner, rather than a connected client, delivers the session's FIFO.
 use super::*;
-use hive_protocol::chat::{InterruptSessionRequest, QueuedMessageResponse};
+use hive_protocol::chat::{
+    InterruptSessionRequest, QueuedMessageResponse, UpdateQueuedMessageRequest,
+};
 
 pub(super) fn migrate(tx: &Transaction<'_>) -> StoreResult<()> {
     tx.execute_batch(
@@ -312,6 +314,123 @@ pub(super) fn release_tx(tx: &Transaction<'_>, session: &str) -> StoreResult<()>
 }
 
 impl StoreClient {
+    /// Mutations serialize with dispatch; an already dispatched entry is never
+    /// edited or used as a cancellation target for the active turn.
+    pub async fn update_queued_message(
+        &self,
+        session: &str,
+        message: &str,
+        request: UpdateQueuedMessageRequest,
+    ) -> StoreResult<CommandReceipt> {
+        let session = session.to_owned();
+        let message = message.to_owned();
+        self.submit(move |connection| {
+            if !valid_command_id(&request.command_id)
+                || (request.text.is_none() && request.delivery.is_none())
+                || request.text.as_ref().is_some_and(|text| {
+                    text.trim().is_empty() || text.len() > MAX_MESSAGE_BYTES || text.contains('\0')
+                })
+                || request.delivery.is_some_and(|mode| {
+                    !matches!(mode, DeliveryMode::AfterTurn | DeliveryMode::AfterFinish)
+                })
+            {
+                return Err(StoreError::Invalid);
+            }
+            let tx = connection
+                .unchecked_transaction()
+                .map_err(|_| StoreError::Database)?;
+            let scope = format!("session:{session}:queue:{message}:update");
+            let payload = canonical(&request)?;
+            if let Some(receipt) = prior_receipt(&tx, &request.command_id, &scope, &payload)? {
+                return Ok(receipt);
+            }
+            let (turn, mut queued) = pending_entry(&tx, &session, &message)?;
+            if let Some(text) = request.text {
+                queued.text = text;
+            }
+            if let Some(delivery) = request.delivery {
+                queued.delivery = Some(delivery);
+            }
+            let delivery = if queued.delivery.unwrap_or_default() == DeliveryMode::AfterTurn {
+                "after-turn"
+            } else {
+                "after-finish"
+            };
+            tx.execute(
+                "UPDATE message_queue SET request=?1,delivery=?2 WHERE id=?3",
+                rusqlite::params![canonical(&queued)?, delivery, message],
+            )
+            .map_err(|_| StoreError::Database)?;
+            let (revision, sequence) = append_event(
+                &tx,
+                &session,
+                "queued_message_updated",
+                Some(&turn),
+                Some(&message),
+            )?;
+            let receipt = make_receipt(
+                &request.command_id,
+                &session,
+                Some(turn),
+                Some(message),
+                revision,
+                sequence,
+            );
+            commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
+            tx.commit().map_err(|_| StoreError::Database)?;
+            Ok(receipt)
+        })
+        .await
+    }
+
+    pub async fn cancel_queued_message(
+        &self,
+        session: &str,
+        message: &str,
+        request: CancelTurnRequest,
+    ) -> StoreResult<CommandReceipt> {
+        let session = session.to_owned();
+        let message = message.to_owned();
+        self.submit(move |connection| {
+            if !valid_command_id(&request.command_id) {
+                return Err(StoreError::Invalid);
+            }
+            let tx = connection
+                .unchecked_transaction()
+                .map_err(|_| StoreError::Database)?;
+            let scope = format!("session:{session}:queue:{message}:cancel");
+            let payload = canonical(&request)?;
+            if let Some(receipt) = prior_receipt(&tx, &request.command_id, &scope, &payload)? {
+                return Ok(receipt);
+            }
+            let (turn, _) = pending_entry(&tx, &session, &message)?;
+            tx.execute(
+                "UPDATE message_queue SET status='cancelled' WHERE id=?1",
+                [&message],
+            )
+            .map_err(|_| StoreError::Database)?;
+            let (revision, sequence) = append_event(
+                &tx,
+                &session,
+                "queued_message_cancelled",
+                Some(&turn),
+                Some(&message),
+            )?;
+            let receipt = make_receipt(
+                &request.command_id,
+                &session,
+                Some(turn),
+                Some(message),
+                revision,
+                sequence,
+            );
+            commit_command(&tx, &request.command_id, &scope, &payload, &receipt)?;
+            tx.commit().map_err(|_| StoreError::Database)?;
+            Ok(receipt)
+        })
+        .await
+    }
+
     pub async fn queued_messages(&self, session: &str) -> StoreResult<Vec<QueuedMessageResponse>> {
         let session = session.to_owned();
         self.submit(move |connection| {
@@ -430,5 +549,26 @@ impl StoreClient {
             Ok(receipt)
         })
         .await
+    }
+}
+
+fn pending_entry(
+    connection: &Connection,
+    session: &str,
+    message: &str,
+) -> StoreResult<(String, SendMessageRequest)> {
+    get_session(connection, session)?;
+    let entry: Option<(String, String, SendMessageRequest)> = connection
+        .query_row(
+            "SELECT turn_id,status,request FROM message_queue WHERE id=?1 AND session_id=?2",
+            rusqlite::params![message, session],
+            |row| Ok((row.get(0)?, row.get(1)?, execution::json_column(row, 2)?)),
+        )
+        .optional()
+        .map_err(|_| StoreError::Database)?;
+    match entry {
+        Some((turn, status, request)) if status == "pending" => Ok((turn, request)),
+        Some(_) => Err(StoreError::Conflict),
+        None => Err(StoreError::NotFound),
     }
 }

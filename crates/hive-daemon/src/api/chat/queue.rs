@@ -1,5 +1,55 @@
 use super::*;
-use hive_protocol::chat::InterruptSessionRequest;
+use hive_protocol::chat::{CancelTurnRequest, InterruptSessionRequest, UpdateQueuedMessageRequest};
+
+#[utoipa::path(
+    patch, path = "/v1/sessions/{session_id}/queue/{message_id}", tag = "chat",
+    params(("session_id" = String, Path, description = "Session id"), ("message_id" = String, Path, description = "Queued message id")),
+    request_body = UpdateQueuedMessageRequest,
+    responses(
+        (status = 202, description = "Queued message updated in place", body = hive_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = hive_protocol::ErrorResponse),
+        (status = 401, description = "Unauthorized", body = hive_protocol::ErrorResponse),
+        (status = 404, description = "Queued message not found", body = hive_protocol::ErrorResponse),
+        (status = 409, description = "Already dispatched, cancelled, or command conflict", body = hive_protocol::ErrorResponse)
+    ), security(("bearer_auth" = []))
+)]
+pub(crate) async fn update_queued_message(
+    State(state): State<Arc<AppState>>,
+    Path((session, message)): Path<(String, String)>,
+    Json(request): Json<UpdateQueuedMessageRequest>,
+) -> Response {
+    accepted(
+        state
+            .store
+            .update_queued_message(&session, &message, request)
+            .await,
+    )
+}
+
+#[utoipa::path(
+    delete, path = "/v1/sessions/{session_id}/queue/{message_id}", tag = "chat",
+    params(("session_id" = String, Path, description = "Session id"), ("message_id" = String, Path, description = "Queued message id")),
+    request_body = CancelTurnRequest,
+    responses(
+        (status = 202, description = "Queued message cancelled", body = hive_protocol::chat::CommandReceipt),
+        (status = 400, description = "Invalid request", body = hive_protocol::ErrorResponse),
+        (status = 401, description = "Unauthorized", body = hive_protocol::ErrorResponse),
+        (status = 404, description = "Queued message not found", body = hive_protocol::ErrorResponse),
+        (status = 409, description = "Already dispatched, cancelled, or command conflict", body = hive_protocol::ErrorResponse)
+    ), security(("bearer_auth" = []))
+)]
+pub(crate) async fn cancel_queued_message(
+    State(state): State<Arc<AppState>>,
+    Path((session, message)): Path<(String, String)>,
+    Json(request): Json<CancelTurnRequest>,
+) -> Response {
+    accepted(
+        state
+            .store
+            .cancel_queued_message(&session, &message, request)
+            .await,
+    )
+}
 
 #[utoipa::path(
     get, path = "/v1/sessions/{session_id}/queue", tag = "chat",

@@ -1,6 +1,158 @@
 use super::tests::{create_request, open_test};
 use super::*;
-use hive_protocol::chat::InterruptSessionRequest;
+use hive_protocol::chat::{InterruptSessionRequest, UpdateQueuedMessageRequest};
+
+#[tokio::test]
+async fn queue_edits_preserve_fifo_and_retries_never_cancel_dispatched_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_test(&dir, None).await;
+    let c = store.client();
+    let session = c
+        .create_session(create_request("edit-queue", None))
+        .await
+        .unwrap()
+        .session_id;
+    send(&c, &session, "initial", DeliveryMode::AfterTurn).await;
+    let first = c.claim_next_turn().await.unwrap().unwrap();
+    let request = start_request(&c, &first, "edit-queue").await;
+    let queued = send(&c, &session, "original", DeliveryMode::AfterTurn).await;
+    let message = queued.message_id.unwrap();
+    let removed = send(&c, &session, "remove", DeliveryMode::AfterFinish)
+        .await
+        .message_id
+        .unwrap();
+    let edit = UpdateQueuedMessageRequest {
+        command_id: "edit-once".into(),
+        text: Some("edited".into()),
+        delivery: Some(DeliveryMode::AfterFinish),
+    };
+    let receipt = c
+        .update_queued_message(&session, &message, edit.clone())
+        .await
+        .unwrap();
+    let queue = c.queued_messages(&session).await.unwrap();
+    assert_eq!(
+        queue.iter().map(|q| q.id.as_str()).collect::<Vec<_>>(),
+        [message.as_str(), removed.as_str()]
+    );
+    assert_eq!(queue[0].text, "edited");
+    assert_eq!(queue[0].delivery, DeliveryMode::AfterFinish);
+    let other = c
+        .create_session(create_request("other-queue", None))
+        .await
+        .unwrap()
+        .session_id;
+    assert!(matches!(
+        c.update_queued_message(
+            &other,
+            &message,
+            UpdateQueuedMessageRequest {
+                command_id: "wrong-session".into(),
+                ..edit.clone()
+            }
+        )
+        .await,
+        Err(StoreError::NotFound)
+    ));
+    for (id, text, delivery) in [
+        ("empty", Some(" ".into()), None),
+        ("empty-patch", None, None),
+        ("immediate", None, Some(DeliveryMode::Immediate)),
+        ("boundary", None, Some(DeliveryMode::NextBoundary)),
+    ] {
+        assert!(matches!(
+            c.update_queued_message(
+                &session,
+                &message,
+                UpdateQueuedMessageRequest {
+                    command_id: id.into(),
+                    text,
+                    delivery
+                }
+            )
+            .await,
+            Err(StoreError::Invalid)
+        ));
+    }
+    assert!(matches!(
+        c.update_queued_message(
+            &session,
+            &message,
+            UpdateQueuedMessageRequest {
+                text: Some("conflicting retry".into()),
+                ..edit.clone()
+            }
+        )
+        .await,
+        Err(StoreError::Conflict)
+    ));
+    let cancel = CancelTurnRequest {
+        command_id: "remove-once".into(),
+    };
+    let cancelled = c
+        .cancel_queued_message(&session, &removed, cancel.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        c.cancel_queued_message(&session, &removed, cancel)
+            .await
+            .unwrap(),
+        cancelled
+    );
+    assert!(
+        !c.turn_control(&first.turn_id)
+            .await
+            .unwrap()
+            .cancellation_requested
+    );
+    complete_request(&c, &first, request).await;
+    c.finish_chat_turn(&first.turn_id, outcome(ChatStatus::Completed))
+        .await
+        .unwrap();
+    let next = c.claim_next_turn().await.unwrap().unwrap();
+    assert_ne!(
+        next.turn_id, first.turn_id,
+        "delivery mode changed to after-finish"
+    );
+    assert_eq!(next.history.last().unwrap().visible_text(), "edited");
+    assert!(c.queued_messages(&session).await.unwrap().is_empty());
+    assert_eq!(
+        c.update_queued_message(&session, &message, edit.clone())
+            .await
+            .unwrap(),
+        receipt
+    );
+    assert!(matches!(
+        c.update_queued_message(
+            &session,
+            &message,
+            UpdateQueuedMessageRequest {
+                command_id: "too-late-edit".into(),
+                ..edit
+            }
+        )
+        .await,
+        Err(StoreError::Conflict)
+    ));
+    assert!(matches!(
+        c.cancel_queued_message(
+            &session,
+            &message,
+            CancelTurnRequest {
+                command_id: "too-late-cancel".into()
+            }
+        )
+        .await,
+        Err(StoreError::Conflict)
+    ));
+    assert!(
+        !c.turn_control(&next.turn_id)
+            .await
+            .unwrap()
+            .cancellation_requested
+    );
+    store.shutdown().await.unwrap();
+}
 use hive_runtime::{
     agent::{RequestCompletion, RequestIntent},
     chat::{ChatOutcome, ChatRepository, ChatStatus, TurnWork},

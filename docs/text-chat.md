@@ -100,9 +100,25 @@ anonymous. The daemon accepts loopback listeners only.
 | DELETE /v1/sessions/{id}/messages/{message_id} | Remove that message and all later messages from an idle conversation |
 | GET /v1/sessions/{id}/instructions | Paginated durable steering instruction status/history |
 | GET /v1/sessions/{id}/events | Replay from `after`; optional NDJSON following |
+| GET /v1/sessions/{id}/queue | Unsent prompts in FIFO order |
+| PATCH /v1/sessions/{id}/queue/{message_id} | Edit unsent text and/or after-turn/after-finish delivery in place |
+| DELETE /v1/sessions/{id}/queue/{message_id} | Cancel only this unsent prompt |
 | GET /v1/turns/{id} | Outcome, message IDs, requested/resolved model, and usage |
 | POST /v1/turns/{id}/cancel | Idempotent explicit cancellation |
 | POST /v1/turns/{id}/pause, /resume | Durable pause at safe boundaries and explicit fresh admission |
+
+## Editing queued prompts
+
+Health advertises `queue-editing`. Queue PATCH accepts `command_id` plus optional
+`text` and `delivery`; at least one change is required. Text must be nonempty,
+and delivery must be `after-turn` or `after-finish`. The message keeps its FIFO
+position, frozen model and settings. DELETE accepts `command_id`. Both return a
+command receipt and commit `queued_message_updated` or `queued_message_cancelled`
+with the mutation. Requests serialize with dispatch: a message already sent or
+cancelled returns 409, without changing history or cancelling an active run.
+Retried command IDs return their original receipts even after dispatch; changed
+payloads under an existing command ID conflict. IDs belonging to another session
+return 404. These routes also have typed native client methods.
 
 ## Forking, editing, and deleting history
 

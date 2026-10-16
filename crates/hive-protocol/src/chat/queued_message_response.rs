@@ -9,6 +9,14 @@ pub struct QueuedMessageResponse {
     pub delivery: DeliveryMode,
 }
 
+/// Change an unsent message in place, preserving its FIFO position and settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct UpdateQueuedMessageRequest {
+    pub command_id: String,
+    pub text: Option<String>,
+    pub delivery: Option<DeliveryMode>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct InterruptSessionRequest {
     pub command_id: String,

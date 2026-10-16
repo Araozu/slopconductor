@@ -22,7 +22,9 @@ pub use send_message_request::SendMessageRequest;
 mod delivery_mode;
 pub use delivery_mode::DeliveryMode;
 mod queued_message_response;
-pub use queued_message_response::{InterruptSessionRequest, QueuedMessageResponse};
+pub use queued_message_response::{
+    InterruptSessionRequest, QueuedMessageResponse, UpdateQueuedMessageRequest,
+};
 mod steering_instruction_response;
 pub use steering_instruction_response::SteeringInstructionResponse;
 mod turn_control_request;

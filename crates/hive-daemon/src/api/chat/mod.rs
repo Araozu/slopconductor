@@ -72,6 +72,10 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
             get(queue::queued_messages),
         )
         .route(
+            "/v1/sessions/{session_id}/queue/{message_id}",
+            axum::routing::patch(queue::update_queued_message).delete(queue::cancel_queued_message),
+        )
+        .route(
             "/v1/sessions/{session_id}/interrupt",
             post(queue::interrupt_session),
         )
