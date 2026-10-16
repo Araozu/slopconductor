@@ -18,9 +18,9 @@ Responses API, with native ChatGPT subscription login or Platform API keys;
 see [Codex connection](codex-connection.md). All three clients share bounded
 wire decoders. Responses preserve terminal outcomes, optional usage/provenance,
 and requested/reported model IDs. The daemon composes all three providers with
-a bounded turn supervisor, durable workspace port, canonical-root writer
-serialization, visible checkpoints, and cancellation. All three providers support
-the bounded file/shell tool loop. Provider clients are selected
+a bounded turn supervisor, durable workspace port, visible checkpoints, and
+cancellation. All three providers support the bounded file/shell tool loop.
+Provider clients are selected
 per turn and snapshotted at admission. See [text chat](text-chat.md) and
 [structured execution](structured-execution.md). [Durable tasks and matrices](tasks-batches.md) share this turn scheduler, with
 per-batch admission caps, persistent fair admission, aggregate operation budgets,
@@ -51,7 +51,7 @@ same-turn steering continuations retain the provider snapshot.
 
 One admitted run has a serialized supervisor and bounded command inbox:
 
-1. Load its task goal, selected policy, workspace reservation, and checkpoint.
+1. Load its task goal, selected policy, workspace selection, and checkpoint.
 2. Process accepted steering/control commands in owner-defined order.
 3. Check cancellation, limits, and remaining provider/tool budgets.
 4. Assemble bounded model context from durable messages and referenced data.
@@ -222,9 +222,9 @@ block an invisible client-side prompt.
 ## Admission, child tasks, and fairness
 
 Use daemon-level limits for admitted runs, provider requests, tools, and browser
-contexts. Add per-workspace-root writer limits and per-account provider limits. A batch
-cannot consume every slot indefinitely; fairness operates across batches and
-interactive tasks.
+contexts. Sharing a workspace does not block turn admission or tool execution;
+agents coordinate conflicting filesystem changes. A batch cannot consume every
+slot indefinitely; fairness operates across batches and interactive tasks.
 
 The implemented scheduler rotates persistent admission tickets across batches,
 independent task trees, and ordinary sessions; newly queued/returning groups

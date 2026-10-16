@@ -60,9 +60,10 @@ results, and a way to retry individual failures without rerunning successes.
 
 ### Parallel work in one repository
 
-Several writable tasks may target one workspace, where their writes serialize.
-For independent concurrent edits, the user explicitly creates Git worktrees and
-selects a different workspace for each task. The user can inspect diffs and test
+Several writable tasks may target one workspace and execute concurrently.
+Agents coordinate conflicting filesystem changes. For independent filesystem
+state, the user explicitly creates Git worktrees and selects a different
+workspace for each task. The user can inspect diffs and test
 results per task. The daemon records the selected workspace and, for worktrees,
 the frozen base commit.
 

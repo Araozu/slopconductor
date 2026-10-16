@@ -68,8 +68,9 @@ If a CLI policy is supplied without aggregate limit flags, it supplies a budget
 of 64 model requests and 128 tool calls. API callers supply their budget explicitly.
 The model-facing child tool describes the parent workspace ID and the explicit
 `default` choice, so a model can select an existing workspace without inventing
-an identifier. Children that share a workspace serialize writes by canonical root. Each child
-can select a different existing workspace when appropriate.
+an identifier. Children that share a workspace can execute concurrently under
+their configured admission limits and coordinate conflicting changes. Each
+child can select a different existing workspace when appropriate.
 
 Clients can also create a child directly. Replace the workspace ID in the
 [child request example](../examples/child-request.json); the file contains inputs,

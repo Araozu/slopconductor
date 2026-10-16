@@ -155,8 +155,8 @@ effects. Existing forks retain their copied history after source deletion.
 
 Each fork inherits the required selected workspace ID and creates no directory
 or worktree. If independent filesystem state is needed, create a worktree
-explicitly before creating the fork. Ordinary workspaces share their canonical directory;
-writes serialize by canonical root. Transcript operations do not undo or replay
+explicitly before creating the fork. Sessions using one workspace share its canonical
+directory and can execute concurrently. Transcript operations do not undo or replay
 tools.
 The new fork starts its own operation ledger; inherited history is not charged
 as new inference or tool execution.

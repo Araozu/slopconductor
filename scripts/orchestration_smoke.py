@@ -150,8 +150,8 @@ def check_orchestration(daemon_binary, cli_binary, root):
         assert default_preview["spec"]["default_max_output_tokens"] == 4096
         assert all(c["spec"]["settings"]["max_output_tokens"] == 4096 for c in default_preview["combinations"])
 
-        # Independent writable workspaces still admit concurrently. Batch
-        # members below share one workspace and are serialized by canonical root.
+        # Independent writable workspaces admit concurrently, as do batch
+        # members sharing one workspace below.
         parallel_tasks = []
         for label in ("a", "b"):
             parallel_repo = root / f"parallel-{label}"
@@ -179,8 +179,10 @@ def check_orchestration(daemon_binary, cli_binary, root):
         assert cli("batch", "submit", str(frozen_path), "--command-id", "eight-jobs") == accepted
         api("/v1/batches", {"command_id": "eight-jobs", "spec": dict(preview["spec"], name="changed")}, status=409)
         batch_id = accepted["batch_id"]
-        members = wait_for(lambda: (lambda items: items if any(t["latest_run"]["turn"]["status"] == "running" for t in items) else None)(cli("batch", "members", batch_id)["items"]), "one admitted writer for the shared workspace")
-        assert sum(t["latest_run"]["turn"]["status"] == "running" for t in members) == 1
+        members = wait_for(lambda: (lambda items: items if sum(t["latest_run"]["turn"]["status"] == "running" for t in items) == 2 else None)(cli("batch", "members", batch_id)["items"]), "two admitted writers for the shared workspace")
+        assert sum(t["latest_run"]["turn"]["status"] == "queued" for t in members) == 6
+        wait_for(lambda: len([c for c in fixture.calls if c.get("max_tokens", c.get("max_completion_tokens")) in {17, 18}]) >= 2,
+                 "two shared-workspace provider requests held concurrently")
         assert {t["latest_run"]["workspace_id"] for t in members} == {workspace["id"]}
         assert Path(workspace["path"]).is_dir()
         # Spare daemon capacity remains usable while this batch reaches its cap.

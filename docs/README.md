@@ -4,7 +4,7 @@ These documents capture the application idea, accepted constraints, proposed
 design, and a staged implementation plan. They are intended to let a developer
 start with a useful CLI and daemon without first building graphical clients.
 
-**Status as of 2026-10-15:** milestone M0 is a repository/bootstrap foundation,
+**Status as of 2026-10-16:** milestone M0 is a repository/bootstrap foundation,
 with runtime-only OpenCode Go, Zen, and headless Codex integrations added afterward.
 The startup foundation now adds XDG-aware configuration, exclusive directory
 ownership, durable SQLite node identity, local API authentication, and bounded
@@ -29,7 +29,9 @@ Unified workspaces open existing canonical directories in place. Every session,
 task, and batch selects a workspace; the built-in `default` workspace supports
 directory-less work. Explicit Git worktree creation freezes a base commit, and
 sessions/orchestration never create worktrees implicitly. The registry is
-independent of sessions, and writes to a shared canonical root serialize.
+independent of sessions. Sessions sharing a canonical root can execute
+concurrently, including model requests and tools, under the global and
+orchestration admission limits.
 The 2026-10-09 tool update limits coding tools to `read`, `write`, `edit`, and
 `bash`. Persistent conversations/turns and deterministic matrices now add preview,
 atomic acceptance, bounded admission, explicit selective retries, and result

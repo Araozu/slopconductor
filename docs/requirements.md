@@ -28,7 +28,7 @@ Priority orders work; it does not imply a future capability is already available
 | N14 | Tailscale required initially for remote access | Connectivity builds on an existing private network. |
 | N15 | API keys and supported subscriptions | Authentication must fit the provider's documented access path. |
 | N16 | Efficient many-session operation | Measure baseline and incremental session memory; bound retained data. |
-| N17 | Git worktree orchestration | Users explicitly create separate workspaces for parallel writers; worktrees are never allocated implicitly by sessions or orchestration. |
+| N17 | Git worktree orchestration | Users explicitly create separate workspaces when independent filesystem state is needed; worktrees are never allocated implicitly by sessions or orchestration. |
 | N18 | Native child task creation | Agents can create sessions/tasks using the same controlled operations as clients. |
 | N19 | Every conversation belongs to a workspace | Thread creation requires an existing workspace ID; the permanent No workspace record contains directory-less threads. |
 | N20 | Worktree creation is explicit | Opening a directory uses it in place. Only an explicit operation from an existing workspace creates a worktree; lifecycle ownership is metadata. |
@@ -105,7 +105,9 @@ before acknowledgment or dependent execution.
 ## Resource and concurrency requirements
 
 P01: Admission limits cover active runs, model requests, subprocesses, browser
-contexts, queued child tasks, and concurrent writers per canonical workspace root.
+contexts, and queued child tasks. Sessions sharing a canonical workspace root
+can execute model requests and tools concurrently. Agents are responsible for
+coordinating conflicting filesystem changes.
 
 P02: Inactive session histories are stored on disk. Listing sessions uses
 pagination rather than loading complete conversations.

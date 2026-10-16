@@ -1,10 +1,11 @@
 # Workspaces and explicit Git worktrees
 
-**Unified workspace design, 2026-10-15.** Every session has a workspace selection.
+**Unified workspace design, updated 2026-10-16.** Every session has a workspace selection.
 A workspace is a registered directory on its owning daemon. Opening a workspace
 records an existing directory in place; it does not copy files or create a
 worktree. The registry is independent of sessions, so several sessions can
-select the same workspace. Writes to one canonical root are serialized.
+select the same workspace and execute concurrently, including model requests
+and tools.
 
 The built-in workspace ID `default` is named **No workspace** and has no path.
 It lets text-only conversations satisfy the required workspace selection without
@@ -104,11 +105,14 @@ execution policy. An optional `limits` object on `WorkspaceSelection` sets
 returns the effective execution policy. `SessionResponse.workspace_id` always
 identifies the selected workspace, including `default`.
 
-Several sessions may use the same registered workspace. The daemon serializes
-writes by canonical root, including across sessions and worktree-backed paths.
-Each session remains independently durable and keeps its own messages, turns,
-and policy. Follow-ups, retries, and history forks retain the existing selected
-workspace unless a new operation explicitly accepts another selection.
+Several sessions may use the same registered workspace and execute model
+requests and tools concurrently, subject to global, batch, and child admission
+limits. Turns within each session remain ordered. Agents are responsible for
+coordinating conflicting filesystem changes; explicitly created worktrees
+provide independent filesystem state when needed. Each session remains
+independently durable and keeps its own messages, turns, and policy. Follow-ups,
+retries, and history forks retain the existing selected workspace unless a new
+operation explicitly accepts another selection.
 
 ## Diff and removal
 

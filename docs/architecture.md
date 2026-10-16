@@ -45,7 +45,7 @@ configuration, an exclusive data-directory lock, a bounded SQLite worker, and
 local API credential initialization. A bounded native supervisor executes
 Go, Zen, and Codex turns independently of client lifetime through the shared
 provider interface. [Structured execution](structured-execution.md) adds a
-durable Go/Zen/Codex tool loop, explicit workspace leases, artifacts, and frozen
+durable Go/Zen/Codex tool loop, explicit workspace policies, artifacts, and frozen
 per-turn model/settings. General
 tasks, run attempts, and matrix orchestration are implemented through the same
 turn scheduler; see [tasks and batches](tasks-batches.md). Fair admission,
@@ -61,10 +61,10 @@ The [workspace registry](workspaces.md) records canonical directories independen
 of conversations. A session selects an existing workspace ID; explicit worktree
 creation freezes a Git base and returns a workspace record. Sessions, tasks,
 batches, children, retries, and history forks never create worktrees implicitly.
-Multiple sessions may select one workspace, and writers serialize by canonical
-root. Session responses retain the effective execution policy. Batch and child
-metadata live on the same conversation record; there are no separate task or run
-entities.
+Multiple sessions may select one workspace and execute concurrently under
+global and orchestration limits. Session responses retain the effective
+execution policy. Batch and child metadata live on the same conversation
+record; there are no separate task or run entities.
 
 The daemon also owns [runtime provider credential configuration](provider-credentials.md):
 private XDG records, API-key replacement, and a bounded ChatGPT login listener.
@@ -213,7 +213,8 @@ Whole-workspace verification uses `--workspace`.
 2. CLI exit leaves an accepted run alive.
 3. Client reconnect neither loses committed events nor starts another attempt.
 4. Retrying a command with the same identity cannot produce two tasks.
-5. Several tasks cannot concurrently write one exclusive workspace.
+5. Sessions sharing a workspace can execute concurrently under admission limits;
+   turns within each session remain ordered.
 6. An unknown tool outcome cannot silently become success or automatic replay.
 7. Mirrored sessions remain read-only unless a handoff has committed.
 8. Queued work does not reserve resources intended only for active execution.

@@ -1,6 +1,6 @@
 # Structured execution and tools
 
-**Implemented, updated 2026-10-13.** The daemon selects OpenCode Go, OpenCode Zen, or
+**Implemented, updated 2026-10-16.** The daemon selects OpenCode Go, OpenCode Zen, or
 Codex through the common runtime provider interface. All three run the bounded
 inference/tool loop and preserve structured history. Incompatible required
 continuation within a turn and unsupported settings fail before provider
@@ -183,9 +183,10 @@ quota/authentication failures are not retried. Uncertain retry usage stays unkno
 Every session selects a registered workspace, including plain text sessions
 that use the built-in `default` selection with no tools. A tool-enabled session
 requires a nonempty tool allowlist. The daemon resolves and validates the
-canonical root before acceptance. Multiple sessions may select the same workspace; their
-writers serialize by canonical root. This lease does not cover nested roots,
-external editors/processes, or a second daemon with another data directory.
+canonical root before acceptance. Multiple sessions may select the same workspace
+and execute model requests and tools concurrently under the global and
+orchestration limits. Agents coordinate conflicting filesystem changes. Workspace
+selection does not provide exclusive access to a directory.
 See [workspaces](workspaces.md) for opening directories and explicitly creating
 Git worktrees.
 
@@ -362,7 +363,7 @@ Closing the CLI detaches; `hivectl turn cancel TURN_ID` explicitly cancels execu
 Rust fixtures cover all three structured wire shapes, byte-split SSE/Unicode,
 private continuation, incomplete/malformed proposals, line pagination, write
 creation/overwrite, single/multiple exact edit preconditions,
-symlink escapes, output bounds, process cancellation, workspace leases,
+symlink escapes, output bounds, process cancellation, shared-workspace admission,
 frozen settings, migration, recovery, and artifact integrity. The real-binary
 smoke check adds a complete read/write/edit/Bash workflow, the exact four-tool
 capability set and restricted allowlists, canonical client rendering,

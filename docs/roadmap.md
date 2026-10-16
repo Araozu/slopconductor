@@ -105,7 +105,7 @@ identity, a local API bearer credential, authenticated node inspection, and
 bounded shutdown. The next slice implements durable text sessions, idempotent
 message commands, paginated history/events, daemon-owned Go inference, explicit
 cancellation, and a consumer chat CLI. [Structured execution](structured-execution.md)
-now implements file/shell tools, explicit workspace policy/leases, artifacts,
+now implements file/shell tools, explicit workspace policies, artifacts,
 structured streaming, frozen per-turn model/settings, and no-replay recovery.
 Durable task/run lifecycle and matrix submission are now implemented; see
 [tasks and batches](tasks-batches.md). [Native offline validation](native-validation.md)
@@ -167,8 +167,9 @@ selective retries, and result export.
 **Partial implementation:** sessions select existing workspace IDs. Explicit
 directory/repository and worktree creation return allocating workspace records
 that clients inspect until ready or failed. Restart does not replay unfinished
-filesystem or Git operations and records uncertain effects. Same-root writers serialize; separate workspaces support
-independent edits. Durable tasks/runs and deterministic
+filesystem or Git operations and records uncertain effects. Sessions sharing a
+workspace execute concurrently; separate workspaces support independent
+filesystem state. Durable tasks/runs and deterministic
 prompt/model/settings matrices now cover
 preview, atomic submission, lazy admission, selective retries, and JSON Lines
 results. Native children now add selected context/artifact previews, one-level
@@ -191,7 +192,7 @@ API-key execution remains independently usable. See the
 
 Acceptance scenarios:
 
-1. Two writable jobs selecting one workspace serialize; explicitly created
+1. Two writable jobs selecting one workspace execute concurrently; explicitly created
    worktrees allow independent diffs when desired.
 2. A 2-prompt × 2-model × 2-setting batch yields eight reproducible combinations.
 3. A batch larger than admission capacity stays queued without creating every

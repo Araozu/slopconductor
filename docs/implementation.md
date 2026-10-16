@@ -18,8 +18,8 @@ Codex adds native ChatGPT registration, signed ID-token validation, protected
 credential storage and serialized renewal; see [Codex connection](codex-connection.md).
 A shared object-safe `ProviderClient` covers all three adapters' text operations
 and adds structured inference for Go/Zen/Codex, with terminal validation, safe diagnostics and optional
-usage. A bounded daemon-owned supervisor selects Go, Zen, or Codex per turn, serializes
-sessions/workspaces, checkpoints visible output, and commits outcomes. It
+usage. A bounded daemon-owned supervisor selects Go, Zen, or Codex per turn, orders
+turns within each session, checkpoints visible output, and commits outcomes. It
 dispatches authorized tools for all three providers.
 SQLite stores node identity, sessions, turns, messages, commands, and events.
 Authenticated provider credential routes and CLI commands now support private
@@ -30,8 +30,8 @@ model/settings, model requests, file/shell invocations, artifacts, and recovery
 results. Its only coding tools are `read`, `write`, `edit`, and `bash`, implemented
 in Rust; workspace chats enable all four unless an explicit allowlist restricts
 them. The unified workspace API opens canonical directories in place and creates
-Git worktrees explicitly. Sessions select existing workspace IDs and writers
-serialize by canonical root; see [workspaces](workspaces.md). Durable tasks/run attempts and
+Git worktrees explicitly. Sessions select existing workspace IDs and may execute
+concurrently in the same directory; see [workspaces](workspaces.md). Durable tasks/run attempts and
 matrices with preview, selective retry, and result export are implemented; see
 [tasks and batches](tasks-batches.md). Bounded [native children](child-tasks.md)
 are implemented. Scoped [daemon peering](daemon-peering.md) adds optional
@@ -292,8 +292,8 @@ store optional Git common-directory metadata; explicitly create managed
 worktrees with a frozen base; expose workspace state, events, diffs, and
 conservative removal. Sessions, task/batch members, children, retries, and
 history forks select or retain existing workspaces and never create worktrees
-implicitly. Multiple sessions can select one workspace, with writes serialized
-by canonical root. The CLI/API is described in [workspaces](workspaces.md).
+implicitly. Multiple sessions can select one workspace and execute concurrently
+under admission limits. The CLI/API is described in [workspaces](workspaces.md).
 Task/run controls and matrices are implemented
 as described in
 [tasks and batches](tasks-batches.md). The [recommended delivery order](roadmap.md#recommended-next-delivery-order)
@@ -303,8 +303,8 @@ inspection/control; platform and capacity validation remain open release gates.
 
 Record canonical workspace paths, optional Git common-directory metadata,
 worktree provenance, and effective session policies. Use explicitly created
-managed worktrees for independent parallel writers; sessions sharing one root
-serialize writes.
+managed worktrees for independent filesystem state; sessions sharing one root
+can execute concurrently and coordinate conflicting changes.
 
 Implement batch preview before submission. Validate product cardinality with
 overflow protection and a configured cap, freeze inputs, and persist member

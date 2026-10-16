@@ -30,8 +30,9 @@ that needs them, and record consequential decisions in an ADR.
 
 ## Before orchestration and remote delivery
 
-8. **Workspace root policy:** evaluate how nested workspaces and overlapping
-   roots should interact with canonical-root writer serialization.
+8. **Tool resource scheduling:** tune daemon-wide tool concurrency and decide
+   whether to offer optional serialization of tool batches across sessions.
+   Model generation remains concurrent when sessions share a workspace.
 9. **Workspace retention:** choose cleanup and retention policies for explicit
    managed worktrees while preserving ordinary directories users own.
 10. **Budget semantics:** cumulative task/tree/batch model-request and tool-call

@@ -177,8 +177,9 @@ Read with [clients](clients.md).
    effects. Continue with a new message, explicit resume, or explicit retry
    into a fresh attempt.
 4. **Select code workspaces.** Open a directory in place or explicitly create a
-   worktree with a frozen base. Sessions select an existing workspace; same-root
-   writers serialize. Expose diffs and conservatively remove managed worktrees.
+   worktree with a frozen base. Sessions select an existing workspace and may
+   execute concurrently in the same directory. Expose diffs and conservatively
+   remove managed worktrees.
 5. **Scale jobs.** Preview a `BatchSpec` (prompts × models × settings, max 256
    members), submit atomically, admit lazily, retry selected indexes only, and
    export JSON Lines results.

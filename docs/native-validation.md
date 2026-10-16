@@ -1,5 +1,22 @@
 # Native offline validation
 
+## Shared-workspace concurrency, 2026-10-16
+
+The workspace-root admission gate has been removed. Sessions selecting the
+same canonical directory can execute model requests and tools concurrently
+under the existing global, batch, and child limits. Turns within each session
+remain ordered; agents coordinate conflicting filesystem changes. This
+supersedes the shared-root serialization recorded for 2026-10-15 below.
+
+Local Linux validation passed formatting, Clippy with warnings denied, all 251
+offline workspace tests, and the complete `python3 scripts/smoke.py` suite.
+Thirteen credential-dependent live tests remained opt-in. Native Windows was
+not rerun for this change. The storage regression verifies overlapping shared-workspace turns,
+ordered follow-ups, and frozen per-turn settings. The updated real-binary smoke
+check holds two provider requests from one workspace concurrently, verifies
+the batch cap still queues the other six members, and exercises spare global
+capacity while the batch is at its cap.
+
 ## Unified workspaces, 2026-10-15
 
 The unified workspace implementation passed the required checks locally on Linux:

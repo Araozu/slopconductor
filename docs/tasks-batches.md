@@ -31,7 +31,7 @@ the built-in `default` workspace. Selection never
 creates a directory or worktree. Batch members and children use only the
 workspace explicitly selected by their spec/request; retries and history forks
 retain the existing session workspace. Multiple conversations may select one
-workspace, and their writers serialize by canonical root. Create a separate
+workspace and execute concurrently under admission limits. Create a separate
 worktree explicitly when independent writable state is needed. Closing a client
 leaves accepted work running.
 
@@ -238,9 +238,9 @@ advertises `orchestration-controls`; the SDK checks it before budgeted submissio
 and batch cancellation.
 
 There are at most 1,024 active job attempts, with the existing 1,024 queued-turn
-limit also enforced. Workspace registry and writer limits apply to canonical
-workspace roots; batch size is not a workspace count because members never
-create workspaces. Request bodies are bounded at
+limit also enforced. Workspace identity uses canonical paths; sharing a path
+does not add an admission limit. Batch size is not a workspace count because
+members never create workspaces. Request bodies are bounded at
 2 MiB, preview JSON at 8 MiB, and query pages target 4 MiB with bounded individual
 records. Prompt, context, tool, Git, and subprocess limits remain unchanged.
 

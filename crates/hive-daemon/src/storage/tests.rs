@@ -352,7 +352,7 @@ fn schema_two_migration_preserves_history_settings_and_command_payloads() {
 }
 
 #[tokio::test]
-async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() {
+async fn accepted_settings_are_frozen_and_shared_workspace_sessions_admit_concurrently() {
     use hive_protocol::execution::{GenerationSettings, WorkspacePolicy};
     let dir = TempDir::new().unwrap();
     let workspace = TempDir::new().unwrap();
@@ -360,16 +360,16 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
     let client = store.client();
     let policy = WorkspacePolicy {
         root: workspace.path().to_str().unwrap().into(),
-        allowed_tools: vec!["read".into()],
+        allowed_tools: vec!["write".into()],
         shell_timeout_ms: 1000,
         max_output_bytes: 1024,
         max_tool_calls: 4,
         max_model_requests: 4,
     };
-    let mut first = create_request("lease-first", None);
+    let mut first = create_request("shared-first", None);
     first.workspace = select_workspace(&client, "first", policy.clone()).await;
     let first = client.create_session(first).await.unwrap();
-    let mut second = create_request("lease-second", None);
+    let mut second = create_request("shared-second", None);
     second.workspace = select_workspace(&client, "second", policy).await;
     let second = client.create_session(second).await.unwrap();
     let sent = client
@@ -389,12 +389,24 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
         )
         .await
         .unwrap();
-    client
+    let second_sent = client
         .send_message(
             &second.session_id,
             SendMessageRequest {
-                command_id: "blocked-workspace".into(),
-                text: "wait".into(),
+                command_id: "shared-workspace".into(),
+                text: "run concurrently".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let follow_up = client
+        .send_message(
+            &first.session_id,
+            SendMessageRequest {
+                command_id: "same-session-follow-up".into(),
+                text: "wait for this session's first turn".into(),
+                delivery: Some(hive_protocol::chat::DeliveryMode::AfterFinish),
                 ..Default::default()
             },
         )
@@ -421,6 +433,17 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
             .max_output_tokens,
         Some(1024)
     );
+    let concurrent = client.claim_next_turn().await.unwrap().unwrap();
+    assert_eq!(concurrent.turn_id, second_sent.turn_id.unwrap());
+    assert_eq!(concurrent.session_id, second.session_id);
+    assert_eq!(concurrent.workspace_id, work.workspace_id);
+    assert_eq!(concurrent.execution, work.execution);
+    assert_eq!(concurrent.settings.max_output_tokens, Some(1024));
+    assert_eq!(client.turn(&work.turn_id).await.unwrap().status, "running");
+    assert_eq!(
+        client.turn(&concurrent.turn_id).await.unwrap().status,
+        "running"
+    );
     assert!(client.claim_next_turn().await.unwrap().is_none());
     client
         .finish_chat_turn(
@@ -437,8 +460,13 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
         .await
         .unwrap();
     let next = client.claim_next_turn().await.unwrap().unwrap();
-    assert_eq!(next.session_id, second.session_id);
+    assert_eq!(next.turn_id, follow_up.turn_id.unwrap());
+    assert_eq!(next.session_id, first.session_id);
     assert_eq!(next.settings.max_output_tokens, Some(1024));
+    assert_eq!(
+        client.turn(&concurrent.turn_id).await.unwrap().status,
+        "running"
+    );
     let before = client.session(&first.session_id).await.unwrap().revision;
     let unsupported = client
         .send_message(
