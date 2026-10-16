@@ -30,11 +30,74 @@ cargo run -p hive-daemon --locked
 cargo run --locked -- provider login codex --command-id my-login-1
 ```
 
-The daemon supplies its persisted opaque node ID as the stable host ID. Open the
+The daemon generates a UUIDv4 host URI (`urn:uuid:…`) once and saves it privately
+in `credentials/codex-host-id`. The raw Hive node ID is not an accepted OAuth
+host format; passing it caused the authorization page to reject the URL. The
+accepted formats are documented in OpenAI's
+[host identity guide](https://developers.openai.com/siwc/token-sharing-open-source).
+Returning registrations retain their original saved host ID. Open the
 printed **Continue with ChatGPT** URL and
 complete authorization within five minutes. The callback is on `127.0.0.1` with
 an available port. If the browser is on another machine, forward that loopback
 port to the daemon host before completing login.
+
+New registrations suggest the app name **Hive**. The CLI prints the login ID
+before the authorization link and isolates the URL on its own line; copy only
+that URL. Text appended to a query value can otherwise become part of the
+registration name. The upstream registration keeps the name approved in the
+browser; reauthorizing an existing client does not rename it.
+
+For a headless daemon or a browser on another machine, run:
+
+```sh
+cargo run --locked -- provider login codex --headless --command-id my-headless-login-1
+```
+
+Open the printed link in your browser and authorize. After the browser redirects,
+copy the full `http://127.0.0.1:PORT/auth/callback?...` URL from its address bar
+and paste it into the waiting CLI, then press Enter. A connection error on that
+final page is expected: headless mode has no callback listener. No SSH callback
+port forwarding is needed. The CLI sends the URL through the authenticated daemon
+API; the daemon checks the exact callback URI, state, and account registration,
+then performs the same PKCE exchange and ID-token validation as browser mode.
+The URL contains a single-use code: paste it only into the waiting CLI.
+
+This is manual callback completion for Hive's own dynamic ChatGPT registration.
+Codex CLI device-code authentication is a separate flow; this option does not
+borrow Codex's OAuth client or import Codex credentials. The ordinary five-minute
+authorization deadline applies. Ctrl-C detaches; resume with the same command ID,
+account and `--headless` flag while the attempt is pending.
+
+If login succeeds but inference fails, inspect the turn's specific error code.
+HTTP rejections retain their status, malformed streams retain a safe parser
+reason, and documented `subscription_sharing_*` failures preserve their
+classification and recovery action. Arbitrary upstream messages stay out of
+stored turns and logs. Existing failed turns retain their original recorded
+error; a later request uses the improved diagnostics.
+
+For a direct baseline check on the daemon host:
+
+```sh
+python3 scripts/codex_diagnose.py
+# Optional: --account work --data-dir /absolute/daemon/data --model gpt-6.1-sol
+```
+
+This makes one small text-only request to the documented Responses endpoint
+with the selected account's saved access token. It prints HTTP status, request
+ID and a bounded provider diagnostic, redacting saved token values. It neither
+refreshes nor rewrites credentials. A successful baseline establishes that the
+login can generate text; it does not verify workspace tools or private replay.
+Do not paste credential files or bearer tokens into support messages.
+
+To check browser login followed by headless reauthorization of one registration:
+
+```sh
+cargo run --locked -- provider login codex --account login-check --command-id browser-check-1
+# After browser login succeeds, clear its tokens and confirm sign-out:
+cargo run --locked -- provider logout login-check
+cargo run --locked -- provider accounts
+cargo run --locked -- provider login codex --account login-check --headless --command-id headless-check-1
+```
 
 The daemon saves `credentials/codex-chatgpt.json` beneath its XDG data directory
 (default `~/.local/share/slopconductor`), or beneath its protected
@@ -85,8 +148,21 @@ excluded from diagnostics.
 Subscription inference uses `POST https://api.openai.com/v1/responses` with
 `store: false`, `stream: true` and an explicit input array. `complete` collects
 the same SSE stream used by `complete_streaming`; it makes one inference
-attempt. A non-SSE subscription response is rejected. The stable session ID is
+attempt. Subscription responses are decoded as SSE even if the upstream route
+omits `Content-Type`, as observed during live login validation. Completion still
+requires valid framed Responses events and a recognized terminal event; JSON,
+HTML and truncated streams are rejected. This applies to structured inference
+and the legacy completion methods. The stable session ID is
 sent as `prompt_cache_key`, without assigning conversation ownership upstream.
+
+The plan route also emits informational `response.metadata` events and can
+leave the terminal response's `output` array empty. Both inference paths retain
+bounded `response.output_item.done` snapshots and use them when that terminal
+array is empty, including tool calls and private reasoning replay material in
+structured inference. A terminal event is still required; deltas alone cannot
+complete a turn or dispatch tools. Duplicate or missing completed item indices
+are rejected, and structured completed output must agree with streamed text
+and tool arguments before dispatch.
 
 The documented [preview restrictions](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 exclude `max_output_tokens`, so subscription requests must use

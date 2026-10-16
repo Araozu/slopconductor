@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 
 from chat_smoke import request, wait_turn
 
@@ -166,7 +167,8 @@ def check_credentials(daemon_binary, cli_binary, root, start_daemon, stop_daemon
         assert request(endpoint, token, "POST", {"command_id": "other-login"}, "/v1/providers/codex/login")[0] == 409
         authorization = urllib.parse.parse_qs(urllib.parse.urlparse(login["authorization_url"]).query)
         host_id = authorization["ext_agent_host_id"][0]
-        assert host_id == request(endpoint, token, path="/v1/node")[1]["node_id"]
+        assert uuid.UUID(host_id.removeprefix("urn:uuid:")).version == 4
+        assert host_id == (credential_dir / "codex-host-id").read_text()
         assert json.loads(command("provider", "login-status", login["login_id"]))["status"] == "pending"
         denied = authorization["redirect_uri"][0] + "?" + urllib.parse.urlencode({
             "error": "access_denied", "state": authorization["state"][0],
@@ -180,6 +182,27 @@ def check_credentials(daemon_binary, cli_binary, root, start_daemon, stop_daemon
                 break
             time.sleep(0.05)
         assert status["status"] == "failed"
+        assert not (credential_dir / "codex-chatgpt.json").exists()
+
+        # Manual callbacks use the protected API and keep invalid input from
+        # consuming the pending attempt. Drive stdin through the actual CLI.
+        headless_payload = {"command_id": "credential-headless-1", "headless": True}
+        status, headless = request(endpoint, token, "POST", headless_payload, "/v1/providers/codex/login")
+        assert status == 202 and headless["headless"]
+        assert request(endpoint, token, "POST", headless_payload, "/v1/providers/codex/login") == (202, headless)
+        assert request(endpoint, token, "POST", dict(headless_payload, headless=False), "/v1/providers/codex/login")[0] == 409
+        auth = urllib.parse.parse_qs(urllib.parse.urlparse(headless["authorization_url"]).query)
+        assert auth["ext_agent_host_id"] == [host_id]
+        callback_path = f"/v1/providers/codex/login/{headless['login_id']}/callback"
+        assert request(endpoint, None, "POST", {"callback_url": "https://example.com"}, callback_path)[0] == 401
+        assert request(endpoint, token, "POST", {"callback_url": "https://example.com/?code=private-headless-code"}, callback_path)[0] == 400
+        assert request(endpoint, token, path=f"/v1/providers/codex/login/{headless['login_id']}")[1]["status"] == "pending"
+        denied = auth["redirect_uri"][0] + "?" + urllib.parse.urlencode({"state": auth["state"][0], "error": "access_denied"})
+        result = subprocess.run(cli + ["provider", "login", "codex", "--headless", "--command-id", headless_payload["command_id"]],
+                                input=denied + "\n", capture_output=True, text=True, env=env, timeout=10)
+        assert result.returncode != 0 and '"status":"failed"' in result.stdout.replace(" ", ""), (result.stdout, result.stderr)
+        assert "private-headless-code" not in result.stdout + result.stderr
+        assert request(endpoint, token, "POST", {"callback_url": denied}, callback_path)[0] == 400
         assert not (credential_dir / "codex-chatgpt.json").exists()
         assert request(endpoint, token, "POST", {"command_id": "credential-login-2"}, "/v1/providers/codex/login")[0] == 202
 

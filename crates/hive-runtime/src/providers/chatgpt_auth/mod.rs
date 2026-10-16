@@ -29,6 +29,7 @@ const SCOPES: &str =
     "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
 const MAX_CREDENTIAL_BYTES: u64 = 64 * 1024;
 
+mod callback;
 mod connection;
 mod credentials;
 mod identity;
@@ -36,6 +37,7 @@ mod login;
 #[cfg(test)]
 mod tests;
 
+pub use callback::ChatGptCallback;
 pub use connection::ChatGptConnection;
 #[cfg(test)]
 pub(in crate::providers) use connection::fixture_connection;

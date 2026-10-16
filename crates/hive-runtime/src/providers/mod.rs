@@ -29,6 +29,7 @@ mod context_limits;
 mod provider_model;
 pub use provider_model::ProviderModel;
 mod provider_error;
+mod responses_output;
 pub use provider_error::ProviderError;
 mod auth_mode;
 pub use auth_mode::AuthMode;

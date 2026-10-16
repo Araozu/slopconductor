@@ -41,6 +41,58 @@ fn subscription(server: &Server) -> CodexClient {
 }
 
 #[tokio::test]
+async fn subscription_sparse_terminal_preserves_text_completion_with_metadata() {
+    let body: String = [
+        serde_json::json!({"type":"response.output_text.delta","delta":"héllo"}),
+        serde_json::json!({"type":"response.metadata"}),
+        serde_json::json!({"type":"response.output_item.done","output_index":0,"item":completed("héllo")["output"][0]}),
+        serde_json::json!({"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":2}}}),
+    ].iter().map(|event| format!("data: {event}\n\n")).collect();
+    let result = super::super::transport::read_sse_response(
+        ProviderId::Codex,
+        super::super::WireProtocol::OpenAiResponses,
+        "gpt-6-luna",
+        super::super::test_http::response(&body, None),
+        &mut |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.text, "héllo");
+    assert_eq!(result.outcome, TurnOutcome::Completed);
+    assert_eq!(result.usage.total_tokens, Some(7));
+}
+
+#[tokio::test]
+async fn subscription_text_stream_accepts_missing_content_type_and_requires_terminal_evidence() {
+    use super::super::{WireProtocol, test_http::response, transport};
+    for content_type in [
+        None,
+        Some(""),
+        Some("text/plain"),
+        Some("text/event-stream"),
+    ] {
+        let mut text = String::new();
+        let result = transport::read_sse_response(
+            ProviderId::Codex,
+            WireProtocol::OpenAiResponses,
+            "gpt-6.1-sol",
+            response(&stream(), content_type),
+            &mut |delta| text.push_str(&delta.text),
+        )
+        .await
+        .unwrap();
+        assert_eq!(text, "héllo");
+        assert_eq!(result.text, "héllo");
+        assert_eq!(result.outcome, TurnOutcome::Completed);
+        assert_eq!(result.usage.total_tokens, Some(7));
+    }
+    for body in [completed("unexpected JSON").to_string(), "<html>private fixture content</html>".into(), "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n".into(), "data: {\"type\":\"response.failed\",\"response\":{\"error\":\"private fixture content\"}}\n\n".into()] {
+        let error = transport::read_sse_response(ProviderId::Codex, WireProtocol::OpenAiResponses, "gpt-6.1-sol", response(&body, None), &mut |_| {}).await.unwrap_err();
+        assert!(!format!("{error:?}").contains("private fixture content"));
+    }
+}
+
+#[tokio::test]
 async fn subscription_discovery_and_both_completion_modes_use_shared_surface() {
     let server = Server::new(vec![Reply::json(serde_json::json!({"models":[{"slug":"gpt-6.1-sol","visibility":"list"},{"slug":"hidden-model","visibility":"hide"}]})), Reply::sse(stream()), Reply::sse(stream())]).await;
     let concrete = subscription(&server);

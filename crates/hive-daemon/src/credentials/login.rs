@@ -7,7 +7,7 @@ impl ProviderCredentials {
         command_id: String,
         runtime: Option<ChatRuntime>,
     ) -> Result<LoginResponse, CredentialError> {
-        self.start_login_for_account(command_id, None, runtime)
+        self.start_login_for_account(command_id, None, false, runtime)
             .await
     }
 
@@ -15,6 +15,7 @@ impl ProviderCredentials {
         self: &Arc<Self>,
         command_id: String,
         account_id: Option<String>,
+        headless: bool,
         runtime: Option<ChatRuntime>,
     ) -> Result<LoginResponse, CredentialError> {
         if command_id.is_empty()
@@ -40,7 +41,7 @@ impl ProviderCredentials {
         }
         if let Some(login) = &state.login {
             if login.response.login_id == command_id {
-                if login.account_id != account_id {
+                if login.account_id != account_id || login.response.headless != headless {
                     return Err(CredentialError::LoginPending);
                 }
                 return Ok(login.response.clone());
@@ -50,14 +51,25 @@ impl ProviderCredentials {
             }
         }
         let existing = state.accounts.get(&account_id).cloned();
-        let login = match &existing {
-            Some(connection) => connection.begin_login().await,
-            None => ChatGptLogin::begin(&self.host_id).await,
-        }
-        .map_err(|_| CredentialError::LoginFailed)?;
+        let (login, callback) = if headless {
+            let (login, callback) = match &existing {
+                Some(connection) => connection.begin_headless_login().await,
+                None => ChatGptLogin::begin_headless(&self.host_id).await,
+            }
+            .map_err(|_| CredentialError::LoginFailed)?;
+            (login, Some(callback))
+        } else {
+            let login = match &existing {
+                Some(connection) => connection.begin_login().await,
+                None => ChatGptLogin::begin(&self.host_id).await,
+            }
+            .map_err(|_| CredentialError::LoginFailed)?;
+            (login, None)
+        };
         let response = LoginResponse {
             login_id: command_id.clone(),
             authorization_url: login.authorization_url().to_owned(),
+            headless,
         };
         let status = LoginStatus {
             login_id: command_id,
@@ -137,6 +149,7 @@ impl ProviderCredentials {
             response: response.clone(),
             status,
             task: Some(task),
+            callback,
         });
         Ok(response)
     }
@@ -150,6 +163,32 @@ impl ProviderCredentials {
             .filter(|login| login.status.login_id == id)
             .map(|login| login.status.clone())
             .ok_or(CredentialError::NotFound)
+    }
+
+    pub async fn submit_login_callback(
+        &self,
+        id: &str,
+        callback_url: &str,
+    ) -> Result<LoginStatus, CredentialError> {
+        let state = self.state.lock().await;
+        if state.stopping {
+            return Err(CredentialError::Stopping);
+        }
+        let login = state
+            .login
+            .as_ref()
+            .filter(|login| login.response.login_id == id)
+            .ok_or(CredentialError::NotFound)?;
+        if login.status.status != "pending" {
+            return Err(CredentialError::InvalidCallback);
+        }
+        login
+            .callback
+            .as_ref()
+            .ok_or(CredentialError::InvalidCallback)?
+            .submit(callback_url)
+            .map_err(|_| CredentialError::InvalidCallback)?;
+        Ok(login.status.clone())
     }
 
     pub async fn shutdown(&self) {

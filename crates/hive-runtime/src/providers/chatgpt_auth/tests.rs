@@ -4,6 +4,83 @@ use super::identity::verify_identity;
 use super::*;
 
 #[tokio::test]
+async fn headless_callback_rejects_unbound_urls_and_accepts_only_once() {
+    let (login, input) =
+        ChatGptLogin::begin_headless("urn:uuid:ea35e63c-8cbf-487e-88ab-6cf7ac21e619")
+            .await
+            .unwrap();
+    let redirect = reqwest::Url::parse(&login.redirect_uri).unwrap();
+    let authorization = reqwest::Url::parse(login.authorization_url()).unwrap();
+    assert_eq!(
+        authorization
+            .query_pairs()
+            .find(|(key, _)| key == "agent_name_hint")
+            .unwrap()
+            .1,
+        "Hive"
+    );
+    assert!(
+        tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, redirect.port().unwrap()))
+            .await
+            .is_err()
+    );
+    let mut valid = redirect.clone();
+    valid.query_pairs_mut().extend_pairs([
+        ("state", login.state.as_str()),
+        ("code", "private-test-code"),
+        ("client_id", "oaiapp_headless"),
+    ]);
+    let mut invalid = valid.clone();
+    invalid.set_host(Some("example.com")).unwrap();
+    assert!(input.submit(invalid.as_str()).is_err());
+    invalid = valid.clone();
+    invalid.set_port(Some(1)).unwrap();
+    assert!(input.submit(invalid.as_str()).is_err());
+    invalid = valid.clone();
+    invalid.set_path("/wrong");
+    assert!(input.submit(invalid.as_str()).is_err());
+    invalid = valid.clone();
+    invalid.query_pairs_mut().append_pair("state", "attacker");
+    assert!(input.submit(invalid.as_str()).is_err());
+    invalid = redirect;
+    invalid.query_pairs_mut().extend_pairs([
+        ("state", "attacker"),
+        ("code", "private-test-code"),
+        ("client_id", "oaiapp_headless"),
+    ]);
+    assert!(input.submit(invalid.as_str()).is_err());
+    input.submit(valid.as_str()).unwrap();
+    let callback = login.callback().await.unwrap();
+    assert_eq!(
+        login.validate_callback(&callback).unwrap(),
+        ("private-test-code".into(), "oaiapp_headless".into())
+    );
+    assert!(input.submit(valid.as_str()).is_err());
+}
+
+#[tokio::test]
+async fn headless_returning_login_preserves_registration_and_denial_never_saves() {
+    let connection = fixture_connection(PathBuf::new(), u64::MAX);
+    let (login, input) = connection.begin_headless_login().await.unwrap();
+    let mut callback = reqwest::Url::parse(&login.redirect_uri).unwrap();
+    callback.query_pairs_mut().extend_pairs([
+        ("state", login.state.as_str()),
+        ("code", "private-test-code"),
+        ("client_id", "other-account"),
+    ]);
+    assert!(input.submit(callback.as_str()).is_err());
+    callback.set_query(None);
+    callback
+        .query_pairs_mut()
+        .extend_pairs([("state", login.state.as_str()), ("error", "access_denied")]);
+    input.submit(callback.as_str()).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("account.json");
+    assert!(login.finish(&path).await.is_err());
+    assert!(!path.exists());
+}
+
+#[tokio::test]
 async fn sign_out_clears_tokens_keeps_registration_and_reports_revocation() {
     for confirmed in [true, false] {
         let directory = tempfile::tempdir().unwrap();

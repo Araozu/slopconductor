@@ -5,4 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct LoginResponse {
     pub login_id: String,
     pub authorization_url: String,
+    #[serde(default)]
+    pub headless: bool,
 }

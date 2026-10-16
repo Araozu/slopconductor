@@ -14,6 +14,15 @@ use axum::{
     routing::any,
 };
 
+/// A response body without a network listener, including omitted HTTP headers.
+pub(super) fn response(body: &str, content_type: Option<&str>) -> reqwest::Response {
+    let mut response = axum::http::Response::builder().status(200);
+    if let Some(content_type) = content_type {
+        response = response.header("content-type", content_type);
+    }
+    response.body(body.to_owned()).unwrap().into()
+}
+
 pub(super) struct Reply {
     pub status: StatusCode,
     pub content_type: &'static str,

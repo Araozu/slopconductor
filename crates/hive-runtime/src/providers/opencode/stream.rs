@@ -16,6 +16,7 @@ pub(in crate::providers) struct StreamFold {
     pub(in crate::providers) usage: Usage,
     stop_reason: Option<String>,
     pub(in crate::providers) terminal: Option<TurnOutcome>,
+    response_output: super::super::responses_output::CompletedOutput,
 }
 
 impl StreamFold {
@@ -34,7 +35,7 @@ impl StreamFold {
             }
             return Ok(());
         }
-        let value: Value = serde_json::from_str(&payload)
+        let mut value: Value = serde_json::from_str(&payload)
             .map_err(|_| invalid_terminal("stream event is not valid JSON"))?;
         if super::super::transport::is_context_error(&value) {
             return Err(DecodeError::ContextLengthExceeded);
@@ -43,6 +44,24 @@ impl StreamFold {
             return Err(DecodeError::TurnFailed);
         }
         validate_stream_content(&value, wire)?;
+        if wire == WireProtocol::OpenAiResponses {
+            if self.terminal.is_some()
+                && value.get("type").and_then(Value::as_str) == Some("response.output_item.done")
+            {
+                return Err(invalid_terminal("completed item after terminal outcome"));
+            }
+            self.response_output.observe(&value)?;
+            if matches!(
+                value.get("type").and_then(Value::as_str),
+                Some("response.completed" | "response.incomplete")
+            ) {
+                self.response_output.complete(
+                    value
+                        .get_mut("response")
+                        .ok_or_else(|| invalid_terminal("terminal event has no response"))?,
+                )?;
+            }
+        }
         if let Some(model) = reported_model(&value)? {
             self.resolved_model = Some(model);
         }

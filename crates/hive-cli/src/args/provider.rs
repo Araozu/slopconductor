@@ -12,7 +12,7 @@ pub enum ProviderCommand {
         #[arg(long)]
         key_file: Option<PathBuf>,
     },
-    /// Authorize a ChatGPT subscription through the daemon's callback listener.
+    /// Authorize a ChatGPT subscription in a browser.
     Login {
         #[arg(value_parser = ["codex"])]
         provider: String,
@@ -21,6 +21,10 @@ pub enum ProviderCommand {
         /// Stable registration label; a new label adds another ChatGPT account.
         #[arg(long)]
         account: Option<String>,
+        /// Paste the final callback URL on stdin; supports a remote browser
+        /// without forwarding the daemon's loopback port.
+        #[arg(long)]
+        headless: bool,
     },
     /// Inspect a daemon-owned ChatGPT login after detaching.
     LoginStatus { login_id: String },

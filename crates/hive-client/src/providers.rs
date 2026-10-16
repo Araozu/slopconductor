@@ -29,6 +29,9 @@ impl DaemonClient {
         &self,
         request: &StartLoginRequest,
     ) -> Result<LoginResponse, ClientError> {
+        if request.headless {
+            self.require_feature("provider-headless-login").await?;
+        }
         if request.account_id.is_some() {
             self.require_feature("provider-accounts").await?;
         }
@@ -43,6 +46,25 @@ impl DaemonClient {
             login_id,
             None,
         )?)
+        .await
+    }
+
+    /// Submit once; an uncertain token exchange must not be replayed.
+    pub async fn submit_codex_login_callback(
+        &self,
+        login_id: &str,
+        request: &LoginCallbackRequest,
+    ) -> Result<LoginStatus, ClientError> {
+        self.require_feature("provider-headless-login").await?;
+        self.post_json(
+            id_url(
+                &self.endpoint,
+                "/v1/providers/codex/login",
+                login_id,
+                Some("callback"),
+            )?,
+            request,
+        )
         .await
     }
 

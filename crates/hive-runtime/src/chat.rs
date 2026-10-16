@@ -7,6 +7,8 @@ mod chat_delta;
 mod chat_outcome;
 mod chat_status;
 mod context_message;
+#[cfg(test)]
+mod provider_failure_tests;
 mod repository;
 mod role_kind;
 mod turn_control;
@@ -538,6 +540,27 @@ pub(crate) fn interrupted_shutdown() -> ChatOutcome {
 
 pub(crate) fn provider_failure(error: ProviderError) -> ChatOutcome {
     let (code, message) = match error {
+        ProviderError::PlanUsage { code } => {
+            let message = match code {
+                "subscription_sharing_user_not_eligible" => {
+                    "ChatGPT plan usage is unavailable for this account or workspace. Check its plan and app permissions."
+                }
+                "subscription_sharing_usage_limit_exceeded" => {
+                    "This app's ChatGPT plan usage limit was reached. Review the app's limit in ChatGPT Settings > Usage."
+                }
+                "subscription_sharing_usage_unavailable" => {
+                    "OpenAI could not check ChatGPT plan usage availability. Keep this login and try again later."
+                }
+                "subscription_sharing_unsupported_capability" => {
+                    "ChatGPT plan usage rejected an unsupported request field, tool, or model. The connector request must be corrected."
+                }
+                "subscription_sharing_route_not_supported" => {
+                    "ChatGPT plan usage rejected the requested API route. Check the connector endpoint."
+                }
+                _ => "OpenAI rejected ChatGPT plan usage for this request.",
+            };
+            return failed(code, message);
+        }
         ProviderError::ContextLengthExceeded => (
             "context_limit",
             "The provider's context window is full and automatic compaction could not reduce it further.",
@@ -561,6 +584,55 @@ pub(crate) fn provider_failure(error: ProviderError) -> ChatOutcome {
             "provider_auth_failed",
             "The provider rejected the configured credentials.",
         ),
+        ProviderError::UnexpectedStatus { status, .. } => {
+            return failed(
+                "provider_http_error",
+                &format!("The provider rejected this request (HTTP {status})."),
+            );
+        }
+        ProviderError::InvalidResponse { detail, .. } => {
+            return failed(
+                "provider_invalid_response",
+                &format!("The provider returned an invalid response: {detail}."),
+            );
+        }
+        ProviderError::InvalidRequest(detail) => {
+            return failed(
+                "provider_invalid_request",
+                &format!("The provider request is invalid: {detail}."),
+            );
+        }
+        ProviderError::Authentication { detail } => {
+            return failed(
+                "provider_auth_failed",
+                &format!("ChatGPT authentication failed: {detail}."),
+            );
+        }
+        ProviderError::CredentialStorage => (
+            "credential_storage_unavailable",
+            "The provider credential record could not be read or saved.",
+        ),
+        ProviderError::Http(error) if error.is_timeout() => {
+            ("provider_timeout", "The provider request timed out.")
+        }
+        ProviderError::Http(error) if error.is_connect() => (
+            "provider_connection_failed",
+            "Could not connect to the provider. Check DNS, network access, and the configured endpoint.",
+        ),
+        ProviderError::Http(_) => (
+            "provider_transport_failed",
+            "The provider connection failed while sending the request or reading its response.",
+        ),
+        ProviderError::TurnFailed { .. } => (
+            "provider_turn_failed",
+            "The provider reported a failed response before completing generation.",
+        ),
+        ProviderError::LimitExceeded { detail } => {
+            return failed(
+                "provider_limit_exceeded",
+                &format!("The provider request or response exceeded a limit: {detail}."),
+            );
+        }
         ProviderError::UnsupportedCapability { capability }
             if capability.starts_with("context_incompatible") =>
         {
@@ -572,10 +644,6 @@ pub(crate) fn provider_failure(error: ProviderError) -> ChatOutcome {
         ProviderError::UnsupportedCapability { .. } => (
             "unsupported_capability",
             "The provider does not support the requested capability.",
-        ),
-        _ => (
-            "provider_failed",
-            "The provider could not complete this turn.",
         ),
     };
     failed(code, message)

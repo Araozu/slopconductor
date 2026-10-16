@@ -24,6 +24,7 @@ pub(in crate::providers) struct StructuredFold {
     anthropic: BTreeMap<usize, Value>,
     argument_parts: BTreeMap<usize, String>,
     response_parts: BTreeMap<(usize, usize), (String, String)>,
+    response_output: super::super::responses_output::CompletedOutput,
     closed: std::collections::HashSet<usize>,
     terminal: Option<Value>,
     stop_reason: Option<String>,
@@ -43,6 +44,7 @@ impl StructuredFold {
             anthropic: BTreeMap::new(),
             argument_parts: BTreeMap::new(),
             response_parts: BTreeMap::new(),
+            response_output: Default::default(),
             closed: std::collections::HashSet::new(),
             terminal: None,
             stop_reason: None,
@@ -71,6 +73,9 @@ impl StructuredFold {
         }
         let mut value: Value =
             serde_json::from_str(&payload).map_err(|_| invalid("invalid stream JSON"))?;
+        if let Some(code) = super::super::transport::plan_usage_error(&value) {
+            return Err(DecodeError::PlanUsage { code });
+        }
         if super::super::transport::is_context_error(&value) {
             return Err(DecodeError::ContextLengthExceeded);
         }
@@ -324,17 +329,18 @@ impl StructuredFold {
                 if self.terminal.is_some() {
                     return Err(invalid("multiple terminal outcomes"));
                 }
-                let response = value
-                    .get("response")
-                    .ok_or_else(|| invalid("terminal event lacks response"))?;
                 let expected = if kind == "response.completed" {
                     "completed"
                 } else {
                     "incomplete"
                 };
+                let response = value
+                    .get_mut("response")
+                    .ok_or_else(|| invalid("terminal event lacks response"))?;
                 if string(response, "status")? != expected {
                     return Err(invalid("contradictory response outcome"));
                 }
+                self.response_output.complete(response)?;
                 // Deltas are provisional, but a completed snapshot must agree
                 // with them before any proposal can reach the tool runtime.
                 if expected == "completed" {
@@ -372,11 +378,17 @@ impl StructuredFold {
                 self.terminal = Some(std::mem::take(&mut value["response"]));
                 Ok(())
             }
+            "response.output_item.done" => {
+                if self.terminal.is_some() {
+                    return Err(invalid("semantic event after terminal"));
+                }
+                self.response_output.observe(value)
+            }
             "response.created"
             | "response.in_progress"
             | "response.queued"
             | "response.output_item.added"
-            | "response.output_item.done"
+            | "response.metadata"
             | "response.content_part.added"
             | "response.content_part.done"
             | "response.output_text.done"

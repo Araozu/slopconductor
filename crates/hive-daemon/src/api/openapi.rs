@@ -143,6 +143,7 @@ impl utoipa::Modify for BearerSecurity {
         super::providers::select_auth,
         super::providers::sign_out,
         super::providers::start_login,
+        super::providers::login_callback,
         super::providers::login_status,
         // Workspaces and local filesystem navigation.
         super::filesystem::browse,
@@ -242,6 +243,7 @@ impl utoipa::Modify for BearerSecurity {
             hive_protocol::workspaces::WorkspaceDiffResponse,
             hive_protocol::workspaces::WorkspaceResponse,
             hive_protocol::providers::LoginResponse,
+            hive_protocol::providers::LoginCallbackRequest,
             hive_protocol::providers::LoginStatus,
             hive_protocol::providers::ProviderAccount,
             hive_protocol::providers::ProviderCatalog,
@@ -367,6 +369,7 @@ mod tests {
         "/v1/providers/codex/accounts/{account_id}/logout",
         "/v1/providers/codex/login",
         "/v1/providers/codex/login/{login_id}",
+        "/v1/providers/codex/login/{login_id}/callback",
         // Workspaces and filesystem.
         "/v1/filesystem",
         "/v1/filesystem/directories",

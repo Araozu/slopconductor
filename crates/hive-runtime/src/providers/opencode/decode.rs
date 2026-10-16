@@ -375,6 +375,7 @@ pub(super) fn validate_stream_content(
             Some(
                 "response.created"
                 | "response.in_progress"
+                | "response.metadata"
                 | "response.completed"
                 | "response.incomplete",
             ) => {}

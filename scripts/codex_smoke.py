@@ -90,7 +90,10 @@ class CodexFixture:
                 if original_prompt == "incomplete":
                     status = "incomplete"
                 self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
+                # The live ChatGPT plan route can omit Content-Type entirely.
+                # Exercise that response through the real daemon/CLI tool loop.
+                if "subscription" not in self.headers.get("Authorization", ""):
+                    self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
 
                 def emit(event):
@@ -126,6 +129,13 @@ class CodexFixture:
                                 "usage": {"input_tokens": {"reported-usage":270000, "reported-output":200000, "full-window-limit":1045000}.get(prompt, 7), "output_tokens": 70000 if prompt == "reported-output" else 3}}
                     if status == "incomplete":
                         response["incomplete_details"] = {"reason": "max_output_tokens"}
+                    if "subscription" in self.headers.get("Authorization", ""):
+                        # The plan route reports completed items separately and
+                        # can leave the terminal response's output array empty.
+                        emit({"type": "response.metadata"})
+                        for index, item in enumerate(output):
+                            emit({"type": "response.output_item.done", "output_index": index, "item": item})
+                        response["output"] = []
                     emit({"type": "response." + status, "response": response})
                 except (BrokenPipeError, ConnectionResetError):
                     pass
@@ -222,7 +232,8 @@ def check_codex(daemon_binary, cli_binary, root):
             api("/v1/providers/codex/login", dict(payload, account_id="different"), 409)
             api("/v1/providers/codex/auth", {"auth_mode": "api_key"}, 409, "PUT")
             auth = urllib.parse.parse_qs(urllib.parse.urlparse(login["authorization_url"]).query)
-            assert auth["client_id"] == [client_id] and auth["ext_agent_host_id"] == [node["node_id"]]
+            expected_host = node["node_id"] if label == "Work" else (data / "credentials/codex-host-id").read_text()
+            assert auth["client_id"] == [client_id] and auth["ext_agent_host_id"] == [expected_host]
             denied = auth["redirect_uri"][0] + "?" + urllib.parse.urlencode({"state": auth["state"][0], "error": "access_denied"})
             with urllib.request.urlopen(denied, timeout=5) as response:
                 response.read()

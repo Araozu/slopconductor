@@ -15,7 +15,7 @@ use hive_runtime::{
     chat::ChatRuntime,
     providers::{
         ProviderClient,
-        chatgpt_auth::{ChatGptConnection, ChatGptLogin},
+        chatgpt_auth::{ChatGptCallback, ChatGptConnection, ChatGptLogin},
         codex::CodexClient,
         opencode_go::OpencodeGoClient,
         opencode_zen::OpencodeZenClient,
@@ -43,6 +43,8 @@ pub enum CredentialError {
     LoginPending,
     #[error("ChatGPT login could not be started")]
     LoginFailed,
+    #[error("callback URL does not match the pending headless login")]
+    InvalidCallback,
     #[error("login attempt was not found")]
     NotFound,
     #[error("the daemon is shutting down")]
@@ -77,6 +79,7 @@ struct LoginRecord {
     response: LoginResponse,
     status: LoginStatus,
     task: Option<tokio::task::JoinHandle<()>>,
+    callback: Option<ChatGptCallback>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -159,6 +162,7 @@ mod auth;
 #[cfg(test)]
 #[path = "credential_tests.rs"]
 mod credential_tests;
+mod host;
 mod loading;
 mod login;
 mod providers;

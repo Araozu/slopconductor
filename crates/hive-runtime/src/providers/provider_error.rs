@@ -27,6 +27,9 @@ pub enum ProviderError {
     },
     #[error("provider account quota exhausted")]
     QuotaExceeded,
+    /// Only documented, allowlisted codes are retained, never upstream text.
+    #[error("ChatGPT plan usage failed: {code}")]
+    PlanUsage { code: &'static str },
     #[error("provider {provider} returned an unrecognized response: {detail}")]
     InvalidResponse {
         provider: ProviderId,

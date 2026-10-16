@@ -86,6 +86,19 @@ impl ChatGptConnection {
         .await
     }
 
+    /// Reauthorize this registration through a pasted callback, without binding
+    /// a local listener. The existing account/client and host identity are kept.
+    pub async fn begin_headless_login(
+        &self,
+    ) -> Result<(ChatGptLogin, ChatGptCallback), ProviderError> {
+        let state = self.state.lock().await;
+        ChatGptLogin::start_headless(
+            &state.credentials.ext_agent_host_id,
+            Some(state.credentials.clone()),
+        )
+        .await
+    }
+
     /// Complete a returning login into this shared registration. Holding the
     /// token lock across persistence prevents an active refresh from overwriting
     /// credentials installed by the newer authorization.

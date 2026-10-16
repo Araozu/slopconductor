@@ -1,6 +1,6 @@
 # Runtime provider credentials
 
-**Implemented, updated 2026-10-11.** Credentials can be configured through the running
+**Implemented, updated 2026-10-16.** Credentials can be configured through the running
 daemon's authenticated public API and native CLI. All secrets are daemon-owned
 files under `<data-dir>/credentials`, separate from SQLite conversations,
 command receipts, events, and logs. Setting a provider key enables new requests
@@ -46,9 +46,17 @@ cargo run --locked -- provider login-status my-login-1
 The first command prints an authorization URL and follows the login. Open it in
 a browser on the daemon host and authorize within five minutes. The daemon owns
 the loopback listener, code exchange, ID-token validation, and credential write.
-A browser on another machine needs the callback port forwarded to the daemon
-host. Ctrl-C detaches the CLI while the bounded daemon login continues. The
-daemon's durable node ID supplies the stable host identity. Returning login
+A browser on another machine can use `provider login codex --headless`:
+authorize in the browser, then paste its final loopback callback URL into the
+waiting CLI. This mode opens no callback listener and requires no port
+forwarding. It uses the same OAuth/PKCE and signed ID-token validation, with
+callback URI, state and registration checks before accepting input. The callback
+contains a single-use code; it is sent only through the authenticated API and is
+not stored in command receipts or events. Ordinary browser mode instead requires
+the callback port forwarded to the daemon host. Ctrl-C detaches the CLI while the
+bounded daemon login continues. Resume with the same command ID, account and
+headless option. The daemon's private `codex-host-id` file supplies a persisted
+UUIDv4 URI, separate from its raw node ID. Returning login
 reuses the same registration and validates the returned account. This command
 enables Codex subscription chat after authorization succeeds; see
 [Codex connection](codex-connection.md) for subscription request restrictions.
@@ -94,7 +102,7 @@ There is no source-checkout or top-level home credential directory.
 
 Files are `opencode-go-api-key`, `opencode-zen-api-key`, `codex-api-key`,
 `codex-chatgpt.json` (the `default` registration), named
-`codex-chatgpt-<account>.json` registrations, and a non-secret `codex-auth-mode`
+`codex-chatgpt-<account>.json` registrations, the non-secret `codex-host-id`, and a `codex-auth-mode`
 JSON selection record. Mode and account are replaced atomically together; legacy
 single-mode records remain readable. Earlier daemon versions cannot read the new
 selection JSON; this is a forward migration. Key-removal markers are
@@ -126,7 +134,8 @@ has no confirmed upstream cancellation guarantee.
 ## Public API
 
 Every route requires the same local bearer authentication as chat. Health
-advertises `provider-credentials`, `provider-accounts`, and `provider-discovery`;
+advertises `provider-credentials`, `provider-accounts`, `provider-discovery`, and
+`provider-headless-login`;
 the listener remains loopback-only.
 
 | Method and route | Request / response |
@@ -138,12 +147,14 @@ the listener remains loopback-only.
 | `GET /v1/providers/codex/accounts` | Local labels, selection, and token-presence status; no upstream identity or secrets |
 | `PUT /v1/providers/codex/auth` | `{"auth_mode":"chatgpt","account_id":"work"}` or `{"auth_mode":"api_key"}`; persist selection and activate new admissions |
 | `POST /v1/providers/codex/accounts/{account}/logout` | Clear local tokens, retain registration, and report `remote_revocation_confirmed` |
-| `POST /v1/providers/codex/login` | `{"command_id":"my-login-1","account_id":"work"}` (account optional); `202` with `login_id` and ephemeral `authorization_url` |
+| `POST /v1/providers/codex/login` | `{"command_id":"my-login-1","account_id":"work","headless":false}` (account optional, headless defaults to false); `202` with `login_id`, ephemeral `authorization_url`, and `headless` |
 | `GET /v1/providers/codex/login/{login_id}` | `pending`, `succeeded`, or `failed`, with a safe optional error code |
+| `POST /v1/providers/codex/login/{login_id}/callback` | `{"callback_url":"http://127.0.0.1:PORT/auth/callback?..."}`; `202` after accepting one validated callback for the pending headless attempt; poll login status for the exchange result |
 
 PUT is an idempotent credential replacement. There is no endpoint to retrieve
 stored secrets. Login startup reuses the current attempt for the same command
-ID and account, and rejects a conflicting attempt while pending. Only the latest login attempt is
+ID, account and headless mode, and rejects a conflicting attempt while pending. Invalid
+callback input leaves the attempt pending; a valid callback is consumed once. Only the latest login attempt is
 retained in memory; a later attempt replaces the completed status. Pending
 authorization is canceled on daemon shutdown, with any started credential write
 drained before directory ownership is released. After restart, old login IDs

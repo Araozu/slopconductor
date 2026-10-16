@@ -13,8 +13,8 @@ use hive_protocol::{
         UpdateSessionInboxRequest,
     },
     providers::{
-        LoginResponse, LoginStatus, ProviderAccount, ProviderCatalog, ProviderStatus,
-        SelectAuthRequest, SetApiKeyRequest, SignOutResponse, StartLoginRequest,
+        LoginCallbackRequest, LoginResponse, LoginStatus, ProviderAccount, ProviderCatalog,
+        ProviderStatus, SelectAuthRequest, SetApiKeyRequest, SignOutResponse, StartLoginRequest,
     },
 };
 use reqwest::header::{AUTHORIZATION, HeaderValue};

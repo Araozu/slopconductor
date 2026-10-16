@@ -10,6 +10,9 @@ pub(in crate::providers) fn decode(
     request: &InferenceRequest,
     provider: ProviderId,
 ) -> Result<InferenceResponse> {
+    if let Some(code) = super::super::transport::plan_usage_error(value) {
+        return Err(DecodeError::PlanUsage { code });
+    }
     if super::super::transport::is_context_error(value) {
         return Err(DecodeError::ContextLengthExceeded);
     }

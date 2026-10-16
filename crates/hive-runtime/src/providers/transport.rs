@@ -40,6 +40,9 @@ pub(super) async fn check_status(
             bytes.extend_from_slice(&chunk[..chunk.len().min(8192 - bytes.len())]);
         }
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        if let Some(code) = plan_usage_error(&value) {
+            return Err(ProviderError::PlanUsage { code });
+        }
         if is_context_error(&value) {
             return Err(ProviderError::ContextLengthExceeded);
         }
@@ -56,6 +59,29 @@ pub(super) async fn check_status(
             return Err(ProviderError::RateLimited { retry_after });
         }
         Err(ProviderError::UnexpectedStatus { provider, status })
+    }
+}
+
+/// Preserve documented error classifications without persisting arbitrary
+/// response values or messages that could reflect credentials or user input.
+pub(super) fn plan_usage_error(value: &serde_json::Value) -> Option<&'static str> {
+    let code = value
+        .pointer("/error/code")
+        .or_else(|| value.pointer("/response/error/code"))
+        .and_then(serde_json::Value::as_str)?;
+    match code {
+        "subscription_sharing_user_not_eligible" => Some("subscription_sharing_user_not_eligible"),
+        "subscription_sharing_usage_limit_exceeded" => {
+            Some("subscription_sharing_usage_limit_exceeded")
+        }
+        "subscription_sharing_usage_unavailable" => Some("subscription_sharing_usage_unavailable"),
+        "subscription_sharing_unsupported_capability" => {
+            Some("subscription_sharing_unsupported_capability")
+        }
+        "subscription_sharing_route_not_supported" => {
+            Some("subscription_sharing_route_not_supported")
+        }
+        _ => None,
     }
 }
 
@@ -126,6 +152,19 @@ pub(super) async fn read_streaming_response(
         }
         return Ok(result);
     }
+    read_sse_response(provider, wire, model, response, on_delta).await
+}
+
+/// Decode an explicitly requested SSE response even if the server omitted its
+/// Content-Type header. Success still requires a recognized terminal event.
+pub(super) async fn read_sse_response(
+    provider: ProviderId,
+    wire: WireProtocol,
+    model: &str,
+    mut response: reqwest::Response,
+    on_delta: &mut (impl FnMut(StreamDelta) + Send),
+) -> Result<ChatResponse, ProviderError> {
+    check_status(provider, &mut response).await?;
     let mut stream = SseStream::new();
     let mut fold = StreamFold::default();
     while let Some(chunk) = response.chunk().await? {

@@ -9,6 +9,43 @@ use crate::providers::{
     opencode_go::OpencodeGoProvider,
 };
 
+#[test]
+fn plan_usage_stream_errors_keep_known_codes_without_upstream_messages() {
+    for code in [
+        "subscription_sharing_user_not_eligible",
+        "subscription_sharing_usage_limit_exceeded",
+        "subscription_sharing_usage_unavailable",
+        "subscription_sharing_unsupported_capability",
+        "subscription_sharing_route_not_supported",
+    ] {
+        let event = format!(
+            "data: {}",
+            json!({"type":"response.failed", "response":{"error":{"code":code,"message":"private-credential-reflected"}}})
+        );
+        let error = StructuredFold::new(WireProtocol::OpenAiResponses)
+            .feed(&event, &mut |_| {})
+            .unwrap_err()
+            .for_provider(ProviderId::Codex);
+        assert!(
+            matches!(error, crate::providers::ProviderError::PlanUsage { code: saved } if saved == code)
+        );
+        assert!(!format!("{error:?}").contains("private-credential-reflected"));
+    }
+    let event = format!(
+        "data: {}",
+        json!({"type":"response.failed", "response":{"error":{"code":"private-credential-reflected", "message":"private-credential-reflected"}}})
+    );
+    let error = StructuredFold::new(WireProtocol::OpenAiResponses)
+        .feed(&event, &mut |_| {})
+        .unwrap_err()
+        .for_provider(ProviderId::Codex);
+    assert!(matches!(
+        error,
+        crate::providers::ProviderError::TurnFailed { .. }
+    ));
+    assert!(!format!("{error:?}").contains("private-credential-reflected"));
+}
+
 fn request(wire: WireProtocol) -> InferenceRequest {
     InferenceRequest {
         request_id: "request-1".into(),

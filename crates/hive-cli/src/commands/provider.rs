@@ -5,7 +5,8 @@ use std::{
 };
 
 use hive_protocol::providers::{
-    MAX_API_KEY_BYTES, ProviderStatus, SelectAuthRequest, SetApiKeyRequest, StartLoginRequest,
+    LoginCallbackRequest, MAX_API_KEY_BYTES, ProviderStatus, SelectAuthRequest, SetApiKeyRequest,
+    StartLoginRequest,
 };
 
 use super::Context;
@@ -36,6 +37,7 @@ pub(super) async fn run(command: ProviderCommand, context: &Context) -> Result<(
         ProviderCommand::Login {
             command_id,
             account,
+            headless,
             ..
         } => {
             let command_id = choose_command_id(command_id)?;
@@ -43,13 +45,26 @@ pub(super) async fn run(command: ProviderCommand, context: &Context) -> Result<(
                 .start_codex_login(&StartLoginRequest {
                     command_id: command_id.clone(),
                     account_id: account,
+                    headless,
                 })
                 .await
                 .map_err(|error| mutation_error(error, &command_id))?;
             context.output.value(&login, || {
-                println!("Continue with ChatGPT: {}", login.authorization_url);
                 println!("Login ID: {}", login.login_id);
+                println!();
+                println!("Continue with ChatGPT:");
+                println!("{}", login.authorization_url);
+                println!();
+                if login.headless {
+                    println!("Open the link on your browser machine. After authorization, copy the full http://127.0.0.1:.../auth/callback?... URL from the address bar (the page may fail to connect).");
+                }
             })?;
+            if headless {
+                eprintln!("Paste the final callback URL here and press Enter:");
+            }
+            let callback = read_callback_url();
+            tokio::pin!(callback);
+            let mut callback_submitted = !headless;
             let deadline = tokio::time::Instant::now() + Duration::from_secs(360);
             loop {
                 let status = client.codex_login_status(&login.login_id).await?;
@@ -65,6 +80,12 @@ pub(super) async fn run(command: ProviderCommand, context: &Context) -> Result<(
                 }
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => return Ok(()),
+                    value = &mut callback, if !callback_submitted => {
+                        client.submit_codex_login_callback(&login.login_id, &LoginCallbackRequest {
+                            callback_url: value?,
+                        }).await?;
+                        callback_submitted = true;
+                    },
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {},
                 }
                 if tokio::time::Instant::now() >= deadline {
@@ -135,6 +156,31 @@ pub(super) async fn run(command: ProviderCommand, context: &Context) -> Result<(
             context.output.value(&status, || print_status(&status))
         }
     }
+}
+
+async fn read_callback_url() -> Result<String> {
+    // Tokio stdin uses a blocking-pool read that can prevent runtime shutdown
+    // on Ctrl-C or login timeout. A detached input thread lets the CLI exit.
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("login-callback-input".into())
+        .spawn(move || {
+            use std::io::BufRead;
+            let mut reader = io::BufReader::new(io::stdin().lock().take(16 * 1024 + 1));
+            let mut value = String::new();
+            let result = reader.read_line(&mut value).map(|_| value);
+            let _ = sender.send(result);
+        })?;
+    let value = receiver
+        .await
+        .map_err(|_| "callback input reader stopped")??;
+    if value.len() > 16 * 1024 || value.trim().is_empty() {
+        return Err(
+            "supply one callback URL on stdin, at most 16 KiB; resume with the same --command-id"
+                .into(),
+        );
+    }
+    Ok(value.trim().to_owned())
 }
 
 fn print_status(status: &ProviderStatus) {

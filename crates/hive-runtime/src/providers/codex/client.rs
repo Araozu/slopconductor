@@ -106,9 +106,29 @@ impl CodexClient {
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .json(&payload);
         drop(payload);
-        let mut response = req.send().await?;
+        let response = req.send().await?;
+        let mut result = self
+            .read_inference_response(request, wire, response, on_event)
+            .await?;
+        if let Some(continuation) = &mut result.message.continuation {
+            continuation.scope = scope;
+        }
+        Ok(result)
+    }
+
+    pub(super) async fn read_inference_response(
+        &self,
+        request: &InferenceRequest,
+        wire: WireProtocol,
+        mut response: reqwest::Response,
+        on_event: &mut (dyn FnMut(ProviderEvent) + Send),
+    ) -> Result<InferenceResponse, ProviderError> {
         transport::check_status(ProviderId::Codex, &mut response).await?;
-        let mut result = if wire::is_event_stream(&response) {
+        // Subscription requests always ask for SSE. The direct route can omit
+        // Content-Type even while returning valid Responses events. Parse the
+        // stream itself and require terminal evidence instead of trusting that
+        // header alone. JSON and HTML cannot complete the SSE decoder.
+        if self.is_subscription() || wire::is_event_stream(&response) {
             let mut framing = super::super::opencode::SseStream::new();
             let mut fold = super::super::structured_wire::StructuredFold::new(wire);
             while let Some(chunk) = response.chunk().await? {
@@ -128,14 +148,8 @@ impl CodexClient {
                     .map_err(|e| e.for_provider(ProviderId::Codex))?;
             }
             fold.finish(request, ProviderId::Codex)
-                .map_err(|e| e.for_provider(ProviderId::Codex))?
+                .map_err(|e| e.for_provider(ProviderId::Codex))
         } else {
-            if self.is_subscription() {
-                return Err(ProviderError::InvalidResponse {
-                    provider: ProviderId::Codex,
-                    detail: "subscription endpoint did not return SSE",
-                });
-            }
             let body = transport::read_body_limited(ProviderId::Codex, response).await?;
             let value =
                 serde_json::from_str(&body).map_err(|_| ProviderError::InvalidResponse {
@@ -143,12 +157,8 @@ impl CodexClient {
                     detail: "response body is not JSON",
                 })?;
             super::super::structured_wire::decode(&value, wire, request, ProviderId::Codex)
-                .map_err(|e| e.for_provider(ProviderId::Codex))?
-        };
-        if let Some(continuation) = &mut result.message.continuation {
-            continuation.scope = scope;
+                .map_err(|e| e.for_provider(ProviderId::Codex))
         }
-        Ok(result)
     }
 
     pub fn new(api_key: &str) -> Result<Self, ProviderError> {
@@ -280,11 +290,15 @@ impl CodexClient {
         self.validate(request)?;
         let mut response = self.inference(request, true).await?.send().await?;
         transport::check_status(ProviderId::Codex, &mut response).await?;
-        if self.is_subscription() && !wire::is_event_stream(&response) {
-            return Err(ProviderError::InvalidResponse {
-                provider: ProviderId::Codex,
-                detail: "subscription endpoint did not return SSE",
-            });
+        if self.is_subscription() {
+            return transport::read_sse_response(
+                ProviderId::Codex,
+                WireProtocol::OpenAiResponses,
+                &request.model,
+                response,
+                &mut on_delta,
+            )
+            .await;
         }
         transport::read_streaming_response(
             ProviderId::Codex,

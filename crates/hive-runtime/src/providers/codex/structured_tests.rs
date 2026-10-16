@@ -67,6 +67,168 @@ fn client(server: &Server, subscription: bool) -> CodexClient {
 }
 
 #[tokio::test]
+async fn subscription_sparse_terminal_preserves_completed_items_and_metadata() {
+    let provider = CodexClient::from_chatgpt(Arc::new(fixture_connection(
+        std::path::PathBuf::new(),
+        u64::MAX,
+    )))
+    .unwrap();
+    for tools in [false, true] {
+        let output = if tools {
+            completed()["output"].as_array().unwrap().clone()
+        } else {
+            vec![
+                json!({"type":"message","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}),
+            ]
+        };
+        let index = usize::from(tools);
+        let mut events = vec![
+            json!({"type":"response.created","response":{"output":[]}}),
+            json!({"type":"response.in_progress","response":{"output":[]}}),
+            json!({"type":"response.output_item.added","output_index":index,"item":{"type":"message","content":[]}}),
+            json!({"type":"response.content_part.added","output_index":index,"content_index":0,"part":{"type":"output_text","text":""}}),
+            json!({"type":"response.output_text.delta","output_index":index,"content_index":0,"delta":if tools {"Inspecting."} else {"ok"}}),
+            json!({"type":"response.metadata","metadata":{"private":"not displayed"}}),
+        ];
+        if tools {
+            events.push(json!({"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"path\":\"Cargo.toml\"}"}));
+        }
+        for (index, item) in output.iter().enumerate() {
+            events
+                .push(json!({"type":"response.output_item.done","output_index":index,"item":item}));
+        }
+        events.push(json!({"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":7,"output_tokens":3}}}));
+        let body: String = events
+            .iter()
+            .map(|value| format!("data: {value}\n\n"))
+            .collect();
+        let mut observed = Vec::new();
+        let result = provider
+            .read_inference_response(
+                &request(),
+                WireProtocol::OpenAiResponses,
+                crate::providers::test_http::response(&body, None),
+                &mut |event| observed.push(event),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result.message.visible_text(),
+            if tools { "Inspecting." } else { "ok" }
+        );
+        assert_eq!(
+            result.finish_reason,
+            if tools {
+                FinishReason::ToolCalls
+            } else {
+                FinishReason::Stop
+            }
+        );
+        assert_eq!(result.usage.total_tokens, Some(10));
+        assert_eq!(result.message.continuation.unwrap().items, output);
+        assert!(
+            observed
+                .iter()
+                .any(|event| matches!(event, ProviderEvent::TextDelta { .. }))
+        );
+    }
+}
+
+#[tokio::test]
+async fn subscription_sparse_terminal_requires_consistent_completed_items_and_terminal_evidence() {
+    let provider = CodexClient::from_chatgpt(Arc::new(fixture_connection(
+        std::path::PathBuf::new(),
+        u64::MAX,
+    )))
+    .unwrap();
+    let delta = json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"ok"});
+    let done = json!({"type":"response.output_item.done","output_index":0,"item":{"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}});
+    let terminal =
+        json!({"type":"response.completed","response":{"status":"completed","output":[]}});
+    let mut mismatch = done.clone();
+    mismatch["item"]["content"][0]["text"] = "different".into();
+    let mut gap = done.clone();
+    gap["output_index"] = 1.into();
+    for events in [
+        vec![delta.clone(), terminal.clone()],
+        vec![done.clone()],
+        vec![delta.clone(), mismatch, terminal.clone()],
+        vec![gap, terminal.clone()],
+        vec![done.clone(), done, terminal],
+    ] {
+        let body: String = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect();
+        assert!(
+            provider
+                .read_inference_response(
+                    &request(),
+                    WireProtocol::OpenAiResponses,
+                    crate::providers::test_http::response(&body, None),
+                    &mut |_| {}
+                )
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn subscription_structured_stream_accepts_missing_content_type_and_keeps_tools() {
+    let provider = CodexClient::from_chatgpt(Arc::new(fixture_connection(
+        std::path::PathBuf::new(),
+        u64::MAX,
+    )))
+    .unwrap();
+    let body = format!(
+        "data: {}\n\n{}",
+        json!({"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"Inspecting."}),
+        stream(completed())
+    );
+    for content_type in [
+        None,
+        Some(""),
+        Some("text/plain"),
+        Some("text/event-stream"),
+    ] {
+        let response = crate::providers::test_http::response(&body, content_type);
+        let mut events = Vec::new();
+        let result = provider
+            .read_inference_response(
+                &request(),
+                WireProtocol::OpenAiResponses,
+                response,
+                &mut |event| events.push(event),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.finish_reason, FinishReason::ToolCalls);
+        assert_eq!(result.message.visible_text(), "Inspecting.");
+        assert!(result.message.blocks.iter().any(
+            |block| matches!(&block.content, BlockContent::ToolCall { name, .. } if name == "read")
+        ));
+        assert!(events.iter().any(
+            |event| matches!(event, ProviderEvent::TextDelta { text, .. } if text == "Inspecting.")
+        ));
+        assert_eq!(result.usage.total_tokens, Some(10));
+    }
+}
+
+#[tokio::test]
+async fn subscription_structured_stream_without_content_type_rejects_json_html_and_truncation() {
+    let provider = CodexClient::from_chatgpt(Arc::new(fixture_connection(
+        std::path::PathBuf::new(),
+        u64::MAX,
+    )))
+    .unwrap();
+    for body in [completed().to_string(), "<html>private fixture content</html>".into(), "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n".into(), "data: {\"type\":\"response.failed\",\"response\":{\"error\":\"private fixture content\"}}\n\n".into(), "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}".into()] {
+        let error = provider.read_inference_response(&request(), WireProtocol::OpenAiResponses, crate::providers::test_http::response(&body, None), &mut |_| {}).await.unwrap_err();
+        assert!(!format!("{error:?}").contains("private fixture content"));
+    }
+}
+
+#[tokio::test]
 async fn both_auth_modes_round_trip_tools_and_scoped_private_history() {
     for subscription in [false, true] {
         let final_value = json!({"status":"completed","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]}]});

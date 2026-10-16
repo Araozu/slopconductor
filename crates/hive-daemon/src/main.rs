@@ -104,7 +104,6 @@ async fn run(args: Args) -> Result<()> {
         .collect();
     let (credentials, _go_key) = credentials::ProviderCredentials::load_with_endpoints(
         &config.data_dir,
-        store_client.node().await?.node_id,
         bootstrap,
         config.opencode_zen_base_url.clone(),
         config.codex_base_url.clone(),
@@ -327,6 +326,7 @@ pub(crate) async fn health() -> Json<HealthResponse> {
             "sessions".to_owned(),
             "text-chat".to_owned(),
             "provider-credentials".to_owned(),
+            "provider-headless-login".to_owned(),
             "provider-discovery".to_owned(),
             "provider-accounts".to_owned(),
             "structured-messages".to_owned(),

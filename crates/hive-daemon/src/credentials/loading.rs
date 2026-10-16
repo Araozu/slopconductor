@@ -6,22 +6,20 @@ impl ProviderCredentials {
     #[cfg(test)]
     pub async fn load(
         data_dir: &Path,
-        host_id: String,
         bootstrap: Vec<(String, String)>,
     ) -> Result<(Arc<Self>, Option<String>), CredentialError> {
-        Self::load_with_endpoints(data_dir, host_id, bootstrap, None, None).await
+        Self::load_with_endpoints(data_dir, bootstrap, None, None).await
     }
 
     pub async fn load_with_endpoints(
         data_dir: &Path,
-        host_id: String,
         bootstrap: Vec<(String, String)>,
         zen_base_url: Option<String>,
         codex_base_url: Option<String>,
     ) -> Result<(Arc<Self>, Option<String>), CredentialError> {
         let directory = data_dir.join("credentials");
         let read_directory = directory.clone();
-        let (api_keys, account_ids) = tokio::task::spawn_blocking(move || {
+        let (api_keys, account_ids, host_id) = tokio::task::spawn_blocking(move || {
             create_private_dir(&read_directory).map_err(|_| CredentialError::Storage)?;
             let mut api_keys = HashMap::new();
             for (provider, _) in PROVIDERS {
@@ -102,7 +100,8 @@ impl ProviderCredentials {
                 open_private_file(&entry.path()).map_err(|_| CredentialError::Storage)?;
                 account_ids.push(id.to_owned());
             }
-            Ok((api_keys, account_ids))
+            let host_id = super::host::load_host_id(&read_directory)?;
+            Ok((api_keys, account_ids, host_id))
         })
         .await
         .map_err(|_| CredentialError::Storage)??;

@@ -10,7 +10,10 @@ use axum::{
 };
 use hive_protocol::{
     ErrorResponse, PROVIDERS_PATH,
-    providers::{ProviderCatalog, SelectAuthRequest, SetApiKeyRequest, StartLoginRequest},
+    providers::{
+        LoginCallbackRequest, ProviderCatalog, SelectAuthRequest, SetApiKeyRequest,
+        StartLoginRequest,
+    },
 };
 
 use super::chat::{AppState, authorize_request, normalize_rejections};
@@ -32,6 +35,10 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         )
         .route("/v1/providers/codex/login", post(start_login))
         .route("/v1/providers/codex/login/{login_id}", get(login_status))
+        .route(
+            "/v1/providers/codex/login/{login_id}/callback",
+            post(login_callback),
+        )
         .layer(DefaultBodyLimit::max(32 * 1024))
         .route_layer(middleware::from_fn(normalize_rejections))
         .route_layer(middleware::from_fn_with_state(token, authorize_request))
@@ -107,6 +114,7 @@ pub(crate) async fn start_login(
         .start_login_for_account(
             request.command_id,
             request.account_id,
+            request.headless,
             Some(state.runtime.clone()),
         )
         .await
@@ -133,6 +141,39 @@ pub(crate) async fn login_status(
     Path(id): Path<String>,
 ) -> Response {
     respond(state.credentials.login_status(&id).await)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/providers/codex/login/{login_id}/callback",
+    tag = "providers",
+    params(("login_id" = String, Path, description = "Pending headless login id")),
+    request_body = LoginCallbackRequest,
+    responses(
+        (status = 202, description = "Callback accepted for validation and token exchange", body = hive_protocol::providers::LoginStatus),
+        (status = 400, description = "Invalid callback or login is not pending/headless", body = hive_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = hive_protocol::ErrorResponse),
+        (status = 404, description = "Login flow not found", body = hive_protocol::ErrorResponse),
+        (status = 503, description = "Daemon shutting down", body = hive_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn login_callback(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<LoginCallbackRequest>,
+) -> Response {
+    if !state.accepting.load(Ordering::Acquire) {
+        return credential_error(CredentialError::Stopping);
+    }
+    match state
+        .credentials
+        .submit_login_callback(&id, &request.callback_url)
+        .await
+    {
+        Ok(status) => (StatusCode::ACCEPTED, Json(status)).into_response(),
+        Err(error) => credential_error(error),
+    }
 }
 
 #[utoipa::path(
@@ -329,9 +370,9 @@ fn respond<T: serde::Serialize>(result: Result<T, CredentialError>) -> Response 
 fn credential_error(error: CredentialError) -> Response {
     let (status, code) = match error {
         CredentialError::Unsupported => (StatusCode::BAD_REQUEST, "unsupported_provider"),
-        CredentialError::InvalidKey | CredentialError::InvalidId => {
-            (StatusCode::BAD_REQUEST, "invalid_request")
-        }
+        CredentialError::InvalidKey
+        | CredentialError::InvalidId
+        | CredentialError::InvalidCallback => (StatusCode::BAD_REQUEST, "invalid_request"),
         CredentialError::Storage => (
             StatusCode::SERVICE_UNAVAILABLE,
             "credential_storage_unavailable",

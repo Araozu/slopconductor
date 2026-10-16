@@ -1,6 +1,83 @@
 use super::*;
 
 #[tokio::test]
+async fn oauth_host_id_is_private_stable_uuid_and_distinct_from_other_hosts() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let (owner, _) = ProviderCredentials::load(first.path(), vec![])
+        .await
+        .unwrap();
+    let host_id = owner.host_id.clone();
+    assert!(host_id.starts_with("urn:uuid:"));
+    assert_eq!(host_id.len(), 45);
+    assert_eq!(host_id.as_bytes()[23], b'4');
+    owner.shutdown().await;
+    let (restored, _) = ProviderCredentials::load(first.path(), vec![])
+        .await
+        .unwrap();
+    assert_eq!(host_id, restored.host_id);
+    let (other, _) = ProviderCredentials::load(second.path(), vec![])
+        .await
+        .unwrap();
+    assert_ne!(host_id, other.host_id);
+    write_private_file(
+        &first.path().join("credentials/codex-host-id"),
+        b"raw-node-id",
+    )
+    .unwrap();
+    assert!(
+        ProviderCredentials::load(first.path(), vec![])
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn headless_login_is_idempotent_mode_bound_and_shutdown_cancels() {
+    let directory = tempfile::tempdir().unwrap();
+    let (owner, _) = ProviderCredentials::load(directory.path(), vec![])
+        .await
+        .unwrap();
+    let first = owner
+        .start_login_for_account("headless".into(), None, true, None)
+        .await
+        .unwrap();
+    assert!(first.headless);
+    assert_eq!(
+        first.authorization_url,
+        owner
+            .start_login_for_account("headless".into(), None, true, None)
+            .await
+            .unwrap()
+            .authorization_url
+    );
+    assert!(matches!(
+        owner
+            .start_login_for_account("headless".into(), None, false, None)
+            .await,
+        Err(CredentialError::LoginPending)
+    ));
+    assert!(matches!(
+        owner
+            .submit_login_callback("headless", "https://example.com/?code=secret")
+            .await,
+        Err(CredentialError::InvalidCallback)
+    ));
+    assert_eq!(
+        owner.login_status("headless").await.unwrap().status,
+        "pending"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(2), owner.shutdown())
+        .await
+        .unwrap();
+    assert_eq!(
+        owner.login_status("headless").await.unwrap().status,
+        "failed"
+    );
+    assert!(!account_path(&directory.path().join("credentials"), "default").exists());
+}
+
+#[tokio::test]
 async fn selection_restores_mode_and_account_together_and_rejects_unknown_accounts() {
     let directory = tempfile::tempdir().unwrap();
     let credentials = directory.path().join("credentials");
@@ -20,7 +97,7 @@ async fn selection_restores_mode_and_account_together_and_rejects_unknown_accoun
     }
     let selection_path = credentials.join("codex-auth-mode");
     write_codex_selection(&selection_path, None, Some("work")).unwrap();
-    let (owner, _) = ProviderCredentials::load(directory.path(), "host".into(), vec![])
+    let (owner, _) = ProviderCredentials::load(directory.path(), vec![])
         .await
         .unwrap();
     let state = owner.state.lock().await;
@@ -30,7 +107,7 @@ async fn selection_restores_mode_and_account_together_and_rejects_unknown_accoun
     assert!(owner.provider_clients(None).await.unwrap().is_empty());
     write_codex_selection(&selection_path, Some("chatgpt"), Some("unknown")).unwrap();
     assert!(matches!(
-        ProviderCredentials::load(directory.path(), "host".into(), vec![]).await,
+        ProviderCredentials::load(directory.path(), vec![]).await,
         Err(CredentialError::Storage)
     ));
 }
@@ -40,7 +117,6 @@ async fn bootstrap_is_private_and_saved_keys_override_environment() {
     let directory = tempfile::tempdir().unwrap();
     let (owner, key) = ProviderCredentials::load(
         directory.path(),
-        "host-1".into(),
         vec![("opencode-go".into(), "initial-key".into())],
     )
     .await
@@ -51,7 +127,6 @@ async fn bootstrap_is_private_and_saved_keys_override_environment() {
     write_private_file(&path, b"replacement-key").unwrap();
     let (_, key) = ProviderCredentials::load(
         directory.path(),
-        "host-1".into(),
         vec![("opencode-go".into(), "stale-env-key".into())],
     )
     .await
@@ -71,7 +146,7 @@ async fn bootstrap_is_private_and_saved_keys_override_environment() {
 #[tokio::test]
 async fn duplicate_login_reuses_callback_and_shutdown_cancels_it() {
     let directory = tempfile::tempdir().unwrap();
-    let (owner, _) = ProviderCredentials::load(directory.path(), "stable-host".into(), vec![])
+    let (owner, _) = ProviderCredentials::load(directory.path(), vec![])
         .await
         .unwrap();
     let first = owner.start_login("login-1".into(), None).await.unwrap();
@@ -80,7 +155,7 @@ async fn duplicate_login_reuses_callback_and_shutdown_cancels_it() {
     assert!(
         first
             .authorization_url
-            .contains("ext_agent_host_id=stable-host")
+            .contains("ext_agent_host_id=urn%3Auuid%3A")
     );
     assert!(matches!(
         owner.start_login("login-2".into(), None).await,
@@ -112,7 +187,7 @@ async fn insecure_or_symlink_credentials_fail_closed() {
     std::fs::write(&path, "key").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert!(
-        ProviderCredentials::load(directory.path(), "host".into(), vec![])
+        ProviderCredentials::load(directory.path(), vec![])
             .await
             .is_err()
     );
@@ -120,7 +195,7 @@ async fn insecure_or_symlink_credentials_fail_closed() {
     std::fs::remove_file(&path).unwrap();
     symlink(directory.path().join("missing"), &path).unwrap();
     assert!(
-        ProviderCredentials::load(directory.path(), "host".into(), vec![])
+        ProviderCredentials::load(directory.path(), vec![])
             .await
             .is_err()
     );
