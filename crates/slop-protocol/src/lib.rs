@@ -20,7 +20,7 @@ pub const PROVIDERS_PATH: &str = "/v1/providers";
 pub const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:7331";
 
 /// Service identity used to detect an accidentally selected endpoint.
-pub const SERVICE_NAME: &str = "slopconductor-daemon";
+pub const SERVICE_NAME: &str = "hive-daemon";
 
 mod health_response;
 pub use health_response::HealthResponse;

@@ -58,7 +58,7 @@ impl Store {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (finished_tx, finished_rx) = oneshot::channel();
         let worker = thread::Builder::new()
-            .name("slopconductor-db".to_owned())
+            .name("hive-db".to_owned())
             .spawn(move || {
                 worker_main(WorkerArgs {
                     data_dir: canonical_dir,

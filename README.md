@@ -1,4 +1,4 @@
-# Slop Conductor
+# Hive
 
 A native AI agent runtime with one daemon per machine, persistent sessions, and
 independent clients. Start work through a CLI or script, leave it running, and
@@ -101,7 +101,7 @@ cargo run -- turn cancel TURN_ID
 ```
 
 The CLI is the default workspace member, so plain `cargo build` and `cargo run`
-target it. The binaries are named `slopd` and `slop`. The default endpoint is
+target it. The binaries are named `hived` and `slop`. The default endpoint is
 `http://127.0.0.1:7331`. Override the loopback address when necessary:
 
 ```sh
@@ -211,7 +211,7 @@ the **connecting machine** runs its own local daemon as a gateway. Connections
 are directional: configure the reverse direction separately if you need it.
 The following Linux shell examples run from the repository on each machine.
 If the binaries are on your PATH, replace `cargo run -p slop-daemon --` with
-`slopd` and `cargo run --` with `slop`. On Windows, use credential paths beneath
+`hived` and `cargo run --` with `slop`. On Windows, use credential paths beneath
 `%LOCALAPPDATA%` and your shell's equivalent commands.
 
 ### On the owner

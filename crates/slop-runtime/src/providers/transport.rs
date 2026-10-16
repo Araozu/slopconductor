@@ -8,7 +8,7 @@ use super::{ChatResponse, ProviderError, StreamDelta, WireProtocol, wire::*};
 
 pub(super) fn http_client() -> Result<reqwest::Client, ProviderError> {
     Ok(reqwest::Client::builder()
-        .user_agent(concat!("slopconductor/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("hive/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .connect_timeout(Duration::from_secs(10))

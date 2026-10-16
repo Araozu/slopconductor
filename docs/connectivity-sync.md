@@ -36,7 +36,7 @@ exists.
 
 Tailscale can connect devices directly and fall back to encrypted relay paths.
 It also uses a coordination service. Thus this deployment avoids a required
-central Slop Conductor server while still relying on networking infrastructure.
+central Hive server while still relying on networking infrastructure.
 See [connection types](https://tailscale.com/docs/reference/connection-types)
 and [control/data planes](https://tailscale.com/docs/concepts/control-data-planes).
 

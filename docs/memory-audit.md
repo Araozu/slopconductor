@@ -62,7 +62,7 @@ from retaining several full histories throughout normal inference.
 
 ```sh
 cargo build --release -p slop-daemon -p slop-cli --locked
-python3 scripts/memory_audit.py --daemon target/release/slopd --runs 3
+python3 scripts/memory_audit.py --daemon target/release/hived --runs 3
 ```
 
 The Linux-only script uses temporary state and synthetic local provider

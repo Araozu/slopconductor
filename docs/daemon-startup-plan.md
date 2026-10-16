@@ -68,7 +68,7 @@ An omitted name preserves existing identity/name on restart.
 | TOML key | Default | Accepted range |
 | --- | --- | --- |
 | `listen` | `127.0.0.1:7331` | Loopback socket address |
-| `node_name` | Hostname when valid, otherwise `Slop Conductor node` | 1–128 UTF-8 bytes |
+| `node_name` | Hostname when valid, otherwise `Hive node` | 1–128 UTF-8 bytes |
 | `database_queue_capacity` | `128` | 1–4096 requests |
 | `database_busy_timeout_ms` | `5000` | 1–60000 ms |
 | `shutdown_timeout_ms` | `10000` | 100–300000 ms |

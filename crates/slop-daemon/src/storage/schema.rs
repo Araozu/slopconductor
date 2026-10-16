@@ -262,7 +262,7 @@ pub(super) fn default_node_name() -> String {
         .or_else(|_| env::var("HOSTNAME"))
         .ok()
         .filter(|name| valid_node_name(name))
-        .unwrap_or_else(|| "Slop Conductor node".to_owned())
+        .unwrap_or_else(|| "Hive node".to_owned())
 }
 
 pub(super) fn valid_node_name(name: &str) -> bool {

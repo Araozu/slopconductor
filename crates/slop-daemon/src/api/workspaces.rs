@@ -218,13 +218,13 @@ pub(crate) async fn diff(State(state): State<Arc<AppState>>, Path(id): Path<Stri
     storage_response(state.store.workspace_diff(&id).await)
 }
 
-/// Remove a workspace registration. Opened directories are retained. Slop-created worktrees are removed asynchronously only when clean and unchanged from their base.
+/// Remove a workspace registration. Opened directories are retained. Hive-created worktrees are removed asynchronously only when clean and unchanged from their base.
 #[utoipa::path(
     post, path = "/v1/workspaces/{id}/remove", tag = "workspaces",
     params(("id" = String, Path, description = "Workspace id")),
     request_body = RemoveWorkspaceRequest,
     responses(
-        (status = 202, description = "Remove a workspace registration. Opened directories are retained. Slop-created worktrees are removed asynchronously only when clean and unchanged from their base.", body = WorkspaceResponse),
+        (status = 202, description = "Remove a workspace registration. Opened directories are retained. Hive-created worktrees are removed asynchronously only when clean and unchanged from their base.", body = WorkspaceResponse),
         (status = 400, description = "Invalid request or unsupported capability", body = slop_protocol::ErrorResponse),
         (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
         (status = 404, description = "Workspace not found", body = slop_protocol::ErrorResponse),

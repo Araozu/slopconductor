@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure Linux daemon RSS with offline fixtures; pass a release slopd binary.
+"""Measure Linux daemon RSS with offline fixtures; pass a release hived binary.
 
 Temporary SQLite checkpoints supply identical 2 MiB contexts without hundreds
 of provider calls. The fixture runs outside the measured daemon, retains no
@@ -146,7 +146,7 @@ def measure(binary):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--daemon", type=Path, default=Path("target/release/slopd"))
+    parser.add_argument("--daemon", type=Path, default=Path("target/release/hived"))
     parser.add_argument("--runs", type=int, default=3)
     args = parser.parse_args()
     if sys.platform != "linux":

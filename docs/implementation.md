@@ -2,7 +2,7 @@
 
 ## Current implementation
 
-The workspace has six crates. `slopd` serves anonymous loopback health and an
+The workspace has six crates. `hived` serves anonymous loopback health and an
 authenticated node and text-chat APIs. `slop` calls these through `slop-client`, checks
 identity/version, and renders human or JSON output. The daemon implements
 XDG-aware startup config, exclusive directory ownership, SQLite schema/node

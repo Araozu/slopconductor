@@ -97,7 +97,7 @@ async fn login_uses_pkce_host_identity_and_strict_callback_binding() {
     let fields: std::collections::HashMap<_, _> = url.query_pairs().collect();
     assert_eq!(fields["client_id"], "dynamic_agent_client");
     assert_eq!(fields["ext_agent_host_id"], "persistent-host");
-    assert_eq!(fields["agent_name_hint"], "Slop Conductor");
+    assert_eq!(fields["agent_name_hint"], "Hive");
     assert_eq!(
         fields["code_challenge"],
         URL_SAFE_NO_PAD.encode(Sha256::digest(login.verifier.as_bytes()))

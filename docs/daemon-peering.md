@@ -11,7 +11,7 @@ Run the owner with its existing administrator API and an additional loopback pee
 listener in the same native process:
 
 ```sh
-slopd --peer-listen 127.0.0.1:7332
+hived --peer-listen 127.0.0.1:7332
 ```
 
 `peer_listen = "127.0.0.1:7332"` in the daemon TOML file or `SLOP_PEER_LISTEN`
@@ -24,7 +24,7 @@ separately to publish the **peer listener** as private HTTPS. For example, on
 Linux, `sudo tailscale serve --bg http://127.0.0.1:7332`; on Windows, run the
 corresponding command without `sudo` in an Administrator terminal. Check the
 [current Serve examples](https://tailscale.com/docs/reference/examples/serve)
-and the emitted HTTPS origin. Slop Conductor does not configure Tailscale.
+and the emitted HTTPS origin. Hive does not configure Tailscale.
 
 On the owner, create a grant and save its secret privately before requesting
 acceptance. The command ID is required so an ambiguous response can be retried:

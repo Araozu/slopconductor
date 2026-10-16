@@ -164,7 +164,7 @@ def check_primary_lifecycle(daemon_binary, cli_binary, root):
     try:
         status = run([str(cli_binary), "--daemon", endpoint, "--json", "status"], env=cli_env)
         health = json.loads(status.stdout)
-        if health["service"] != "slopconductor-daemon":
+        if health["service"] != "hive-daemon":
             raise RuntimeError(f"wrong daemon identity: {health}")
         if health["api_version"] < 1 or not {"health", "node"}.issubset(health["capabilities"]):
             raise RuntimeError(f"unexpected bootstrap capabilities: {health}")
@@ -322,7 +322,7 @@ def check_api_mismatch(cli_binary, root):
     class IncompatibleDaemon(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             payload = json.dumps({
-                "service": "slopconductor-daemon", "version": "test",
+                "service": "hive-daemon", "version": "test",
                 "api_version": 999, "capabilities": ["health", "node"]
             }).encode()
             self.send_response(200)
@@ -378,7 +378,7 @@ def main():
     check_boundaries(metadata)
     suffix = ".exe" if os.name == "nt" else ""
     binaries = Path(metadata["target_directory"]) / "debug"
-    daemon_binary = binaries / ("slopd" + suffix)
+    daemon_binary = binaries / ("hived" + suffix)
     cli_binary = binaries / ("slop" + suffix)
 
     # Git for Windows bounds $GIT_DIR even when long tracked paths are enabled.

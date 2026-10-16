@@ -116,7 +116,7 @@ def check_completed_turn_cursor(cli_binary, token_path, env, receipt, turn,
         def do_GET(self):
             target = urllib.parse.urlsplit(self.path)
             if target.path == "/v1/health":
-                self.respond(200, {"service": "slopconductor-daemon", "version": "test",
+                self.respond(200, {"service": "hive-daemon", "version": "test",
                                    "api_version": 1, "capabilities": []})
                 return
             seen.append(self.path)

@@ -66,7 +66,7 @@ impl ChatGptLogin {
                 ("code_challenge", &challenge),
             ]);
             if registration.is_none() {
-                query.append_pair("agent_name_hint", "Slop Conductor");
+                query.append_pair("agent_name_hint", "Hive");
             }
         }
         Ok(Self {
@@ -247,7 +247,7 @@ impl ChatGptLogin {
                 && target.starts_with("/auth/callback?")
                 && url.path() == "/auth/callback";
             let reply = if valid {
-                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 53\r\n\r\nLogin callback received. Return to your Slop client.\n"
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 53\r\n\r\nLogin callback received. Return to your Hive client.\n"
             } else {
                 "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
             };

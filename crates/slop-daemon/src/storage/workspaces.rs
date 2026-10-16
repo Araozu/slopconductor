@@ -630,7 +630,7 @@ impl StoreClient {
     }
     async fn cleanup_repository(&self, w: &WorkspaceResponse) -> StoreResult<Repository> {
         let mut source = w.clone();
-        // Worktree chains terminate in a directory opened in place, which Slop never deletes.
+        // Worktree chains terminate in a directory opened in place, which Hive never deletes.
         for _ in 0..MAX_WORKSPACES {
             if !source.managed_worktree {
                 return repository(&source);
@@ -677,7 +677,7 @@ impl StoreClient {
             status: diff.status,
         })
     }
-    /// Ordinary removal unregisters metadata; only Slop-created worktrees permit filesystem cleanup.
+    /// Ordinary removal unregisters metadata; only Hive-created worktrees permit filesystem cleanup.
     pub async fn remove_workspace(
         &self,
         id: &str,

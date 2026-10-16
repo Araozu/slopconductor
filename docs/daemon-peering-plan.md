@@ -76,7 +76,7 @@ guide for those concrete refinements.
 [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) supports
 sharing a local service over private HTTPS. Its
 [examples](https://tailscale.com/docs/reference/examples/serve) cover Linux and
-Windows setup. Configure it explicitly outside Slop Conductor in the first
+Windows setup. Configure it explicitly outside Hive in the first
 slice; enabling peer support must not run network configuration commands.
 The transport must also pass a real two-machine event-stream check.
 

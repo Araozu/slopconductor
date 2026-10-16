@@ -72,4 +72,4 @@ def check_filesystem(binary, root):
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="hive-filesystem-") as directory:
-        check_filesystem(Path(__file__).resolve().parents[1] / "target/debug/slopd", Path(directory))
+        check_filesystem(Path(__file__).resolve().parents[1] / "target/debug/hived", Path(directory))

@@ -20,7 +20,7 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Session header used for routing and prompt caching.
 pub const SESSION_HEADER: &str = "x-opencode-session";
 /// This client's own identifier, shared by both OpenCode gateways.
-pub const USER_AGENT: &str = concat!("slopconductor/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!("hive/", env!("CARGO_PKG_VERSION"));
 
 /// Cap for blocking response bodies, enforced while reading.
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;

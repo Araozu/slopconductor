@@ -32,7 +32,7 @@ use utoipa::OpenApi;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Debug, Parser)]
-#[command(name = "slopd", version, about = "Slop Conductor machine daemon")]
+#[command(name = "hived", version, about = "Hive machine daemon")]
 struct Args {
     #[command(flatten)]
     startup: StartupArgs,
@@ -50,7 +50,7 @@ async fn main() -> ExitCode {
     match run(Args::parse()).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("slopd: {error}");
+            eprintln!("hived: {error}");
             ExitCode::FAILURE
         }
     }
@@ -251,15 +251,15 @@ async fn run(args: Args) -> Result<()> {
     match timeout(remaining(deadline), shutdown).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
-            eprintln!("slopd: database shutdown failed: {error}");
+            eprintln!("hived: database shutdown failed: {error}");
             complete = false;
         }
         Ok(Err(error)) => {
-            eprintln!("slopd: database shutdown task failed: {error}");
+            eprintln!("hived: database shutdown task failed: {error}");
             complete = false;
         }
         Err(_) => {
-            eprintln!("slopd: shutdown deadline elapsed; daemon resources are still draining");
+            eprintln!("hived: shutdown deadline elapsed; daemon resources are still draining");
             complete = false;
         }
     }

@@ -2,7 +2,7 @@
 
 ## The application
 
-Slop Conductor is a personal control surface for AI work executing across several
+Hive is a personal control surface for AI work executing across several
 machines. Each active operating-system installation runs one native daemon that
 owns local conversations, tasks, workspaces, and agent execution. Clients attach
 to those daemons to create work, observe it, and send instructions.

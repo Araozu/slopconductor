@@ -1,10 +1,10 @@
-# Slop Conductor overview
+# Hive overview
 
 **Status as of 2026-10-15.** This is the master high-level map. Detailed design
 lives in the documents linked below; this file summarizes what exists today per
 crate so a new developer can get oriented without reading everything first.
 
-Slop Conductor is a native Rust AI agent runtime: one daemon per OS installation
+Hive is a native Rust AI agent runtime: one daemon per OS installation
 owns sessions, agent execution, and local data. Clients (CLI first, TUI/web/
 Electron later) attach over a versioned HTTP API, then detach without stopping
 accepted work. The daemon calls model providers directly and supervises tools
@@ -113,7 +113,7 @@ Read with [runtime](runtime.md), [shared provider interface](provider-interface.
 ### `slop-daemon` — service composition
 
 Owns API handlers, configuration, startup/shutdown, storage composition, and
-credential ownership. No presentation logic. Binaries: `slopd`.
+credential ownership. No presentation logic. Binaries: `hived`.
 
 Key areas: `main.rs` (startup order, health/node routes, shutdown),
 `config.rs` (XDG/`LOCALAPPDATA` paths, loopback-only listener, TOML bounds),

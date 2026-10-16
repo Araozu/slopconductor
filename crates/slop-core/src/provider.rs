@@ -1,4 +1,4 @@
-//! Provider and model identities for Slop Conductor.
+//! Provider and model identities for Hive.
 //!
 //! These are transport-independent domain values. HTTP endpoints, credentials,
 //! and wire payloads belong in `slop-runtime`; versioned DTOs belong in

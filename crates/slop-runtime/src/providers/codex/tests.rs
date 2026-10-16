@@ -70,7 +70,7 @@ async fn subscription_discovery_and_both_completion_modes_use_shared_surface() {
                 sent.headers["user-agent"]
                     .to_str()
                     .unwrap()
-                    .starts_with("slopconductor/")
+                    .starts_with("hive/")
             );
             assert!(!sent.headers.contains_key("x-opencode-session"));
             assert!(!sent.body.contains("fixture-access-token"));

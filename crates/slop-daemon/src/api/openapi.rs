@@ -38,7 +38,7 @@ impl utoipa::Modify for BearerSecurity {
     }
 }
 
-/// Versioned public API served by `slopd`.
+/// Versioned public API served by `hived`.
 ///
 /// Only handlers annotated with `#[utoipa::path]` appear under `paths`. Every
 /// other schema listed here is still emitted under `components/schemas` so
@@ -46,7 +46,7 @@ impl utoipa::Modify for BearerSecurity {
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "Slop Conductor Daemon API",
+        title = "Hive Daemon API",
         version = "1.0",
         description = "Local administrator API, including the explicit peer gateway. Health is anonymous; protected routes require the local administrator bearer. The optional separate peer listener accepts scoped peer bearers and exposes only the session/turn inspection and control subset documented in docs/daemon-peering.md."
     ),

@@ -8,7 +8,7 @@ pub struct WorkspaceResponse {
     pub path: Option<String>,
     /// Optional Git identity. Ordinary folders need no Git installation.
     pub git_common_dir: Option<String>,
-    /// Whether Slop owns creation and filesystem cleanup of this worktree.
+    /// Whether Hive owns creation and filesystem cleanup of this worktree.
     pub managed_worktree: bool,
     /// Built-in container for threads without a directory.
     pub is_default: bool,

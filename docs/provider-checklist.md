@@ -1,6 +1,6 @@
 # Provider behavior checklist
 
-This is the delivery checklist for a provider in Slop Conductor's current
+This is the delivery checklist for a provider in Hive's current
 native agent runtime. It applies to Go, Zen, and Codex. The larger
 [`ProviderAdapter` proposal](provider-interface.md) is not a claim that its
 illustrative DTOs or endpoints exist. A capability may be unsupported, but it
