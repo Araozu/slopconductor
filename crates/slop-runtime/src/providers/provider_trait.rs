@@ -9,6 +9,8 @@ pub trait Provider: Send + Sync {
     fn base_url(&self) -> &'static str;
     /// Environment variable holding this provider's API key.
     fn env_key_var(&self) -> &'static str;
+    /// Verified compiled fallback mappings. Use `catalog::models` to include
+    /// supported entries discovered from public metadata.
     fn models(&self) -> &'static [ProviderModel];
 
     fn auth_modes(&self) -> &'static [AuthMode] {
@@ -20,7 +22,7 @@ pub trait Provider: Send + Sync {
         true
     }
 
-    /// Look up which wire shape serves `model`, rejecting unknown ids.
+    /// Look up a compiled or explicitly discovered wire shape, rejecting unknown IDs.
     fn wire_protocol(&self, model: &str) -> Result<WireProtocol, ProviderError> {
         if !is_valid_model_id(model) {
             return Err(ProviderError::InvalidModel {
@@ -32,6 +34,7 @@ pub trait Provider: Send + Sync {
             .iter()
             .find(|m| m.id == model)
             .map(|m| m.wire)
+            .or_else(|| super::catalog::wire(self.id(), model).flatten())
             .ok_or_else(|| ProviderError::InvalidModel {
                 provider: self.id(),
                 model: model.to_owned(),

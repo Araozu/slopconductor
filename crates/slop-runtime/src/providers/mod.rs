@@ -1,12 +1,14 @@
 //! Native provider integrations owned by the machine daemon.
 //!
 //! Each provider is compiled in (no runtime plugins). All providers share the
-//! same shape: a static model catalog mapping every model to one of three wire
+//! same shape: a model catalog mapping every model to one of three wire
 //! protocols (OpenAI Chat Completions, OpenAI Responses, Anthropic Messages),
 //! daemon-owned credentials, and provider-neutral request/response records.
 //!
 //! Implemented providers are OpenCode Go, OpenCode Zen, and headless Codex.
+//! Go/Zen enrich compiled fallback mappings with public Models.dev metadata.
 
+pub mod catalog;
 pub mod chatgpt_auth;
 pub mod codex;
 pub mod inference;

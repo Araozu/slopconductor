@@ -257,7 +257,7 @@ def check_tools(daemon_binary, cli_binary, root):
         }, "/v1/sessions")
         assert status == 400, (status, error)
         count = len(fixture.snapshot())
-        status, error = request(endpoint, token, "POST", {"command_id": "effort-rejected", "text": "hello", "settings": {"reasoning_effort": "high"}}, f"/v1/sessions/{session}/messages")
+        status, error = request(endpoint, token, "POST", {"command_id": "effort-rejected", "text": "hello", "settings": {"reasoning_effort": "unsupported-effort"}}, f"/v1/sessions/{session}/messages")
         assert status == 400 and error["code"] == "unsupported_capability"
         assert len(fixture.snapshot()) == count
         for prompt, terminal in [("malformed", "failed"), ("limited", "incomplete")]:

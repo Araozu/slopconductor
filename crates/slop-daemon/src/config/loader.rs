@@ -136,12 +136,22 @@ pub fn load_with_environment_and_name(
     let model_ref = default_model.parse::<ProviderModelRef>().map_err(|_| {
         ConfigError::Invalid("default_model must be a supported opencode-go/model id".into())
     })?;
-    let supported_default = slop_runtime::providers::provider(model_ref.provider())
-        .is_some_and(|provider| provider.wire_protocol(model_ref.model()).is_ok());
+    let supported_default = slop_runtime::providers::provider(model_ref.provider()).is_some();
     if !supported_default {
         return Err(ConfigError::Invalid(
             "default_model must identify a model supported by a compiled provider".into(),
         ));
+    }
+    // Controlled inference endpoints use the bundled metadata unless the user
+    // explicitly supplies a matching catalog; offline fixtures need no network.
+    let models_dev_url = file.models_dev_url.or_else(|| {
+        (provider_base_url.is_none() && opencode_zen_base_url.is_none())
+            .then(|| slop_runtime::providers::catalog::MODELS_DEV_URL.to_owned())
+    });
+    if let Some(url) = &models_dev_url {
+        OpencodeGoClient::validate_base_url(url).map_err(|_| {
+            ConfigError::Invalid("models_dev_url is not an allowed endpoint".into())
+        })?;
     }
     let max_output_tokens = file
         .max_output_tokens
@@ -203,6 +213,7 @@ pub fn load_with_environment_and_name(
         provider_base_url,
         opencode_zen_base_url,
         codex_base_url,
+        models_dev_url,
         default_model,
         max_output_tokens,
         context_token_budget,

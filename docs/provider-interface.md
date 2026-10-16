@@ -37,7 +37,9 @@ The repository currently contains:
 
 - [Provider identities](../crates/slop-core/src/provider.rs) in `slop-core`.
 - A [runtime registry and `Provider` trait](../crates/slop-runtime/src/providers/mod.rs)
-  covering metadata, a static model catalog, and wire-protocol lookup.
+  covering metadata, compiled fallback mappings, and wire-protocol lookup.
+  [Go/Zen model discovery](model-catalog.md) adds bounded public Models.dev
+  refreshes, explicit reasoning efforts, and new supported API mappings.
 - Concrete [OpenCode Go](../crates/slop-runtime/src/providers/opencode_go.rs) and
   [OpenCode Zen](../crates/slop-runtime/src/providers/opencode_zen.rs) clients
   with live model listing, non-streaming inference, and SSE text streaming over
@@ -593,7 +595,7 @@ live Codex login or inference was performed; see [Codex connection](codex-connec
 | Criteria | Current evidence and remaining gap |
 | --- | --- |
 | C01–C02 | Shared object-safe execution interface, three concrete adapters, local HTTP fixture consumers, independent client dependencies, and a persisted bounded Go text-turn supervisor. |
-| C03–C04 | Static model validation, bounded requests, requested/reported model identities, and rejection of multiple/non-leading Messages system instructions. Account-scoped discovery and general setting descriptors remain planned. |
+| C03–C04 | Go/Zen public metadata refresh with offline fallback, explicit effort validation/encoding across three API formats, separate live account catalog probes, bounded requests, requested/reported model identities, and rejection of multiple/non-leading Messages system instructions. General setting descriptors and broader account capability discovery remain planned. |
 | C05–C08 | Text-only parsers reject unsupported structured output, missing/unknown terminal evidence, malformed JSON/UTF-8, contradictory outcomes and post-terminal text. Regression fixtures cover trailing end markers, incomplete stop reasons, multiline framing, and chunk splits. Structured fixtures cover call/result translation, private replay, fragmented arguments, and rejection before execution; the real-binary tool workflow covers durable dispatch. |
 | C09–C10 | HTTP retries/redirects disabled; no adapter tool execution. Go chat has durable turn intent and explicit cancellation; interrupted requests are not automatically retried. Tools have committed intents/results and no-replay interruption recovery. Broader inference retry policies remain planned. |
 | C11–C12 | Unknown/zero usage is distinct, cumulative updates do not double-count, reported totals retain provenance, and upstream error bodies are excluded. Go chat persists counters/provenance and reconciles interrupted turns on restart. Required unsupported continuation is rejected. Private completed continuation is durable and scope-checked. Detailed usage counters remain planned. |

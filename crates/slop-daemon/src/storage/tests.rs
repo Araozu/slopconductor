@@ -448,7 +448,7 @@ async fn accepted_settings_are_frozen_and_workspace_is_leased_across_sessions() 
                 text: "reject".into(),
                 settings: Some(GenerationSettings {
                     max_output_tokens: None,
-                    reasoning_effort: Some("high".into()),
+                    reasoning_effort: Some("unsupported-effort".into()),
                     full_context: None,
                 }),
                 ..Default::default()

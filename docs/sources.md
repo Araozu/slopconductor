@@ -76,6 +76,10 @@ assumptions and limitations.
   subscription gateway and model-specific wire formats.
 - [OpenCode Zen endpoints](https://docs.opencode.ai/docs/zen/#endpoints):
   pay-as-you-go gateway, advertised model listing, and model-specific wire formats.
+- [Models.dev public API](https://models.dev/api.json) and [schema](https://github.com/anomalyco/models.dev/blob/dev/packages/core/src/schema.ts):
+  explicit provider-specific reasoning effort values, API packages, tools, and
+  context/input limits. [Implemented discovery](model-catalog.md) was checked on
+  2026-10-16 against both live gateway ID lists and this public metadata.
 
 Zen's execution mappings were checked on **2026-10-08**. Its Gemini/Google and
 Jev/System One formats are unsupported by the current three-wire text adapter.

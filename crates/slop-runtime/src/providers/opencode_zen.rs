@@ -3,7 +3,8 @@
 //! Model IDs and endpoint mappings were checked on 2026-10-08 against
 //! <https://docs.opencode.ai/docs/zen/#endpoints>. Zen's Gemini (Google) and
 //! Jev (System One) wire formats are not implemented; live listing may advertise
-//! them, but execution rejects IDs outside this verified three-wire catalog.
+//! them, but execution requires a compiled or explicit public metadata mapping
+//! to one of the three supported API formats.
 //! In particular, MiniMax and Qwen3.8 Max use Chat here and Messages on Go.
 
 use slop_core::provider::ProviderId;

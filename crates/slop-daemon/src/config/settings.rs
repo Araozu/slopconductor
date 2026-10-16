@@ -12,6 +12,7 @@ pub struct Config {
     pub provider_base_url: Option<String>,
     pub opencode_zen_base_url: Option<String>,
     pub codex_base_url: Option<String>,
+    pub models_dev_url: Option<String>,
     pub default_model: String,
     pub max_output_tokens: u32,
     pub context_token_budget: u64,

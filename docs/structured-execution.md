@@ -95,7 +95,9 @@ explicitly supplied for the new turn still fails validation before acceptance.
 
 `reasoning_effort` is part of the contract and CLI (`--effort`). Codex advertises
 [model-specific effort values](codex-connection.md#reasoning-settings) and encodes
-them in Responses requests. Go/Zen effort settings remain unadvertised. Explicit
+them in Responses requests. Go/Zen advertise explicit efforts from their
+[refreshed model metadata](model-catalog.md) and encode them for Chat, Responses,
+and Messages. Explicit
 unsupported values return `unsupported_capability` before acceptance and inference. There is no arbitrary provider-parameter passthrough.
 
 Per-turn model selection can change providers in the same conversation,

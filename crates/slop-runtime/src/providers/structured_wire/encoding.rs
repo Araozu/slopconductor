@@ -159,9 +159,7 @@ pub(in crate::providers) fn encode(
             WireProtocol::OpenAiResponses => body["reasoning"] = json!({"effort":effort}),
             WireProtocol::OpenAiChatCompletions => body["reasoning_effort"] = effort.clone().into(),
             WireProtocol::AnthropicMessages => {
-                return Err(super::super::ProviderError::UnsupportedCapability {
-                    capability: "settings.reasoning_effort",
-                });
+                body["output_config"] = json!({"effort":effort});
             }
         }
     }

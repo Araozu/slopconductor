@@ -72,13 +72,14 @@ An omitted name preserves existing identity/name on restart.
 | `database_queue_capacity` | `128` | 1–4096 requests |
 | `database_busy_timeout_ms` | `5000` | 1–60000 ms |
 | `shutdown_timeout_ms` | `10000` | 100–300000 ms |
-| `default_model` | `opencode-go/glm-5.3-flash` | Verified compiled provider catalog model |
+| `default_model` | `opencode-go/glm-5.3-flash` | Executable provider catalog model, validated after metadata discovery |
 | `max_output_tokens` | `4096` | 1–65536 tokens, frozen in each created session |
 | `context_token_budget` | `275000` | 8192–2000000; local cost cap, clamped to model limits; `settings.full_context` opts in to the model's full window |
 | `execution_concurrency` | `4` | 1–64 concurrent turns globally |
 | `provider_base_url` | Official Go endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
 | `opencode_zen_base_url` | Official Zen endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
 | `codex_base_url` | Official Codex endpoint | HTTPS or loopback HTTP; no embedded credentials, query, or fragment |
+| `models_dev_url` | `https://models.dev/api.json`; disabled by default with custom Go/Zen endpoints | Optional public model metadata URL; HTTPS or loopback HTTP with no credentials, query, or fragment; see [model catalogs](model-catalog.md) |
 
 ### Exclusive startup and stable identity
 

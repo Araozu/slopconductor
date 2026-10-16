@@ -50,6 +50,38 @@ fn terminal(wire: WireProtocol) -> Value {
 }
 
 #[test]
+fn gateway_efforts_are_validated_and_encoded_for_each_wire() {
+    use crate::providers::Provider;
+    let provider = OpencodeGoProvider::instance();
+    for (model, expected) in [
+        ("glm-5.3-flash", json!({"reasoning_effort":"max"})),
+        ("gpt-6-luna", json!({"reasoning":{"effort":"max"}})),
+        (
+            "claude-haiku-5-5",
+            json!({"output_config":{"effort":"max"}}),
+        ),
+    ] {
+        let wire = provider.wire_protocol(model).unwrap();
+        let mut input = request(wire);
+        input.model = model.into();
+        input.settings.reasoning_effort = Some("max".into());
+        let caps = inference::capabilities(provider, model);
+        input.validate(provider, &caps).unwrap();
+        let encoded = encode(&input, wire, ProviderId::OpencodeGo, "scope").unwrap();
+        for (key, value) in expected.as_object().unwrap() {
+            assert_eq!(&encoded[key], value, "{model}");
+        }
+        input.settings.reasoning_effort = None;
+        let encoded = encode(&input, wire, ProviderId::OpencodeGo, "scope").unwrap();
+        for key in ["reasoning_effort", "reasoning", "output_config"] {
+            assert!(encoded.get(key).is_none(), "default must omit {key}");
+        }
+        input.settings.reasoning_effort = Some("unsupported".into());
+        assert!(input.validate(provider, &caps).is_err());
+    }
+}
+
+#[test]
 fn all_wire_shapes_preserve_calls_results_private_continuation_and_usage() {
     for wire in [
         WireProtocol::OpenAiChatCompletions,

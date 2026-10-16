@@ -14,6 +14,7 @@ pub(super) struct FileConfig {
     pub(super) provider_base_url: Option<String>,
     pub(super) opencode_zen_base_url: Option<String>,
     pub(super) codex_base_url: Option<String>,
+    pub(super) models_dev_url: Option<String>,
     pub(super) default_model: Option<String>,
     pub(super) max_output_tokens: Option<u32>,
     pub(super) context_token_budget: Option<u64>,

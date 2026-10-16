@@ -5,8 +5,11 @@ pub fn capabilities(provider: &dyn Provider, model: &str) -> ModelCapabilities {
     if provider.id() == slop_core::provider::ProviderId::Codex {
         return super::super::codex::model_capabilities(model);
     }
-    // Gateway adapters implement all three wire formats. Gateway-specific
-    // reasoning settings remain unadvertised until verified for each model.
+    if let Some(capabilities) = super::super::catalog::capabilities(provider.id(), model) {
+        return capabilities;
+    }
+    // Models missing from public metadata retain their compiled mapping without
+    // inventing effort controls from a model name or a reasoning boolean.
     let (context_window_tokens, max_input_tokens) =
         super::super::context_limits::limits(provider.id(), model);
     ModelCapabilities {

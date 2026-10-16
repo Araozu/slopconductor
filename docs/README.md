@@ -68,6 +68,7 @@ today, then read in this order:
 | [Provider credentials](provider-credentials.md) | Implemented runtime credential API/CLI and private XDG storage |
 | [Codex connection](codex-connection.md) | Structured Codex tools/replay, reasoning settings, accounts and subscription restrictions |
 | [Provider checklist](provider-checklist.md) | Required native-provider behavior and explicit offline/live validation gates |
+| [Model catalogs](model-catalog.md) | Dynamic Go/Zen metadata, reasoning efforts, supported API mappings, and offline fallback |
 | [Runtime](runtime.md) | Native agent loop, provider integrations, and tools |
 | [Shared provider interface](provider-interface.md) | Proposed adapter contract, common client surface, and conformance criteria |
 | [Storage](storage.md) | Durable local records, events, artifacts, and recovery |

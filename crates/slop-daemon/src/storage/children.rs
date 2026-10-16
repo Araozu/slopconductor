@@ -1071,8 +1071,8 @@ impl StoreClient {
                 let mut models = Vec::new();
                 for provider_id in slop_core::provider::ProviderId::all() {
                     if let Some(provider) = slop_runtime::providers::provider(*provider_id) {
-                        for model in provider.models() {
-                            let caps = slop_runtime::providers::inference::capabilities(provider, model.id);
+                        for model in slop_runtime::providers::catalog::models(provider) {
+                            let caps = slop_runtime::providers::inference::capabilities(provider, &model.id);
                             models.push(serde_json::json!({"id":format!("{}/{}",provider_id.as_str(),model.id),"provider":provider_id.as_str(),"model":model.id,"display_name":model.display_name,"adapter_supported":true,"account_entitlement":"not_checked","capabilities":{"tools":caps.tools,"context_window_tokens":caps.context_window_tokens,"max_input_tokens":caps.max_input_tokens,"reasoning_efforts":caps.reasoning_efforts}}));
                         }
                     }
@@ -2414,7 +2414,7 @@ mod tests {
         let mut expected = Vec::new();
         for provider_id in slop_core::provider::ProviderId::all() {
             if let Some(provider) = slop_runtime::providers::provider(*provider_id) {
-                for model in provider.models() {
+                for model in slop_runtime::providers::catalog::models(provider) {
                     expected.push(format!("{}/{}", provider_id.as_str(), model.id));
                 }
             }
@@ -2845,7 +2845,8 @@ mod tests {
             .await
             .unwrap();
         for (id, model, effort) in [
-            ("zen-child", "opencode-zen/glm-5.3", None),
+            ("zen-child", "opencode-zen/glm-5.3", Some("max")),
+            ("go-child", "opencode-go/glm-5.3-flash", Some("high")),
             ("codex-child", "codex/gpt-6-luna", Some("high")),
         ] {
             let mut request = child(id);
@@ -2860,7 +2861,7 @@ mod tests {
             assert_eq!(run.turn.settings.reasoning_effort.as_deref(), effort);
         }
         let mut unsupported = child("unsupported-child-effort");
-        unsupported.spec.settings.reasoning_effort = Some("high".into());
+        unsupported.spec.settings.reasoning_effort = Some("unsupported-effort".into());
         assert!(matches!(
             c.create_child(&parent.run_id, unsupported.clone(), Some(unsupported.spec))
                 .await,
@@ -2872,7 +2873,7 @@ mod tests {
                 .unwrap()
                 .items
                 .len(),
-            2
+            3
         );
         store.shutdown().await.unwrap();
     }

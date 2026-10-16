@@ -248,7 +248,7 @@ pub(crate) async fn artifact_content(
     path = "/v1/models",
     tag = "chat",
     responses(
-        (status = 200, description = "Executable model catalog", body = Vec<ModelResponse>),
+        (status = 200, description = "Executable model catalog with provider-specific reasoning efforts from refreshed public metadata and compiled fallbacks", body = Vec<ModelResponse>),
         (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse)
     ),
     security(("bearer_auth" = []))
@@ -268,10 +268,10 @@ pub(crate) async fn models(State(state): State<Arc<AppState>>) -> Response {
         } else {
             Some(format!("{} credentials are unavailable", id.as_str()))
         };
-        for model in provider.models() {
-            let client_caps = client.as_ref().map(|c| c.capabilities(model.id));
+        for model in slop_runtime::providers::catalog::models(provider) {
+            let client_caps = client.as_ref().map(|c| c.capabilities(&model.id));
             let fallback_caps =
-                slop_runtime::providers::inference::capabilities(provider, model.id);
+                slop_runtime::providers::inference::capabilities(provider, &model.id);
             let tools = client_caps.as_ref().unwrap_or(&fallback_caps).tools;
             let subscription = client.as_ref().is_some_and(|c| {
                 c.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription

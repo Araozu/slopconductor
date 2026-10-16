@@ -72,6 +72,17 @@ async fn run(args: Args) -> Result<()> {
     // Signal subscriptions exist before any readiness message or bound socket.
     let signals = Signals::install()?;
     tokio::task::yield_now().await;
+    if let Some(url) = &config.models_dev_url
+        && slop_runtime::providers::catalog::refresh(url)
+            .await
+            .is_err()
+    {
+        eprintln!("hived: model metadata refresh failed; retaining the bundled catalog");
+    }
+    let selected: slop_core::provider::ProviderModelRef = config.default_model.parse()?;
+    slop_runtime::providers::provider(selected.provider())
+        .ok_or("default model provider is unavailable")?
+        .wire_protocol(selected.model())?;
     let store = storage::Store::open(
         config.data_dir.clone(),
         config.node_name.clone(),
@@ -122,6 +133,21 @@ async fn run(args: Args) -> Result<()> {
         Some(config.max_output_tokens),
         tools,
     );
+    let catalog_refresh = config.models_dev_url.clone().map(|url| {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(slop_runtime::providers::catalog::REFRESH_INTERVAL).await;
+                if slop_runtime::providers::catalog::refresh(&url)
+                    .await
+                    .is_err()
+                {
+                    eprintln!(
+                        "hived: model metadata refresh failed; retaining the previous catalog"
+                    );
+                }
+            }
+        })
+    });
     let accepting = Arc::new(AtomicBool::new(true));
     let state = Arc::new(api::chat::AppState {
         peers: Arc::new(peers::PeerService::new(
@@ -198,6 +224,10 @@ async fn run(args: Args) -> Result<()> {
     };
     accepting.store(false, Ordering::Release);
     state.peers.shutdown();
+    if let Some(refresh) = catalog_refresh {
+        refresh.abort();
+        let _ = refresh.await;
+    }
     let _ = peer_stop_tx.send(());
     if !server_ended {
         let _ = shutdown_tx.send(());

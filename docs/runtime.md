@@ -101,6 +101,11 @@ Explicit live catalog probes and Codex account selection/sign-out are implemente
 see [runtime credentials](provider-credentials.md). The full proposed account
 quota/capability lifecycle remains future work.
 
+Go/Zen also use [public Models.dev discovery](model-catalog.md) for executable
+API mappings and explicit reasoning efforts, with startup/hourly refresh and a
+bundled offline fallback. The public model API and native child discovery share
+this metadata with pre-acceptance validation and all three inference encoders.
+
 A provider integration should implement model listing/validation, authentication
 status, inference streaming, cancellation support, and usage/limit reporting.
 Expose provider capabilities rather than assuming one universal request schema.

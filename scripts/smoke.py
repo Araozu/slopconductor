@@ -26,6 +26,7 @@ from delegation_smoke import check_delegation
 from context_smoke import check_context
 from history_smoke import check_history
 from peers_smoke import check_peers
+from model_catalog_smoke import check_model_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -402,6 +403,7 @@ def main():
         check_history(daemon_binary, cli_binary, root / "history")
         check_peers(daemon_binary, cli_binary, root / "peers")
         check_context(daemon_binary, root / "context", start_daemon, stop_daemon, isolated_env)
+        check_model_catalog(daemon_binary, root / "model-catalog", start_daemon, stop_daemon, isolated_env)
         check_tools(daemon_binary, cli_binary, root / "structured-tools")
         check_workspaces(daemon_binary, cli_binary, root / "workspaces")
         check_filesystem(daemon_binary, root / "filesystem")

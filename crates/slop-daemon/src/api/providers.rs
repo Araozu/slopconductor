@@ -236,7 +236,7 @@ pub(crate) async fn remove_api_key(
     tag = "providers",
     params(("provider" = String, Path, description = "Provider id")),
     responses(
-        (status = 200, description = "Live provider model catalog", body = ProviderCatalog),
+        (status = 200, description = "Live provider model IDs enriched with supported public metadata, including reasoning efforts", body = ProviderCatalog),
         (status = 401, description = "Missing or invalid bearer token", body = slop_protocol::ErrorResponse),
         (status = 502, description = "Provider catalog could not be verified", body = slop_protocol::ErrorResponse)
     ),
@@ -274,11 +274,12 @@ pub(crate) async fn discover(
         .try_into()
         .unwrap_or(u64::MAX);
     let descriptor = client.descriptor();
+    let supported = slop_runtime::providers::catalog::models(descriptor);
     let subscription = client.auth_mode() == slop_runtime::providers::AuthMode::ChatGptSubscription;
     let models = ids
         .into_iter()
         .map(|model| {
-            let known = descriptor.models().iter().find(|item| item.id == model);
+            let known = supported.iter().find(|item| item.id == model);
             let executable = known.is_some();
             let caps = client.capabilities(&model);
             slop_protocol::chat::ModelResponse {

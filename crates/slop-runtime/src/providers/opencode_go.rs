@@ -20,7 +20,8 @@ pub use super::opencode::{
     SESSION_HEADER, USER_AGENT,
 };
 
-/// Static model catalog from the Go endpoints table.
+/// Compiled fallback model catalog from the Go endpoints table. Public
+/// Models.dev discovery can add explicit supported API mappings at runtime.
 ///
 /// Docs and the live `/models` list drift (live currently also advertises
 /// `omen-alpha`, `glm-5.1`, `deepseek-flash`, `minimax-m2.5`, `qwen3.6-plus`,
