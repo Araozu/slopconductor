@@ -7,7 +7,9 @@ later inspect or steer the same session from another device.
 The daemon owns the agent loop and calls model providers directly. Sessions share
 one runtime. Each machine owns its data; remote access initially uses Tailscale.
 A VPS can optionally aggregate or mirror data. Future clients include a native
-TUI, a browser interface, and an optional Electron desktop interface.
+TUI, a browser interface, and an optional Electron desktop interface. Additional
+presentation clients are developed in separate repositories; this core
+repository contains the daemon, runtime, protocol, client library, and CLI.
 
 ## Current state
 
@@ -68,7 +70,9 @@ additional clients, browser tools, and session migration. See the
 [roadmap](docs/roadmap.md).
 
 The [recommended next steps](docs/roadmap.md#recommended-next-delivery-order) are
-Windows and capacity validation, plus deployed Tailscale validation.
+capacity validation and deployed Tailscale validation. Current native Windows
+offline CI passes; release workload details are recorded in
+[capacity validation](docs/capacity-validation.md).
 Scheduling/batch controls, child tasks, and scoped daemon peering have
 implemented local slices.
 Both daemon listeners bind to loopback; Tailscale Serve exposes the peer listener
@@ -347,7 +351,8 @@ The generated JSON is a local artifact and is git-ignored; the source of
 truth is the `utoipa` annotations in `crates/hive-daemon/src/api/`.
 
 Building the CLI does not build the daemon, its execution layer, or a frontend.
-Browser and Electron projects will have their own builds when introduced.
+Additional TUI, web, desktop, and mobile projects will live in separate
+repositories with their own builds.
 
 ## Design documents
 

@@ -29,6 +29,12 @@ implemented behavior. Update documentation when implementation changes a plan.
 `hive-runtime` implements native execution. `hive-daemon` composes the service.
 `hive-client` implements the public API client. `hive-cli` is a frontend.
 
+Additional presentation clients (TUI, web, Electron/desktop, mobile, or other
+interfaces) belong in separate repositories outside this repository. Keep their
+source, package manifests, assets, tests, and build/release tooling there. This
+repository owns the daemon, runtime, public protocol, native client library, and
+existing CLI. External clients consume the public API and may reuse `hive-client`.
+
 Clients must not depend on `hive-runtime` or `hive-daemon`. Domain and protocol
 crates must not acquire presentation, networking, or persistence dependencies.
 Do not make generated web assets a prerequisite for compiling the daemon or CLI.
@@ -80,6 +86,7 @@ admission, aggregate operation budgets, batch cancellation, and bounded child
 tasks are implemented. Scoped daemon peering now adds a separate optional
 loopback peer listener, explicit owner targeting, and session inspection/control.
 Deployed tailnet validation remains open. TUI, browser client, and Electron
-client remain planned. Linux and native Windows offline CI pass; live-provider
-and release-build capacity validation remain outstanding. See
-`docs/native-validation.md` for the recorded run and scope.
+client remain planned in external repositories. Linux and native Windows offline
+CI pass; live-provider validation remains outstanding. See
+`docs/native-validation.md` for the recorded run and scope and
+`docs/capacity-validation.md` for Linux release workloads and measurement limits.

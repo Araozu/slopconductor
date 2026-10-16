@@ -1,5 +1,41 @@
 # Native offline validation
 
+## Current cross-platform baseline, 2026-10-16
+
+**Passed:** [CI run 38899848456](https://github.com/Araozu/slopconductor/actions/runs/38899848456)
+validated commit [6c7facb](https://github.com/Araozu/slopconductor/commit/6c7facb02eeaca36742b00602c9565a8515e3491)
+on Ubuntu 24.04 and native Windows Server 2025. Both jobs passed formatting,
+the independent CLI build, Clippy with warnings denied, all applicable offline
+workspace tests (252 on Linux, 242 on Windows), and the complete real-binary
+daemon/CLI smoke suite. Thirteen credential-dependent tests remained opt-in
+on each platform.
+
+This supersedes the older Windows baseline for unified workspaces, Codex,
+daemon peering, queued message delivery/editing/cancellation, and shared-workspace concurrency.
+The evidence is an actual native Windows CI job, not a cross-compilation.
+The earlier sections below retain their original local-check scope.
+
+The [capacity harness](capacity-validation.md) adds Linux release resource
+measurements. Native Windows resource measurements, credentialed live-provider
+checks, and deployed Tailscale validation remain separate gates.
+
+## Capacity tooling and Linux release workloads, 2026-10-16
+
+The expanded harness passed its small debug-binary fixture checks and three
+release runs at each of global concurrency four and 64. Every run covers
+1/10/100 runnable sessions with 2 MiB checkpoints, a 256-member mostly queued
+matrix, separate tool-process memory, bounded noisy output/artifacts, cancellation
+cleanup, and 100 completed churn conversations. At the existing admission
+maximum, 100 runnable sessions means 64 admitted and 36 queued.
+
+The release binary was built from `6a3dfc8` in an isolated checkout. Formatting,
+Clippy with warnings denied, all 251 offline workspace tests, and the complete
+real-binary smoke suite passed in that checkout; thirteen live-provider tests
+remained opt-in. Linux CI now exercises small capacity fixtures using a debug
+binary, without enforcing performance thresholds. The
+[capacity report](capacity-validation.md#recorded-linux-release-results-2026-10-16)
+records binary identity, workload parameters, RSS/latency results, and limits.
+
 ## Shared-workspace concurrency, 2026-10-16
 
 The workspace-root admission gate has been removed. Sessions selecting the

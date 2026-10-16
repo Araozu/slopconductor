@@ -2,6 +2,11 @@
 
 ## Shared rule
 
+This core repository owns the daemon, runtime, protocol, native client library,
+and existing CLI. Additional presentation clients, including TUI, web,
+Electron/desktop, and mobile, belong in separate repositories. Their manifests,
+source, assets, tests, and build/release tooling stay with those repositories.
+
 Every client is a consumer of the public protocol. It can hold UI state, local
 preferences, peer endpoints, and cached projections. The owner daemon holds
 execution, authoritative conversations, checkpoints, tool supervision, and
@@ -136,9 +141,10 @@ structured error interpretation, bounded NDJSON decoding, and typed chat
 operations. It is UI-agnostic. Clients replay events from durable cursors and
 reconcile canonical messages; they do not repeat inference on reconnect.
 
-A future `hive-tui` depends on this library and the protocol. It need not depend
-on the CLI's argument parser or terminal output renderer. Share domain-neutral
-client projections only when both interfaces actually need them.
+A future external `hive-tui` may depend on this library and the protocol through
+a pinned Git revision while the crates remain unpublished. It owns its terminal
+rendering and argument parsing. Share domain-neutral client projections only
+when both interfaces actually need them.
 
 ## Native TUI
 
@@ -200,12 +206,12 @@ rendering are deliberately unsettled until this milestone.
 
 - `cargo build -p hive-cli` requires no daemon or frontend build.
 - `cargo build -p hive-daemon` requires no CLI/TUI/web/Electron build.
-- A later TUI is a separate Cargo package.
-- Browser and desktop packages have separate build commands and dependencies.
+- A later TUI has its own repository and Cargo workspace.
+- Browser, desktop, mobile, and other UI projects have separate repositories,
+  build commands, and dependencies.
 - Generated SDKs follow the API schema; compatibility does not require matching
   all component versions exactly.
 - Native release packages can bundle several binaries for convenience without
   merging their runtime responsibilities.
 
-The existing `clients/` directory is a documented location for later clients,
-not an empty frontend implementation with mandatory dependencies.
+The existing `clients/README.md` documents the external-repository boundary.

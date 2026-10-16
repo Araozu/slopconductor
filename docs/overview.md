@@ -16,10 +16,10 @@ structured Go/Zen/Codex tool execution, canonical workspaces with explicitly
 created Git worktrees, durable tasks/run attempts, deterministic batch matrices,
 fair admission with aggregate budgets, batch cancellation, and bounded native
 child tasks with one-level delegation, completion notifications, steering, and
-durable all/any/timeout joins. Earlier Linux and native Windows offline CI passed;
-the subagent extension has local Linux validation. Live-provider and release-build
-capacity validation remain outstanding. See
-[native validation](native-validation.md).
+durable all/any/timeout joins. Current Linux and native Windows offline CI pass.
+Linux release session/queue/tool/churn measurements are recorded in
+[capacity validation](capacity-validation.md). Live providers and native Windows
+resource measurements remain open; see [native validation](native-validation.md).
 
 ## Workspace in one picture
 
@@ -145,8 +145,9 @@ Files: `src/lib.rs` (endpoint/token selection, health/version checks, chat/
 session/turn/artifact/provider calls), `src/workspaces.rs` (workspace API), and
 `src/orchestration.rs` (task/run/batch/child calls).
 
-The CLI and a future `hive-tui` share this crate. Browser clients use the HTTP
-contract directly.
+The CLI and a future external `hive-tui` may share this crate. Additional TUI,
+browser, desktop, mobile, and other presentation clients live in separate
+repositories. Browser clients use the HTTP contract directly.
 
 ### `hive-cli` — scriptable frontend
 

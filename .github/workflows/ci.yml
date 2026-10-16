@@ -81,3 +81,11 @@ jobs:
 
       - name: Run real daemon and CLI smoke checks
         run: python scripts/ci_check.py python scripts/smoke.py
+
+      - name: Check capacity fixtures (Linux, debug build)
+        if: runner.os == 'Linux'
+        run: >-
+          python scripts/ci_check.py python scripts/memory_audit.py
+          --daemon target/debug/hived --runs 1 --sessions 1 6 --concurrency 2
+          --context-kib 64 --batch-size 12 --churn-rounds 2 --churn-sessions 3
+          --tool-memory-mib 4 --sample-seconds 0.1

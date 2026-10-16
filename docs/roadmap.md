@@ -5,6 +5,9 @@
 Build a complete local daemon/API/CLI workflow before investing in visual
 clients. Add orchestration and remote reachability to that base. TUI, web, and
 Electron are independent client tracks once their required API operations exist.
+Additional presentation clients are delivered in separate repositories outside
+this core repository, including their source, manifests, assets, tests, and
+build/release tooling. This repository retains the existing CLI and API library.
 
 Milestones are capability gates, not calendar promises. The order can change
 with evidence, while accepted non-negotiables remain intact. Browser tools and
@@ -12,7 +15,7 @@ migration are deliberately later tracks.
 
 ## Recommended next delivery order
 
-**Status, 2026-10-15.** Local sessions, unified workspaces, durable tasks/run
+**Status, 2026-10-16.** Local sessions, unified workspaces, durable tasks/run
 attempts, and three-axis matrices are implemented. Steps 1 and 2 now have local
 implementations and offline validation. The current local M3 slice is
 [daemon-to-daemon inspection/control](daemon-peering.md). Platform/capacity
@@ -61,13 +64,17 @@ apply. Starting the M3 slice does not declare M1/M2 complete.
    home-owned session; read-only or unpaired callers cannot mutate it, and home
    execution continues through client, gateway, or network loss.
 
-4. **Platform and capacity validation: still open.** Linux/native Windows CI is
+4. **Platform and capacity validation: offline platform checks pass.** Linux/native Windows CI is
    configured for the required checks and real-binary workflows, including Git/Bash and
    cancellation of native children and their descendants.
-   [Recorded offline validation](native-validation.md) passes on both platforms.
-   Measure release builds with 1/10/100 sessions and a large mostly queued batch,
-   reporting daemon and supervised-tool memory
-   separately. Keep bounded live-provider tool checks explicitly opt-in.
+   [Recorded offline validation](native-validation.md) passes on both platforms,
+   including the latest shared-workspace concurrency change. The
+   [capacity harness](capacity-validation.md) measures release builds with
+   1/10/100 runnable sessions, a large mostly queued batch, supervised-tool
+   memory and cancellation, and session churn. Configured admission is explicit;
+   the current daemon admits at most 64 turns. Keep bounded live-provider tool
+   checks explicitly opt-in. Windows resource measurements and live providers
+   remain open.
 
    Acceptance: record native Windows results, reproducible capacity measurements,
    and the supported provider/tool combinations. M1/M2 remain partial until their
@@ -124,8 +131,9 @@ persisted session on one machine.
 **Partial implementation:** local text chat covers durable acceptance, CLI detach,
 event reconnect, completed history after restart, command deduplication, and
 model-turn cancellation. File/shell execution and recovery now have offline
-real-binary checks on Linux and native Windows. Live tool validation and
-release-build capacity measurements remain before the full M1 exit gate.
+real-binary checks on Linux and native Windows. Linux release capacity workloads
+are [recorded](capacity-validation.md); live tool validation and native Windows
+resource measurements remain before the full M1 exit gate.
 
 Implement durable node/session/task/run identities, local SQLite storage and
 schema migrations, a command inbox, event journal, and interrupted-step records.

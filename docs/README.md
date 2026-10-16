@@ -42,11 +42,13 @@ schemas, and workflows marked proposed describe future work.
 The [recommended next delivery order](roadmap.md#recommended-next-delivery-order)
 now moves from implemented scheduling/batch controls and native children to
 the implemented local [daemon-peering slice](daemon-peering.md), with
-platform/capacity validation still open. Linux/native Windows
+live-provider, Windows resource, and deployed tailnet checks still open. Linux/native Windows
 CI is configured for the required checks and offline real-binary workflows.
 [Recorded offline validation](native-validation.md) passes on both platforms.
-M1/M2 remain partial; live-provider and broader release-build capacity validation
-remain outstanding. An initial Linux release RSS comparison is recorded in the
+M1/M2 remain partial; live-provider validation remains outstanding. Linux release
+session/queue/tool/churn workloads are covered by the
+[capacity harness](capacity-validation.md), with native Windows resource sampling
+still open. The earlier release RSS comparison remains in the
 [memory audit](memory-audit.md).
 
 ## Reading order
@@ -83,6 +85,7 @@ today, then read in this order:
 | [Implementation](implementation.md) | Concrete engineering tasks and suggested module layouts |
 | [Native validation](native-validation.md) | Recorded Linux/Windows CI result, coverage, and remaining gates |
 | [Memory audit](memory-audit.md) | Native ownership fixes and reproducible offline release RSS measurements |
+| [Capacity validation](capacity-validation.md) | Offline session/queue/tool/churn workloads, limits, and release measurements |
 | [Open questions](open-questions.md) | Decisions still requiring experience or product input |
 | [Sources](sources.md) | Primary technical references and changing provider assumptions |
 | [Decisions](decisions/README.md) | Short records of the key architectural choices |
@@ -108,6 +111,9 @@ A client can be developed, built, released, stopped, and replaced without moving
 agent execution into that client. It consumes the same versioned API used by
 scripts. The native CLI and a future native TUI share `hive-client`; browser
 clients share the wire contract and can generate their own SDK.
+Additional TUI, web, desktop, mobile, and other presentation clients are built
+in separate repositories. This repository retains the existing CLI and shared
+API/client contracts.
 
 ## Current repository entry points
 
@@ -116,5 +122,5 @@ clients share the wire contract and can generate their own SDK.
 - [Client library](../crates/hive-client/src/lib.rs): bounded requests, event streams, token files, and compatibility checks.
 - [Daemon](../crates/hive-daemon/src/main.rs): loopback HTTP service.
 - [CLI](../crates/hive-cli/src/main.rs): independent status, chat, session/turn, capability/artifact, workspace, and task/run/batch client.
-- [Client placeholder directory](../clients/README.md): future frontend locations.
+- [Client repository boundary](../clients/README.md): additional interfaces live outside this repository.
 - [Smoke script](../scripts/smoke.py): checks the real daemon and CLI together.

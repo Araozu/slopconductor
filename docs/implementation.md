@@ -299,7 +299,9 @@ as described in
 [tasks and batches](tasks-batches.md). The [recommended delivery order](roadmap.md#recommended-next-delivery-order)
 now marks scheduling/batch controls and native children implemented locally.
 The [local daemon-peering slice](daemon-peering.md) now adds explicit remote
-inspection/control; platform and capacity validation remain open release gates.
+inspection/control. Offline checks pass on Linux and native Windows, and
+[Linux release capacity workloads](capacity-validation.md) are recorded.
+Live-provider, Windows resource, and deployed tailnet checks remain open.
 
 Record canonical workspace paths, optional Git common-directory metadata,
 worktree provenance, and effective session policies. Use explicitly created
@@ -340,9 +342,10 @@ Acceptance: batch results are attributable to exact inputs/workspaces, bounded
 concurrency remains responsive, and waiting parents cannot block all children.
 Exercise restart after child acceptance, parent cancellation policy, budget
 exhaustion across retries, and a full admission pool of waiting parents. Follow
-with live-provider workflows and release-build capacity measurements before
+with live-provider workflows and native Windows resource measurements before
 declaring the M1/M2 gates complete. [Native offline validation](native-validation.md)
-now passes on Linux and Windows.
+passes on Linux and Windows; [Linux release measurements](capacity-validation.md)
+cover sessions, queued matrices, tools, cancellation, and churn.
 
 ## Step 7: providers, accounts, and supported subscriptions
 
@@ -388,6 +391,11 @@ accurately pending, and cached views cannot silently execute replicated tasks.
 
 ## Independent client work
 
+Additional presentation clients are implemented in separate repositories outside
+this core repository. This includes TUI, web, Electron/desktop, mobile, and other
+interfaces, together with their manifests, source, assets, tests, and release
+tooling. The existing CLI and native API library remain in this workspace.
+
 A native TUI can start after session/event operations stabilize; it shares
 `hive-client`, not CLI rendering. A web client can start from generated wire
 schemas and a stable authenticated API. Electron can wrap/extend the web
@@ -415,8 +423,10 @@ suite without provider credentials. Windows uses Git for Windows' Bash and
 per-user app-data temporary storage, preserving the daemon's credential-location
 requirements. Both platforms verify cancellation of a native process and its
 descendant. [Recorded native validation](native-validation.md) passes both jobs
-and the full offline suite. Live-provider validation and release-build capacity
-measurements remain outstanding.
+and the full offline suite. Linux CI also checks small debug-build capacity
+fixtures. [Linux release capacity measurements](capacity-validation.md) are
+recorded separately; live providers and native Windows resource sampling remain
+outstanding.
 
 The smoke check runs real binaries, verifies native client dependency boundaries,
 checks human/JSON output, daemon lifetime after client exit, API mismatch

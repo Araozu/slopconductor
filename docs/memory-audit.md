@@ -58,14 +58,14 @@ compaction plan preserves the original context until it has a usable summary;
 the canonical transcript remains on disk. These copies are bounded and distinct
 from retaining several full histories throughout normal inference.
 
-## Reproduce release RSS measurements
+## Historical RSS workload
 
 ```sh
 cargo build --release -p hive-daemon -p hive-cli --locked
 python3 scripts/memory_audit.py --daemon target/release/hived --runs 3
 ```
 
-The Linux-only script uses temporary state and synthetic local provider
+The script used for the 2026-10-13 comparison used temporary state and synthetic local provider
 credentials. It creates four completed conversations, stops the daemon, and seeds
 32 alternating text messages of 64 KiB each into each conversation's inference
 checkpoint. It restarts, records baseline RSS, creates 1/10/100 additional idle
@@ -81,9 +81,11 @@ subprocesses are involved. Allocator caches and SQLite/HTTP buffers contribute t
 RSS after completion, so that sample is not a live-heap or leak measurement.
 
 This is a controlled comparison of idle metadata and four active contexts.
-Native Windows RSS, 10/100 active sessions, large queued matrices, live providers,
-tool subprocess memory, sustained churn, and heap profiling remain separate
-capacity-validation work.
+The script has since expanded into a [capacity harness](capacity-validation.md)
+with configurable admission, 1/10/100 runnable sessions, large queued matrices,
+separate tool memory, cancellation cleanup, and session churn. The command above
+now runs that broader workload and does not reproduce the historical fixture
+exactly. Native Windows RSS, live providers, and heap profiling remain open.
 
 ## Recorded comparison, 2026-10-13
 

@@ -85,6 +85,10 @@ flowchart TD
 
 Arrows denote dependencies. Future native TUI code follows the CLI path.
 A browser/Electron client consumes the HTTP contract, not Rust runtime internals.
+Additional TUI, web, desktop, mobile, and other presentation clients live in
+separate repositories. Their source, assets, manifests, and build/release tooling
+remain outside this core repository. The existing CLI and native client library
+remain part of this workspace.
 
 The optional [peer listener and gateway](daemon-peering.md) share this daemon's
 application services, storage, and runtime. Outbound peer requests use
@@ -96,7 +100,8 @@ credentials and an allowlisted listener keep local administration separate.
 Keep provider and tool modules inside `hive-runtime` initially. Add dedicated
 crates only when there is a concrete reason: independent reuse, build isolation,
 a platform dependency, or a clearly owned subsystem. Candidate later packages
-include `hive-store`, `hive-provider-openai`, and `hive-tui`.
+include `hive-store` and `hive-provider-openai`. A future `hive-tui` is an
+external client project, outside this workspace and repository.
 
 Interfaces for storage and providers live beside the code that needs them.
 The concrete local-store implementation is composed by the daemon. Core domain

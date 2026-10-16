@@ -22,7 +22,7 @@ Priority orders work; it does not imply a future capability is already available
 | N08 | Local ownership | Each daemon owns its local execution and durable data. |
 | N09 | Optional aggregation/sync | Normal local use must not require a central application server. |
 | N10 | Programmatic control | Scripts and agents can launch, inspect, steer, and cancel through a public API. |
-| N11 | Multiple independent clients | CLI first; native TUI, web, and Electron can grow separately. |
+| N11 | Multiple independent clients | CLI first; additional TUI, web, desktop, mobile, and other presentation clients live in separate repositories. |
 | N12 | Native CLI/TUI builds remain independent | Browser assets and Electron builds cannot be prerequisites. |
 | N13 | Linux and Windows are primary targets | OS behavior is tested and explicit, including dual boot. |
 | N14 | Tailscale required initially for remote access | Connectivity builds on an existing private network. |
