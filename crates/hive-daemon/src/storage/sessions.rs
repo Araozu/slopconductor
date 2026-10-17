@@ -205,6 +205,7 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
         revision: row.get::<_, i64>(6)? as u64,
         last_event_sequence: row.get::<_, i64>(7)? as u64,
         last_user_activity_at: row.get::<_, Option<i64>>(17)?.map(|value| value as u64),
+        status: Default::default(),
         settings,
         execution: execution::optional_json_column(row, 9)?,
         workspace_id: row.get(10)?,
@@ -278,5 +279,54 @@ fn enrich(connection: &Connection, mut session: SessionResponse) -> StoreResult<
         .transpose()?;
     session.budget_usage = governance::usage(connection, &format!("session:{}", session.id))?;
     session.child = children::link(connection, &session.id)?;
+    session.status = session_status(connection, &session)?;
     Ok(session)
+}
+
+/// Live work wins over terminal outcomes; otherwise use the newest visible turn.
+/// Completion acknowledgment compares the completion event, not later metadata events.
+fn session_status(
+    connection: &Connection,
+    session: &SessionResponse,
+) -> StoreResult<hive_protocol::chat::SessionStatus> {
+    use hive_protocol::chat::SessionStatus;
+    let turn: Option<(String, String)> = connection
+        .query_row(
+            "SELECT t.id,t.status FROM turns t WHERE t.session_id=?1
+         AND t.history_only=0
+         AND EXISTS(SELECT 1 FROM messages m WHERE m.turn_id=t.id AND m.deleted=0)
+         ORDER BY CASE t.status WHEN 'running' THEN 0 WHEN 'awaiting_children' THEN 1
+             WHEN 'paused' THEN 2 WHEN 'queued' THEN 3 ELSE 4 END,t.ordinal DESC LIMIT 1",
+            [&session.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|_| StoreError::Database)?;
+    let Some((turn_id, status)) = turn else {
+        return Ok(SessionStatus::Idle);
+    };
+    Ok(match status.as_str() {
+        "running" => SessionStatus::Running,
+        "awaiting_children" => SessionStatus::AwaitingChildren,
+        "paused" => SessionStatus::Paused,
+        "queued" => SessionStatus::Queued,
+        "failed" => SessionStatus::Failed,
+        "cancelled" | "interrupted" | "incomplete" => SessionStatus::Stopped,
+        "completed" => {
+            let sequence: Option<i64> = connection.query_row(
+                "SELECT MAX(sequence) FROM session_events WHERE session_id=?1 AND turn_id=?2 AND kind='turn_completed'",
+                rusqlite::params![session.id, turn_id], |row| row.get(0),
+            ).map_err(|_| StoreError::Database)?;
+            let read = session
+                .inbox
+                .as_ref()
+                .map_or(0, |inbox| inbox.read_sequence);
+            if sequence.is_some_and(|sequence| sequence as u64 > read) {
+                SessionStatus::Ready
+            } else {
+                SessionStatus::Completed
+            }
+        }
+        _ => return Err(StoreError::Database),
+    })
 }

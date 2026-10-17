@@ -5,6 +5,11 @@ pub struct SessionResponse {
     pub id: String,
     pub owner_node_id: String,
     pub title: Option<String>,
+    /// Derived execution/review status. Ready means successfully finished but not
+    /// yet acknowledged via the shared inbox read_sequence. GET does not mark read.
+    #[serde(default)]
+    #[schema(read_only)]
+    pub status: super::SessionStatus,
     pub provider: String,
     pub model: String,
     pub max_tokens: Option<u32>,

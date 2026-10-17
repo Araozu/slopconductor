@@ -725,3 +725,161 @@ async fn last_user_activity_tracks_acceptance_not_retries_or_delivery() {
         Some(edited_at)
     );
 }
+
+#[tokio::test]
+async fn ready_means_completed_and_not_yet_reviewed() {
+    use hive_protocol::chat::{SessionStatus, UpdateSessionInboxRequest};
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_test(&dir, None).await;
+    let c = store.client();
+    let session = c
+        .create_session(create_request("ready-create", None))
+        .await
+        .unwrap()
+        .session_id;
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Idle
+    );
+    send(&c, &session, "ready-first", DeliveryMode::AfterTurn).await;
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Queued
+    );
+    let first = c.claim_next_turn().await.unwrap().unwrap();
+    let running = c.session(&session).await.unwrap();
+    assert_eq!(running.status, SessionStatus::Running);
+    // Reading while running must not acknowledge the future completion.
+    c.update_session_inbox(
+        &session,
+        UpdateSessionInboxRequest {
+            command_id: "read-running".into(),
+            read_sequence: Some(running.last_event_sequence),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    c.finish_chat_turn(&first.turn_id, outcome(ChatStatus::Completed))
+        .await
+        .unwrap();
+    let ready = c.session(&session).await.unwrap();
+    assert_eq!(ready.status, SessionStatus::Ready);
+    assert_eq!(
+        c.sessions(None, 10).await.unwrap().items[0].status,
+        SessionStatus::Ready
+    );
+    // A stale read cursor and unrelated organization updates do not clear ready.
+    c.update_session_inbox(
+        &session,
+        UpdateSessionInboxRequest {
+            command_id: "ready-star".into(),
+            starred: Some(true),
+            read_sequence: Some(running.last_event_sequence),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Ready
+    );
+    store.shutdown().await.unwrap();
+    let store = open_test(&dir, None).await;
+    let c = store.client();
+    let ready = c.session(&session).await.unwrap();
+    assert_eq!(ready.status, SessionStatus::Ready);
+    let read = UpdateSessionInboxRequest {
+        command_id: "review-result".into(),
+        read_sequence: Some(ready.last_event_sequence),
+        ..Default::default()
+    };
+    c.update_session_inbox(&session, read.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Completed
+    );
+    c.update_session_inbox(
+        &session,
+        UpdateSessionInboxRequest {
+            command_id: "reviewed-archive".into(),
+            archived: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Completed
+    );
+    send(&c, &session, "ready-second", DeliveryMode::AfterTurn).await;
+    let second = c.claim_next_turn().await.unwrap().unwrap();
+    c.finish_chat_turn(&second.turn_id, outcome(ChatStatus::Completed))
+        .await
+        .unwrap();
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Ready
+    );
+    // An idempotent replay of the old acknowledgment cannot hide a new result.
+    c.update_session_inbox(&session, read).await.unwrap();
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Ready
+    );
+    store.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsuccessful_turns_are_not_ready_and_live_work_wins() {
+    use hive_protocol::chat::SessionStatus;
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_test(&dir, None).await;
+    let c = store.client();
+    let session = c
+        .create_session(create_request("status-create", None))
+        .await
+        .unwrap()
+        .session_id;
+    for (index, status, expected) in [
+        (0, ChatStatus::Failed, SessionStatus::Failed),
+        (1, ChatStatus::Canceled, SessionStatus::Stopped),
+        (2, ChatStatus::Interrupted, SessionStatus::Stopped),
+        (3, ChatStatus::Incomplete, SessionStatus::Stopped),
+    ] {
+        send(
+            &c,
+            &session,
+            &format!("status-{index}"),
+            DeliveryMode::AfterTurn,
+        )
+        .await;
+        let turn = c.claim_next_turn().await.unwrap().unwrap();
+        c.finish_chat_turn(&turn.turn_id, outcome(status))
+            .await
+            .unwrap();
+        assert_eq!(c.session(&session).await.unwrap().status, expected);
+    }
+    send(&c, &session, "status-live", DeliveryMode::AfterTurn).await;
+    let turn = c.claim_next_turn().await.unwrap().unwrap();
+    let request = start_request(&c, &turn, "status-live").await;
+    send(&c, &session, "status-next", DeliveryMode::AfterFinish).await;
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Running
+    );
+    complete_request(&c, &turn, request).await;
+    c.finish_chat_turn(&turn.turn_id, outcome(ChatStatus::Completed))
+        .await
+        .unwrap();
+    // A queued successor is not a result awaiting review.
+    assert_eq!(
+        c.session(&session).await.unwrap().status,
+        SessionStatus::Queued
+    );
+    store.shutdown().await.unwrap();
+}

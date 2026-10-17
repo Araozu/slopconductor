@@ -1,5 +1,7 @@
 use super::*;
 
+/// Update shared organization/read state. Marking a successful completion read
+/// clears the derived session status from ready to completed; GET never marks read.
 #[utoipa::path(
     post,
     path = "/v1/sessions/{session_id}/inbox",

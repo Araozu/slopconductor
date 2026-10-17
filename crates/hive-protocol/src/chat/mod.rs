@@ -47,3 +47,6 @@ mod model_response;
 pub use model_response::ModelResponse;
 mod event_frame;
 pub use event_frame::EventFrame;
+
+mod session_status;
+pub use session_status::SessionStatus;

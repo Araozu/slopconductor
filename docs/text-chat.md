@@ -313,3 +313,39 @@ known input times return `null` until new input is accepted; migration does not
 invent historical times. This is input activity, not a generic last-modified time.
 Session-list pagination remains creation-ordered; clients can use this field for
 recency presentation without fetching message history.
+
+### Execution and review status (ready)
+
+`SessionResponse.status` is a daemon-derived status returned by session detail,
+list, and peer inspection. It is independent of inbox organization flags and is
+advertised by `session-status`. Clients do not set this status directly.
+
+| Status | Meaning |
+| --- | --- |
+| `idle` | No visible non-history-only turn |
+| `queued` | Work is waiting for admission |
+| `running` | A turn is executing |
+| `paused` | A turn is paused |
+| `awaiting_children` | A turn is waiting for child work |
+| `ready` | Latest work finished successfully and its completion has not been reviewed |
+| `completed` | Latest work finished successfully and its completion is acknowledged (or no historical completion event is known) |
+| `failed` | Latest turn failed |
+| `stopped` | Latest turn was cancelled, interrupted, or incomplete |
+
+Live work takes precedence over terminal outcomes (running, awaiting children,
+paused, then queued); otherwise the newest visible non-history-only turn wins.
+A completed older turn cannot make a thread ready while newer work is pending.
+Forked history does not invent a new completion awaiting review.
+
+Review uses the existing shared inbox cursor. After displaying a result, send
+`POST /v1/sessions/{session_id}/inbox` with a fresh `command_id` and
+`read_sequence` set to the displayed session's `last_event_sequence`.
+`ready` compares that cursor to the latest turn's durable `turn_completed` event,
+not to subsequent rename/star/archive events. GET/list/event subscriptions
+never mark a thread read. A read made before completion, or a retry of an older
+read command, cannot acknowledge a later completion. Ready survives daemon
+restart and clears to completed when the completion is acknowledged. A subsequent
+successful unreviewed result becomes ready again. Failed/stopped results do not
+become ready merely because they are unread. The cursor is shared across clients,
+not per-user. Archive/trash/star flags remain independent, and acknowledging a
+result does not update `last_user_activity_at`.

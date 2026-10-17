@@ -16,6 +16,9 @@ pub struct UpdateSessionInboxRequest {
     pub starred: Option<bool>,
     pub archived: Option<bool>,
     pub trashed: Option<bool>,
+    /// Mark events through this sequence as reviewed. Acknowledging a successful
+    /// turn's completion changes the derived session status from ready to completed.
+    /// Use the last_event_sequence from the session actually displayed to the user.
     pub read_sequence: Option<u64>,
     /// Import old client state once without overwriting an existing daemon value.
     #[serde(default)]

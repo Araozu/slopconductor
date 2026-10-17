@@ -254,3 +254,10 @@ transaction as command acceptance; retries and deferred dispatch do not. Legacy
 rows retain `NULL` rather than fabricated historical times. Session detail/list
 responses expose the value; see [last user interaction](text-chat.md#last-user-interaction)
 for the exact activity semantics.
+
+Session execution/review `status` is derived from visible non-history-only turns,
+the latest successful turn's `turn_completed` event sequence, and the persisted
+shared inbox `read_sequence`. No extra status column or migration is needed for
+`ready`: unread successful completions remain ready across restart, and marking
+the completion read yields completed. Live work wins over terminal outcomes;
+metadata events do not generate new results to review.

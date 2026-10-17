@@ -197,6 +197,7 @@ impl utoipa::Modify for BearerSecurity {
             hive_protocol::chat::ModelResponse,
             hive_protocol::chat::SendMessageRequest,
             hive_protocol::chat::SessionResponse,
+            hive_protocol::chat::SessionStatus,
             hive_protocol::chat::SteeringInstructionResponse,
             hive_protocol::chat::TurnControlRequest,
             hive_protocol::chat::TurnResponse,
@@ -428,6 +429,38 @@ mod tests {
             assert!(schemas.contains_key(name), "schema {name} missing");
         }
     }
+    #[test]
+    fn session_status_is_derived_and_has_no_manual_state_endpoint() {
+        let json = serde_json::to_value(ApiDoc::openapi()).unwrap();
+        assert_eq!(
+            json["components"]["schemas"]["SessionStatus"]["enum"],
+            serde_json::json!([
+                "idle",
+                "queued",
+                "running",
+                "paused",
+                "awaiting_children",
+                "ready",
+                "completed",
+                "failed",
+                "stopped"
+            ])
+        );
+        assert!(
+            json["components"]["schemas"]["SessionResponse"]["properties"]["status"].is_object()
+        );
+        let properties = &json["components"]["schemas"]["SessionResponse"]["properties"];
+        assert_eq!(properties["status"]["readOnly"], true);
+        assert!(properties.get("state").is_none());
+        assert!(
+            json["paths"]
+                .get("/v1/sessions/{session_id}/state")
+                .is_none()
+        );
+        assert!(json["components"]["schemas"].get("SessionState").is_none());
+        assert!(json["paths"]["/v1/sessions/{session_id}/inbox"]["post"].is_object());
+    }
+
     #[test]
     fn workspace_contract_requires_membership_and_has_only_explicit_worktree_creation() {
         let json = serde_json::to_value(ApiDoc::openapi()).unwrap();

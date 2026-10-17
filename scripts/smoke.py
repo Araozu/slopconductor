@@ -27,6 +27,7 @@ from context_smoke import check_context
 from history_smoke import check_history
 from peers_smoke import check_peers
 from model_catalog_smoke import check_model_catalog
+from session_status_smoke import check_session_status
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -386,6 +387,7 @@ def main():
     prefix = "sc-" if os.name == "nt" else "slop-smoke-"
     with tempfile.TemporaryDirectory(prefix=prefix) as directory:
         root = Path(directory)
+        check_session_status(daemon_binary, root / "session-status")
         check_primary_lifecycle(daemon_binary, cli_binary, root / "lifecycle")
         check_distinct_data_dirs(daemon_binary, cli_binary, root / "distinct")
         check_xdg_and_config(daemon_binary, root / "paths")
