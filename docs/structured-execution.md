@@ -228,9 +228,19 @@ Bash uses `/bin/bash` on Unix and requires `bash.exe` on PATH on Windows
 (for example, Git for Windows). It runs without startup profiles, from the
 workspace root; commands can `cd` to a subdirectory. Optional `timeout` is in
 seconds (0.001–300) and can shorten, but never extend, the workspace's
-`shell_timeout_ms` deadline. Only PATH, SystemRoot,
-WINDIR, TEMP, TMP, LANG, and LC_ALL are inherited. Provider credentials are not
-forwarded. The command itself grants the shell the user's machine permissions;
+`shell_timeout_ms` deadline. Bash inherits the daemon process's environment,
+including HOME, XDG settings, SSH_AUTH_SOCK, proxy settings, and project/tool
+variables. Hive's provider key variables (`OPENCODE_GO_API_KEY`,
+`OPENCODE_ZEN_API_KEY`, and `OPENAI_API_KEY`) are removed, as are `BASH_ENV` and
+`ENV` so noninteractive startup scripts cannot run implicitly. Other inherited
+variables, including credentials for external tools, are available to commands;
+this is not a secret-isolation boundary.
+
+The environment comes from the user/service that launched the daemon, not from
+the CLI/TUI/browser making an HTTP request. Export variables before starting the
+daemon (or configure its service environment) and restart it after changes.
+Clients do not upload their environment, and Bash does not source shell profiles.
+The command itself grants the shell the user's machine permissions;
 working-directory policy is not an OS sandbox. Shell commands can invoke Git
 and other actual tools; there are no dedicated Git/browser/orchestration tools.
 

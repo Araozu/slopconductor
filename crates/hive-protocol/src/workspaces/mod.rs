@@ -22,3 +22,11 @@ pub use workspace_tool_limits::WorkspaceToolLimits;
 
 /// Stable node-local workspace for threads without a directory.
 pub const DEFAULT_WORKSPACE_ID: &str = "default";
+
+mod set_workspace_color_request;
+pub use set_workspace_color_request::SetWorkspaceColorRequest;
+
+/// Default opaque RGB color for new and migrated workspaces.
+pub fn default_workspace_color() -> String {
+    "#808080".into()
+}

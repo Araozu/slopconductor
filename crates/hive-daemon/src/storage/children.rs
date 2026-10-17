@@ -919,6 +919,8 @@ impl StoreClient {
             let (root,depth)=constrain(&tx,&parent,&mut spec)?;
             spec.prompt=selected_context(&tx,&parent,&request.context,&spec.prompt,&artifact_dir)?;
             let receipt=orchestration::insert_task(&tx,&spec,&request.spec,resolved,None,&request.command_id)?;
+            // Agent-authored child prompts are not human interaction.
+            tx.execute("UPDATE sessions SET last_user_activity_at=NULL WHERE id=?1", [&receipt.session_id]).map_err(|_|StoreError::Database)?;
             let spawned_at_ms=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis().min(i64::MAX as u128) as i64;
             tx.execute("INSERT INTO child_links(child_task_id,parent_task_id,parent_run_id,root_task_id,depth,cancel_with_parent,context,notification_mode,detached,spawned_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",rusqlite::params![receipt.task_id,parent.id,parent_id,root,depth,request.cancel_with_parent,canonical(&request.context)?,request.notification_mode,request.detached,spawned_at_ms]).map_err(|_|StoreError::Database)?;
             tx.execute("UPDATE sessions SET root_task_id=?1,admission_batch_id=(SELECT admission_batch_id FROM sessions WHERE id=?2) WHERE id=?3",rusqlite::params![root,parent.id,receipt.task_id]).map_err(|_|StoreError::Database)?;
@@ -1134,7 +1136,7 @@ impl StoreClient {
                     {
                         return Err(StoreError::Conflict);
                     }
-                    let receipt = messages::send_message_tx(&tx, &child.id, request, None, None)?;
+                    let receipt = messages::send_direct_tx(&tx, &child.id, request, None, None, None, false)?;
                     let outcome=completed(canonical(&receipt)?);
                     execution::finish_tool_tx(&tx,&parent.latest_run.as_ref().ok_or(StoreError::Conflict)?.session_id,&turn_id,&intent,&outcome)?;
                     tx.commit().map_err(|_|StoreError::Database)?;

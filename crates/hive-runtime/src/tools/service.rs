@@ -296,20 +296,19 @@ impl ToolService {
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env_clear();
+            .stderr(Stdio::piped());
+        // Tools run as the daemon's user, not in an environment sandbox. Keep
+        // HOME, SSH_AUTH_SOCK, project/tool configuration, etc. inherited, while
+        // withholding Hive's provider keys and noninteractive startup scripts.
+        // --noprofile/--norc alone do not prevent Bash from sourcing BASH_ENV.
         for name in [
-            "PATH",
-            "SystemRoot",
-            "WINDIR",
-            "TEMP",
-            "TMP",
-            "LANG",
-            "LC_ALL",
+            crate::providers::opencode_go::ENV_KEY_VAR,
+            crate::providers::opencode_zen::ENV_KEY_VAR,
+            crate::providers::codex::ENV_KEY_VAR,
+            "BASH_ENV",
+            "ENV",
         ] {
-            if let Some(value) = std::env::var_os(name) {
-                command.command_mut().env(name, value);
-            }
+            command.command_mut().env_remove(name);
         }
         command.wrap(KillOnDrop);
         #[cfg(unix)]

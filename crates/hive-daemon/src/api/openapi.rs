@@ -157,6 +157,7 @@ impl utoipa::Modify for BearerSecurity {
         super::workspaces::diff,
         super::workspaces::remove,
         super::workspaces::rename,
+        super::workspaces::set_color,
     ),
     components(
         schemas(
@@ -240,6 +241,7 @@ impl utoipa::Modify for BearerSecurity {
             hive_protocol::workspaces::CreateWorktreeRequest,
             hive_protocol::workspaces::RemoveWorkspaceRequest,
             hive_protocol::workspaces::RenameWorkspaceRequest,
+            hive_protocol::workspaces::SetWorkspaceColorRequest,
             hive_protocol::workspaces::WorkspaceDiffResponse,
             hive_protocol::workspaces::WorkspaceResponse,
             hive_protocol::providers::LoginResponse,
@@ -381,6 +383,7 @@ mod tests {
         "/v1/workspaces/{id}/diff",
         "/v1/workspaces/{id}/remove",
         "/v1/workspaces/{id}/rename",
+        "/v1/workspaces/{id}/color",
     ];
 
     #[test]
@@ -428,6 +431,17 @@ mod tests {
     #[test]
     fn workspace_contract_requires_membership_and_has_only_explicit_worktree_creation() {
         let json = serde_json::to_value(ApiDoc::openapi()).unwrap();
+        assert_eq!(
+            json.pointer("/components/schemas/SetWorkspaceColorRequest/properties/color/pattern")
+                .unwrap(),
+            "^#[0-9A-Fa-f]{6}$"
+        );
+        assert_eq!(
+            json.pointer("/components/schemas/WorkspaceResponse/properties/color/pattern")
+                .unwrap(),
+            "^#[0-9A-F]{6}$"
+        );
+        assert!(json["paths"]["/v1/workspaces/{id}/color"]["post"].is_object());
         for schema in ["CreateSessionRequest", "SessionSpec", "BatchSpec"] {
             let required = json
                 .pointer(&format!("/components/schemas/{schema}/required"))
@@ -448,6 +462,9 @@ mod tests {
                 .unwrap(),
             "string"
         );
+        let activity = &json["components"]["schemas"]["SessionResponse"]["properties"]["last_user_activity_at"];
+        assert_eq!(activity["format"], "int64");
+        assert!(activity["description"].as_str().unwrap().contains("Unix"));
         assert!(
             json["paths"]
                 .get("/v1/workspaces/{id}/worktrees")

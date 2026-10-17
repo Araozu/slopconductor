@@ -175,7 +175,8 @@ The implemented tool set is exactly `read`, `write`, `edit`, and `bash`, followi
 `read` pages UTF-8 text by 1-based line offsets; `write` creates or overwrites
 files and missing parent directories; `edit` validates unique, non-overlapping
 exact text replacements before an atomic file update. `bash` runs actual Bash
-from the workspace root with a filtered environment, output bounds, a policy
+from the workspace root with the daemon's inherited environment (except Hive
+provider keys and shell startup hooks), output bounds, a policy
 deadline, cancellation, and streamed stdout/stderr. Windows requires Bash on
 PATH. The four tools are native Rust implementations with the existing workspace
 policy, durable invocation records, and artifact storage; no pi/JS runtime is

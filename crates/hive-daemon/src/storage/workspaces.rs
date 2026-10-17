@@ -7,7 +7,7 @@ use hive_runtime::{
 };
 
 const MAX_WORKSPACES: i64 = 256;
-const COLUMNS: &str = "id,name,owner_node_id,path,git_common_dir,managed_worktree,source_workspace_id,base_commit,status,error_code,effects_unknown,is_default";
+const COLUMNS: &str = "id,name,owner_node_id,path,git_common_dir,managed_worktree,source_workspace_id,base_commit,status,error_code,effects_unknown,is_default,color";
 
 #[derive(Clone)]
 pub(super) struct ResolvedWorkspace {
@@ -75,6 +75,22 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> StoreResult<()> {
         .map_err(|_| StoreError::Database)
 }
 
+pub(super) fn migrate_colors(tx: &Transaction<'_>) -> StoreResult<()> {
+    let has_color: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('workspaces') WHERE name='color')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| StoreError::Database)?;
+    if !has_color {
+        tx.execute_batch("ALTER TABLE workspaces ADD COLUMN color TEXT NOT NULL DEFAULT '#808080'
+            CHECK(length(color)=7 AND substr(color,1,1)='#' AND substr(color,2) NOT GLOB '*[^0-9A-F]*');")
+            .map_err(|_| StoreError::Database)?;
+    }
+    Ok(())
+}
+
 fn workspace_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceResponse> {
     Ok(WorkspaceResponse {
         id: row.get(0)?,
@@ -89,6 +105,7 @@ fn workspace_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceResponse>
         error_code: row.get(9)?,
         effects_unknown: row.get(10)?,
         is_default: row.get(11)?,
+        color: row.get(12)?,
     })
 }
 pub(super) fn workspace(c: &Connection, id: &str) -> StoreResult<WorkspaceResponse> {
@@ -414,7 +431,7 @@ impl StoreClient {
             let mut stmt=c.prepare(&format!("SELECT {COLUMNS},created_order FROM workspaces WHERE created_order>?1 ORDER BY created_order LIMIT ?2")).map_err(|_|StoreError::Database)?;
             let mut rows=stmt.query(rusqlite::params![after.unwrap_or(0).min(i64::MAX as u64) as i64,(limit+1) as i64]).map_err(|_|StoreError::Database)?;
             let mut items=Vec::new(); let mut cursor=0;
-            while let Some(row)=rows.next().map_err(|_|StoreError::Database)? {if items.len()==limit {return Ok(Page{items,next_after:Some(cursor)})} cursor=row.get::<_,i64>(12).map_err(|_|StoreError::Database)? as u64;items.push(workspace_row(row).map_err(|_|StoreError::Database)?)}
+            while let Some(row)=rows.next().map_err(|_|StoreError::Database)? {if items.len()==limit {return Ok(Page{items,next_after:Some(cursor)})} cursor=row.get::<_,i64>(13).map_err(|_|StoreError::Database)? as u64;items.push(workspace_row(row).map_err(|_|StoreError::Database)?)}
             Ok(Page{items,next_after:None})
         }).await
     }
@@ -463,6 +480,46 @@ impl StoreClient {
             )
             .map_err(|_| StoreError::Database)?;
             event(&tx, &id, "workspace_renamed")?;
+            let w = workspace(&tx, &id)?;
+            save(&tx, &request.command_id, &scope, &payload, &w)?;
+            tx.commit().map_err(|_| StoreError::Database)?;
+            Ok(w)
+        })
+        .await
+    }
+    pub async fn set_workspace_color(
+        &self,
+        id: &str,
+        request: SetWorkspaceColorRequest,
+    ) -> StoreResult<WorkspaceResponse> {
+        let id = id.to_owned();
+        let payload = canonical(&request)?;
+        self.submit(move |c| {
+            let tx = c
+                .unchecked_transaction()
+                .map_err(|_| StoreError::Database)?;
+            let scope = format!("workspace:{id}:color");
+            if let Some(saved) = prior(&tx, &request.command_id, &scope, &payload)? {
+                return Ok(saved);
+            }
+            let w = workspace(&tx, &id)?;
+            if matches!(w.status.as_str(), "removed" | "removing") {
+                return Err(StoreError::Conflict);
+            }
+            if !(request.color.len() == 7
+                && request.color.starts_with('#')
+                && request.color.as_bytes()[1..]
+                    .iter()
+                    .all(u8::is_ascii_hexdigit))
+            {
+                return Err(StoreError::Invalid);
+            }
+            tx.execute(
+                "UPDATE workspaces SET color=?1 WHERE id=?2",
+                rusqlite::params![request.color.to_ascii_uppercase(), id],
+            )
+            .map_err(|_| StoreError::Database)?;
+            event(&tx, &id, "workspace_color_changed")?;
             let w = workspace(&tx, &id)?;
             save(&tx, &request.command_id, &scope, &payload, &w)?;
             tx.commit().map_err(|_| StoreError::Database)?;
@@ -861,6 +918,7 @@ pub(super) fn legacy_fixture(c: &Connection) -> StoreResult<()> {
                 SELECT w.id,w.name,w.source_workspace_id,(SELECT id FROM sessions WHERE workspace_id=w.id ORDER BY created_order LIMIT 1),w.owner_node_id,w.path,w.base_commit,w.status,w.error_code,w.effects_unknown
                 FROM workspaces w WHERE managed_worktree=1 AND EXISTS(SELECT 1 FROM sessions WHERE workspace_id=w.id);
             UPDATE sessions SET managed_workspace_id=(SELECT id FROM managed_workspaces WHERE id=sessions.workspace_id);
+            ALTER TABLE sessions DROP COLUMN last_user_activity_at;
             ALTER TABLE sessions DROP COLUMN workspace_id;
             DROP TABLE workspace_events; DROP TABLE workspaces;").map_err(|_|StoreError::Database)?;
         tx.commit().map_err(|_| StoreError::Database)
@@ -878,6 +936,121 @@ mod tests {
         Store::open(path, None, 64, Duration::from_secs(1))
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn colors_validate_persist_and_replay_without_duplicate_events() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        let store = open(data.clone()).await;
+        let c = store.client();
+        let w = c
+            .open_workspace(OpenWorkspaceRequest {
+                command_id: "open-color".into(),
+                path: temp.path().to_str().unwrap().into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(w.color, "#808080");
+        for id in [&w.id, DEFAULT_WORKSPACE_ID] {
+            for (index, color) in [
+                "",
+                "red",
+                "123456",
+                "#abc",
+                "#12345678",
+                "#gg0000",
+                " #123456",
+                "#12345é",
+            ]
+            .iter()
+            .enumerate()
+            {
+                assert!(matches!(
+                    c.set_workspace_color(
+                        id,
+                        SetWorkspaceColorRequest {
+                            command_id: format!("invalid-{index}-{id}"),
+                            color: (*color).into(),
+                        }
+                    )
+                    .await,
+                    Err(StoreError::Invalid)
+                ));
+            }
+            let request = SetWorkspaceColorRequest {
+                command_id: format!("color-{id}"),
+                color: "#aB12ef".into(),
+            };
+            let accepted = c.set_workspace_color(id, request.clone()).await.unwrap();
+            assert_eq!(accepted.color, "#AB12EF");
+            assert_eq!(
+                c.set_workspace_color(id, request.clone()).await.unwrap(),
+                accepted
+            );
+            let changed = SetWorkspaceColorRequest {
+                color: "#000000".into(),
+                ..request
+            };
+            assert!(matches!(
+                c.set_workspace_color(id, changed).await,
+                Err(StoreError::Conflict)
+            ));
+            assert_eq!(
+                c.workspace_events(id, None, 200)
+                    .await
+                    .unwrap()
+                    .items
+                    .iter()
+                    .filter(|e| e.kind == "workspace_color_changed")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            c.workspaces(None, 200)
+                .await
+                .unwrap()
+                .items
+                .iter()
+                .all(|w| w.color == "#AB12EF")
+        );
+        store.shutdown().await.unwrap();
+        let store = open(data).await;
+        assert_eq!(
+            store.client().workspace(&w.id).await.unwrap().color,
+            "#AB12EF"
+        );
+        store.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn version_23_workspaces_gain_default_colors() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        let store = open(data.clone()).await;
+        store
+            .client()
+            .submit(|db| {
+                db.execute_batch(
+                    "ALTER TABLE sessions DROP COLUMN last_user_activity_at; ALTER TABLE workspaces DROP COLUMN color; PRAGMA user_version=23;",
+                )
+                .map_err(|_| StoreError::Database)
+            })
+            .await
+            .unwrap();
+        store.shutdown().await.unwrap();
+        let store = open(data).await;
+        assert_eq!(
+            store
+                .client()
+                .workspace(DEFAULT_WORKSPACE_ID)
+                .await
+                .unwrap()
+                .color,
+            "#808080"
+        );
+        store.shutdown().await.unwrap();
     }
 
     #[tokio::test]

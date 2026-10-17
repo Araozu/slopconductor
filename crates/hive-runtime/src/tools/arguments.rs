@@ -324,7 +324,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
         ),
         tool(
             "bash",
-            "Execute a Bash command from the workspace root with no startup profiles, a filtered environment, and bounded stdout/stderr. Returns JSON with exit_code, stdout, and stderr. Large outputs use head/tail previews with truncation flags and full bounded artifacts. Optional timeout is in seconds and can shorten the workspace deadline. Linux uses /bin/bash; Windows requires bash.exe on PATH. Commands may use cd for subdirectories. Bash is not sandboxed and may cause external changes. Background descendants are terminated when Bash exits.",
+            "Execute a Bash command from the workspace root with no startup profiles, the daemon's inherited environment (excluding Hive provider keys and shell startup hooks), and bounded stdout/stderr. Returns JSON with exit_code, stdout, and stderr. Large outputs use head/tail previews with truncation flags and full bounded artifacts. Optional timeout is in seconds and can shorten the workspace deadline. Linux uses /bin/bash; Windows requires bash.exe on PATH. Commands may use cd for subdirectories. Bash is not sandboxed and may cause external changes. Background descendants are terminated when Bash exits.",
             json!({"command":{"type":"string","minLength":1,"maxLength":65536},"timeout":{"type":"number","minimum":0.001,"maximum":300}}),
             vec!["command"],
         ),

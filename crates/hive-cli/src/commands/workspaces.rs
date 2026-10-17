@@ -66,8 +66,9 @@ pub(super) async fn run(command: WorkspaceCommand, context: &Context) -> Result<
             context.output.value(&response, || {
                 for workspace in &response.items {
                     println!(
-                        "{}\t{}\t{}",
+                        "{}\t{}\t{}\t{}",
                         workspace.id,
+                        workspace.color,
                         workspace.status,
                         workspace.path.as_deref().unwrap_or("-")
                     );
@@ -78,10 +79,11 @@ pub(super) async fn run(command: WorkspaceCommand, context: &Context) -> Result<
             let response = client.workspace(&id).await?;
             context.output.value(&response, || {
                 println!(
-                    "{}\t{}\nName: {}\nOwner: {}\nPath: {}\nManaged worktree: {}",
+                    "{}\t{}\nName: {}\nColor: {}\nOwner: {}\nPath: {}\nManaged worktree: {}",
                     response.id,
                     response.status,
                     response.name,
+                    response.color,
                     response.owner_node_id,
                     response.path.as_deref().unwrap_or("-"),
                     response.managed_worktree
@@ -167,6 +169,26 @@ pub(super) async fn run(command: WorkspaceCommand, context: &Context) -> Result<
             context
                 .output
                 .value(&response, || println!("{}\t{}", response.name, response.id))
+        }
+        WorkspaceCommand::Color {
+            id,
+            color,
+            command_id,
+        } => {
+            let command_id = choose_command_id(command_id)?;
+            let response = client
+                .set_workspace_color(
+                    &id,
+                    &SetWorkspaceColorRequest {
+                        command_id: command_id.clone(),
+                        color,
+                    },
+                )
+                .await
+                .map_err(|error| mutation_error(error, &command_id))?;
+            context.output.value(&response, || {
+                println!("{}\t{}", response.color, response.id)
+            })
         }
         WorkspaceCommand::Remove { id, command_id } => {
             let command_id = choose_command_id(command_id)?;

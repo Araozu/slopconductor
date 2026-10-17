@@ -56,6 +56,25 @@ workspace record before deciding what to do next. Created ordinary directories
 have `managed_worktree: false`; removing their workspace record only unregisters
 them and leaves the directory intact.
 
+## Workspace colors
+
+Every workspace, including `default`, has a persisted opaque RGB `color`.
+New and migrated workspaces start at `#808080`. Set a color independently of
+its name or directory:
+
+```sh
+hivectl workspace color WORKSPACE_ID '#3B82F6' --command-id color-workspace
+```
+
+`POST /v1/workspaces/{id}/color` accepts
+`{"command_id":"color-workspace","color":"#3B82F6"}` and returns the workspace
+record (202). Colors must be `#` plus exactly six hexadecimal digits; shorthand,
+alpha, whitespace, and named colors are rejected (400). Input is case-insensitive
+and responses use uppercase. Updates are idempotent by command ID and emit
+`workspace_color_changed`; removed/removing records cannot be changed. Opening
+an already registered directory preserves its color. New explicit worktrees
+start with the default color, independently of their source.
+
 ## Explicit worktrees
 
 A Git worktree is a separate workspace created only by an explicit command or
@@ -148,13 +167,14 @@ The public DTOs live in `hive_protocol::workspaces`.
 | `POST /v1/workspaces` | Open an existing directory with `{ "command_id", "path" }` |
 | `POST /v1/workspaces/create` | Start creating a directory with `{ "command_id", "parent", "name", "git" }`; returns `allocating`, then poll the workspace record/events |
 | `GET /v1/workspaces/{id}` | Inspect workspace identity, owner, provenance, and state |
+| `POST /v1/workspaces/{id}/color` | Set opaque RGB color with `{ "command_id", "color" }` |
 | `POST /v1/workspaces/{id}/rename` | Rename a workspace with `{ "command_id", "name" }` |
 | `POST /v1/workspaces/{id}/remove` | Unregister an ordinary workspace or conservatively remove its managed worktree |
 | `GET /v1/workspaces/{id}/diff` | Compare Git changes to current `HEAD` or the frozen worktree base |
 | `GET /v1/workspaces/{id}/events?after=...&limit=...` | Read paginated workspace lifecycle events |
 | `POST /v1/workspaces/{id}/worktrees` | Explicitly create a worktree with `{ "command_id", "base_ref", "name" }` |
 
-Workspace records include `id`, `name`, `owner_node_id`, optional canonical `path`,
+Workspace records include `id`, `name`, `color`, `owner_node_id`, optional canonical `path`,
 `is_default`,
 optional `git_common_dir`, `managed_worktree`, optional
 `source_workspace_id` and `base_commit`, `status`, optional `error_code`, and
@@ -167,9 +187,10 @@ the failure and uncertain effects instead of replaying the command.
 Directory creation, worktree creation, and worktree removal are daemon-owned
 operations, with at most two outstanding jobs. Git has two command slots, one
 serialized worktree mutation, a 30-second command deadline, and a 1 MiB combined
-output bound. Git inherits the tool environment allowlist; provider credentials,
-interactive authentication, hooks, pagers, fsmonitor, and external diff converters
-are excluded. Checkout filters remain repository configuration.
+output bound. Unlike the Bash coding tool, these managed Git operations retain
+an environment allowlist (PATH, SystemRoot, WINDIR, TEMP, TMP, LANG, and LC_ALL);
+provider credentials, interactive authentication, hooks, pagers, fsmonitor, and
+external diff converters are excluded. Checkout filters remain repository configuration.
 
 Windows keeps canonical verbatim paths for directory identity and translates
 arguments passed to Git to conventional drive/UNC paths. Git commands enable

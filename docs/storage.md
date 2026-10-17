@@ -1,5 +1,8 @@
 # Local persistence and artifacts
 
+Schema 24 adds a non-null workspace RGB color with a `#808080` backfill.
+Color updates, lifecycle events, and idempotency receipts commit atomically.
+
 ## Storage ownership
 
 Each node owns a local data directory and a SQLite database. Clients access
@@ -244,3 +247,10 @@ path mappings. Record provider-owned opaque context
 separately so a destination can validate whether it is still usable.
 
 See [migration](migration.md) for handoff and workspace packaging.
+
+Schema 25 adds nullable `sessions.last_user_activity_at` (Unix milliseconds).
+Accepted user prompts, steering, and queued-input edits update it in the same
+transaction as command acceptance; retries and deferred dispatch do not. Legacy
+rows retain `NULL` rather than fabricated historical times. Session detail/list
+responses expose the value; see [last user interaction](text-chat.md#last-user-interaction)
+for the exact activity semantics.

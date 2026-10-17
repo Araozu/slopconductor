@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 pub struct WorkspaceResponse {
     pub id: String,
     pub name: String,
+    /// Opaque RGB display color, normalized to uppercase #RRGGBB.
+    #[serde(default = "super::default_workspace_color")]
+    #[schema(pattern = "^#[0-9A-F]{6}$", example = "#3B82F6")]
+    pub color: String,
     pub owner_node_id: String,
     /// Canonical absolute directory on the owner.
     pub path: Option<String>,

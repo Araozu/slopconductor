@@ -462,6 +462,76 @@ async fn bash_honors_deadlines_and_reports_nonzero_exits_without_replay() {
     assert_eq!(output["stderr"], "error");
     assert_eq!(output["exit_code"], 7);
 }
+// Re-exec with a controlled environment instead of mutating process-global
+// environment variables while other tests may be running.
+#[cfg(unix)]
+#[test]
+fn bash_inherits_daemon_environment_but_skips_startup_files_and_provider_keys() {
+    const CHILD_ROOT: &str = "HIVE_TEST_BASH_ENV_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let root = PathBuf::from(root);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let service = ToolService::new(root.join("artifacts")).unwrap();
+            let (_sender, cancel) = tokio::sync::watch::channel(false);
+            let result = service
+                .run(
+                    policy(&root).canonicalize().unwrap(),
+                    "bash",
+                    json!({"command": r#"printf '%s\n' "$HOME" "$XDG_CONFIG_HOME" "$SSH_AUTH_SOCK" "$HTTPS_PROXY" "$HIVE_TEST_PROJECT_VALUE" "${HIVE_TEST_EMPTY-unset}" "${HIVE_TEST_UNSET-unset}" "${OPENCODE_GO_API_KEY-unset}" "${OPENCODE_ZEN_API_KEY-unset}" "${OPENAI_API_KEY-unset}" "${BASH_ENV-unset}" "${ENV-unset}""#}),
+                    cancel,
+                    &mut |_, _| {},
+                )
+                .await;
+            assert_eq!(result.status, "completed", "{result:?}");
+            let output: Value = serde_json::from_str(&result.output).unwrap();
+            let expected = format!(
+                "{}\n{}\n{}\nhttp://proxy.invalid:8080\nproject value = 🦀\n\nunset\nunset\nunset\nunset\nunset\nunset\n",
+                root.display(),
+                root.join("config").display(),
+                root.join("agent.sock").display(),
+            );
+            assert_eq!(output["stdout"], expected);
+            assert_eq!(output["stderr"], "");
+            assert!(!root.join("startup-ran").exists());
+        });
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let startup = root.path().join("startup.sh");
+    std::fs::write(&startup, "touch startup-ran; printf startup-ran; exit 91\n").unwrap();
+    std::fs::copy(&startup, root.path().join(".bashrc")).unwrap();
+    std::fs::copy(&startup, root.path().join(".bash_profile")).unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tools::tests::bash_inherits_daemon_environment_but_skips_startup_files_and_provider_keys",
+            "--nocapture",
+        ])
+        .env(CHILD_ROOT, root.path())
+        .env("HOME", root.path())
+        .env("XDG_CONFIG_HOME", root.path().join("config"))
+        .env("SSH_AUTH_SOCK", root.path().join("agent.sock"))
+        .env("HTTPS_PROXY", "http://proxy.invalid:8080")
+        .env("HIVE_TEST_PROJECT_VALUE", "project value = 🦀")
+        .env("HIVE_TEST_EMPTY", "")
+        .env_remove("HIVE_TEST_UNSET")
+        .env("OPENCODE_GO_API_KEY", "synthetic-go-secret")
+        .env("OPENCODE_ZEN_API_KEY", "synthetic-zen-secret")
+        .env("OPENAI_API_KEY", "synthetic-codex-secret")
+        .env("BASH_ENV", &startup)
+        .env("ENV", &startup)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "environment regression failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn bash_filters_credentials_caps_noisy_output_and_kills_descendants_on_cancel() {

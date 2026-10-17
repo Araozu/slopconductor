@@ -115,3 +115,17 @@ pub(super) fn make_receipt(
         event_sequence,
     }
 }
+
+/// Called only on newly accepted input, inside its command transaction.
+pub(super) fn record_user_activity(tx: &Transaction<'_>, session_id: &str) -> StoreResult<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| StoreError::Database)?
+        .as_millis()
+        .min(i64::MAX as u128) as i64;
+    tx.execute(
+        "UPDATE sessions SET last_user_activity_at=MAX(COALESCE(last_user_activity_at,0),?1) WHERE id=?2",
+        rusqlite::params![now, session_id],
+    ).map_err(|_| StoreError::Database)?;
+    Ok(())
+}

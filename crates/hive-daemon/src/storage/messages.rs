@@ -91,6 +91,7 @@ pub(super) fn send_message_tx(
         effective_settings,
         idle_failure,
         None,
+        true,
     )
 }
 
@@ -101,6 +102,7 @@ pub(super) fn send_direct_tx(
     effective_settings: Option<hive_protocol::execution::GenerationSettings>,
     idle_failure: Option<(&'static str, &'static str)>,
     queued_ids: Option<(&str, &str)>,
+    user_activity: bool,
 ) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
         || request.text.trim().is_empty()
@@ -133,9 +135,13 @@ pub(super) fn send_direct_tx(
         if let Some((code, message)) = idle_failure {
             return Err(StoreError::Preflight(code, message));
         }
-        if let Some(receipt) =
-            queue::accept_tx(tx, &session, &request, effective_settings.as_ref())?
-        {
+        if let Some(receipt) = queue::accept_tx(
+            tx,
+            &session,
+            &request,
+            effective_settings.as_ref(),
+            user_activity,
+        )? {
             return Ok(receipt);
         }
     }
@@ -188,6 +194,9 @@ pub(super) fn send_direct_tx(
                     [&active_turn],
                 )
                 .map_err(|_| StoreError::Database)?;
+            }
+            if user_activity {
+                record_user_activity(tx, session_id)?;
             }
             let (revision, event_sequence) = append_event(
                 tx,
@@ -284,6 +293,9 @@ pub(super) fn send_direct_tx(
     )
     .map_err(|_| StoreError::Database)?;
     tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,provider,model) VALUES(?1,?2,?3,?4,'user',?5,'completed',?6,?7)",rusqlite::params![message_id,session_id,turn_id,user_order,request.text,model_ref.provider().as_str(),model_ref.model()]).map_err(|_|StoreError::Database)?;
+    if user_activity {
+        record_user_activity(tx, session_id)?;
+    }
     let (revision, event_sequence) = append_event(
         tx,
         session_id,

@@ -10,6 +10,12 @@ pub struct SessionResponse {
     pub max_tokens: Option<u32>,
     pub revision: u64,
     pub last_event_sequence: u64,
+    /// Last accepted prompt, steering instruction, or queued-input edit, in Unix
+    /// milliseconds (daemon clock). Null until input is accepted, including for
+    /// migrated sessions whose historical input times are unknown. Retries and
+    /// deferred delivery do not refresh this timestamp.
+    #[serde(default)]
+    pub last_user_activity_at: Option<u64>,
     #[serde(default)]
     pub settings: crate::execution::GenerationSettings,
     #[serde(default)]

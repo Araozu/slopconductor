@@ -129,6 +129,7 @@ pub(super) fn accept_tx(
     session: &SessionResponse,
     request: &SendMessageRequest,
     settings: Option<&hive_protocol::execution::GenerationSettings>,
+    user_activity: bool,
 ) -> StoreResult<Option<CommandReceipt>> {
     let Some(turn) = active(tx, &session.id)? else {
         return Ok(None);
@@ -177,6 +178,9 @@ pub(super) fn accept_tx(
         [&turn],
     )
     .map_err(|_| StoreError::Database)?;
+    if user_activity {
+        record_user_activity(tx, &session.id)?;
+    }
     let (revision, sequence) =
         append_event(tx, &session.id, "message_queued", Some(&turn), Some(&id))?;
     let receipt = make_receipt(
@@ -299,6 +303,7 @@ pub(super) fn release_tx(tx: &Transaction<'_>, session: &str) -> StoreResult<()>
         Some(first.settings),
         None,
         Some((&first.id, &first.turn_id)),
+        false,
     )?;
     let turn = receipt.turn_id.ok_or(StoreError::Database)?;
     sent(tx, session, &turn, &first.id)?;
@@ -361,6 +366,7 @@ impl StoreClient {
                 rusqlite::params![canonical(&queued)?, delivery, message],
             )
             .map_err(|_| StoreError::Database)?;
+            record_user_activity(&tx, &session)?;
             let (revision, sequence) = append_event(
                 &tx,
                 &session,

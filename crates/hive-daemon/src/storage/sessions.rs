@@ -204,6 +204,7 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
         max_tokens: settings.max_output_tokens,
         revision: row.get::<_, i64>(6)? as u64,
         last_event_sequence: row.get::<_, i64>(7)? as u64,
+        last_user_activity_at: row.get::<_, Option<i64>>(17)?.map(|value| value as u64),
         settings,
         execution: execution::optional_json_column(row, 9)?,
         workspace_id: row.get(10)?,
@@ -220,7 +221,7 @@ pub(super) fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
 }
 
 pub(super) fn get_session(connection: &Connection, id: &str) -> StoreResult<SessionResponse> {
-    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork FROM sessions WHERE id=?1",[id],session_from_row)
+    let session = connection.query_row("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork,last_user_activity_at FROM sessions WHERE id=?1",[id],session_from_row)
         .optional().map_err(|_|StoreError::Database)?.ok_or(StoreError::NotFound)?;
     enrich(connection, session)
 }
@@ -231,7 +232,7 @@ pub(super) fn list_sessions(
     limit: usize,
 ) -> StoreResult<Page<SessionResponse>> {
     let after = after.unwrap_or(0).min(i64::MAX as u64) as i64;
-    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
+    let mut statement=connection.prepare("SELECT id,owner_node_id,title,provider,model,max_tokens,revision,last_event_sequence,settings,execution,workspace_id,spec,requested_spec,batch_id,combination_index,inbox,fork,last_user_activity_at,created_order FROM sessions WHERE created_order>?1 ORDER BY created_order LIMIT ?2")
         .map_err(|_|StoreError::Database)?;
     let mut rows = statement
         .query(rusqlite::params![after, (limit + 1) as i64])
@@ -246,7 +247,7 @@ pub(super) fn list_sessions(
             connection,
             session_from_row(row).map_err(|_| StoreError::Database)?,
         )?;
-        next_after = Some(row.get::<_, i64>(17).map_err(|_| StoreError::Database)? as u64);
+        next_after = Some(row.get::<_, i64>(18).map_err(|_| StoreError::Database)? as u64);
         items.push(item);
     }
     let has_more = items.len() == limit

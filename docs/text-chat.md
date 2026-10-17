@@ -294,3 +294,22 @@ Process-kill checks establish application recovery, not power-loss behavior.
 SQLite's synchronization contract and the filesystem/storage stack determine
 power-loss durability. An active WAL database should be backed up with a
 consistent SQLite backup mechanism, rather than copying only its main file.
+
+### Last user interaction
+
+`SessionResponse.last_user_activity_at` is a nullable Unix-millisecond timestamp
+from the authoritative daemon clock, persisted in schema 25 and returned by both
+session detail and session-list APIs (including peer inspection). It records newly
+accepted prompts (including initial prompts and explicit task/batch submissions
+and retries), immediate/next-boundary steering, and queued-input edits. User
+message edits that submit a replacement prompt record activity on the new branch.
+Agent-authored child prompts and child-send operations do not count.
+
+The update is atomic with command acceptance. Idempotent retries, rejected
+commands, assistant output, deferred queue dispatch, recovery, and organization
+changes (rename/read/star/archive/trash) do not refresh it. Values do not decrease
+if the daemon clock moves backward. Empty sessions and migrated sessions without
+known input times return `null` until new input is accepted; migration does not
+invent historical times. This is input activity, not a generic last-modified time.
+Session-list pagination remains creation-ordered; clients can use this field for
+recency presentation without fetching message history.

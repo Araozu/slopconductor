@@ -156,7 +156,8 @@ async fn schema_nine_upgrade_preserves_conversations_history_and_receipts() {
     let mut request = create_request("schema-nine-chat", Some("Existing conversation"));
     request.prompt = Some("Preserved history".into());
     let receipt = client.create_session(request.clone()).await.unwrap();
-    let before = client.session(&receipt.session_id).await.unwrap();
+    let mut before = client.session(&receipt.session_id).await.unwrap();
+    before.last_user_activity_at = None;
     let history = client
         .messages(&receipt.session_id, None, 10)
         .await
@@ -314,6 +315,12 @@ fn schema_two_migration_preserves_history_settings_and_command_payloads() {
     tx.pragma_update(None, "user_version", 2).unwrap();
     tx.commit().unwrap();
     migrate(&connection, 2, None).unwrap();
+    assert_eq!(
+        get_session(&connection, "session")
+            .unwrap()
+            .last_user_activity_at,
+        None
+    );
     let history = list_messages(&connection, "session", None, 20).unwrap();
     assert_eq!(
         history

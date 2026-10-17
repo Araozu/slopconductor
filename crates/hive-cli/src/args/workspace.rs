@@ -53,6 +53,13 @@ pub enum WorkspaceCommand {
         #[arg(long)]
         command_id: Option<String>,
     },
+    /// Set an opaque RGB color (#RRGGBB, no alpha).
+    Color {
+        id: String,
+        color: String,
+        #[arg(long)]
+        command_id: Option<String>,
+    },
     Remove {
         id: String,
         #[arg(long)]

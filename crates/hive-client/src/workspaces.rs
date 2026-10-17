@@ -89,6 +89,19 @@ impl DaemonClient {
         .await
     }
 
+    pub async fn set_workspace_color(
+        &self,
+        id: &str,
+        request: &hive_protocol::workspaces::SetWorkspaceColorRequest,
+    ) -> Result<hive_protocol::workspaces::WorkspaceResponse, ClientError> {
+        self.require_feature("unified-workspaces").await?;
+        self.post_json(
+            id_url(&self.endpoint, "/v1/workspaces", id, Some("color"))?,
+            request,
+        )
+        .await
+    }
+
     pub async fn remove_workspace(
         &self,
         id: &str,

@@ -147,6 +147,13 @@ where
         if existing_version < 23 {
             queue::migrate(&tx)?;
         }
+        if existing_version < 24 {
+            workspaces::migrate_colors(&tx)?;
+        }
+        if existing_version < 25 {
+            tx.execute_batch("ALTER TABLE sessions ADD COLUMN last_user_activity_at INTEGER;")
+                .map_err(|_| StoreError::Database)?;
+        }
         let broken: bool = tx
             .prepare("PRAGMA foreign_key_check")
             .map_err(|_| StoreError::Database)?

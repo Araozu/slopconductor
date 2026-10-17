@@ -626,3 +626,102 @@ async fn after_turn_waits_for_every_proposed_tool_result() {
     }
     store.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn last_user_activity_tracks_acceptance_not_retries_or_delivery() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_test(&dir, None).await;
+    let c = store.client();
+    let session = c
+        .create_session(create_request("activity", None))
+        .await
+        .unwrap()
+        .session_id;
+    assert_eq!(
+        c.session(&session).await.unwrap().last_user_activity_at,
+        None
+    );
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    send(&c, &session, "first-activity", DeliveryMode::AfterTurn).await;
+    let first_at = c
+        .session(&session)
+        .await
+        .unwrap()
+        .last_user_activity_at
+        .unwrap();
+    assert!(first_at >= before);
+    // Persisted values are visible through both single-session and list APIs.
+    assert_eq!(
+        c.sessions(None, 10).await.unwrap().items[0].last_user_activity_at,
+        Some(first_at)
+    );
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    send(&c, &session, "first-activity", DeliveryMode::AfterTurn).await;
+    assert_eq!(
+        c.session(&session).await.unwrap().last_user_activity_at,
+        Some(first_at)
+    );
+    let work = c.claim_next_turn().await.unwrap().unwrap();
+    let request = start_request(&c, &work, "activity").await;
+    assert_eq!(
+        c.session(&session).await.unwrap().last_user_activity_at,
+        Some(first_at)
+    );
+    send(&c, &session, "steer-activity", DeliveryMode::NextBoundary).await;
+    let steer_at = c
+        .session(&session)
+        .await
+        .unwrap()
+        .last_user_activity_at
+        .unwrap();
+    assert!(steer_at > first_at);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let queued = send(&c, &session, "queued-activity", DeliveryMode::AfterFinish).await;
+    let queued_at = c
+        .session(&session)
+        .await
+        .unwrap()
+        .last_user_activity_at
+        .unwrap();
+    assert!(queued_at > steer_at);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let edit = UpdateQueuedMessageRequest {
+        command_id: "activity-edit".into(),
+        text: Some("edited input".into()),
+        delivery: None,
+    };
+    c.update_queued_message(&session, queued.message_id.as_ref().unwrap(), edit.clone())
+        .await
+        .unwrap();
+    let edited_at = c
+        .session(&session)
+        .await
+        .unwrap()
+        .last_user_activity_at
+        .unwrap();
+    assert!(edited_at > queued_at);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    c.update_queued_message(&session, queued.message_id.as_ref().unwrap(), edit)
+        .await
+        .unwrap();
+    complete_request(&c, &work, request).await;
+    assert_eq!(
+        c.session(&session).await.unwrap().last_user_activity_at,
+        Some(edited_at)
+    );
+    drop(c);
+    store.shutdown().await.unwrap();
+    let reopened = open_test(&dir, None).await;
+    assert_eq!(
+        reopened
+            .client()
+            .session(&session)
+            .await
+            .unwrap()
+            .last_user_activity_at,
+        Some(edited_at)
+    );
+}

@@ -27,6 +27,7 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/workspaces/{id}/diff", get(diff))
         .route("/v1/workspaces/{id}/remove", post(remove))
         .route("/v1/workspaces/{id}/rename", post(rename))
+        .route("/v1/workspaces/{id}/color", post(set_color))
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024))
         .route_layer(middleware::from_fn(super::chat::normalize_rejections))
         .route_layer(middleware::from_fn_with_state(
@@ -278,6 +279,37 @@ pub(crate) async fn rename(
         );
     }
     accepted(state.store.rename_workspace(&id, request).await)
+}
+
+/// Set an opaque RGB workspace color (#RRGGBB, no alpha).
+#[utoipa::path(
+    post, path = "/v1/workspaces/{id}/color", tag = "workspaces",
+    params(("id" = String, Path, description = "Workspace id")),
+    request_body = SetWorkspaceColorRequest,
+    responses(
+        (status = 202, description = "Set an opaque RGB workspace color (#RRGGBB, no alpha).", body = WorkspaceResponse),
+        (status = 400, description = "Invalid request or unsupported capability", body = hive_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = hive_protocol::ErrorResponse),
+        (status = 404, description = "Workspace not found", body = hive_protocol::ErrorResponse),
+        (status = 409, description = "Workspace busy, unavailable, or command conflicts", body = hive_protocol::ErrorResponse),
+        (status = 429, description = "Workspace or service capacity reached", body = hive_protocol::ErrorResponse),
+        (status = 500, description = "Operation failed; inspect workspace state before retrying", body = hive_protocol::ErrorResponse),
+        (status = 503, description = "Daemon or storage unavailable", body = hive_protocol::ErrorResponse),
+    ), security(("bearer_auth" = []))
+)]
+pub(crate) async fn set_color(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<SetWorkspaceColorRequest>,
+) -> Response {
+    if !state.accepting.load(Ordering::Acquire) {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "The daemon is shutting down.",
+        );
+    }
+    accepted(state.store.set_workspace_color(&id, request).await)
 }
 
 async fn owned_create(state: Arc<AppState>, request: CreateWorkspaceRequest) -> Response {
