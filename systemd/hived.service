@@ -1,0 +1,19 @@
+[Unit]
+Description=Hive machine daemon (hived)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hived
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=30
+
+# Config: ~/.config/slopconductor/config.toml, flags, or SLOP_* env vars.
+# Defaults: listen 127.0.0.1:7331, data ~/.local/share/slopconductor.
+# Customize with `systemctl --user edit hived` (e.g. [Service] Environment=SLOP_LISTEN=...).
+# Logs: journalctl --user -u hived -f
+
+[Install]
+WantedBy=default.target
