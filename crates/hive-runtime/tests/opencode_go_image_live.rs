@@ -74,7 +74,7 @@ fn chunk(chunk_type: &[u8; 4], data: &[u8], out: &mut Vec<u8>) {
 /// dependency.
 fn solid_red_png(edge: u32) -> Vec<u8> {
     let mut row = vec![0u8; 1 + edge as usize * 3]; // filter type 0 (None)
-    for pixel in row[1..].chunks_exact_mut(3) {
+    for pixel in row[1..].as_chunks_mut::<3>().0 {
         pixel.copy_from_slice(&[255, 0, 0]);
     }
     let mut raw = Vec::with_capacity(row.len() * edge as usize);
@@ -196,9 +196,9 @@ fn red_png_encoder_emits_a_solid_square() {
         adler32(raw)
     );
     assert_eq!(raw.len(), 64 * (1 + 64 * 3));
-    for row in raw.chunks_exact(1 + 64 * 3) {
+    for row in raw.as_chunks::<{ 1 + 64 * 3 }>().0 {
         assert_eq!(row[0], 0);
-        for pixel in row[1..].chunks_exact(3) {
+        for pixel in row[1..].as_chunks::<3>().0 {
             assert_eq!(pixel, &[255, 0, 0]);
         }
     }

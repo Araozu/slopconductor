@@ -353,6 +353,13 @@ impl ToolService {
         ] {
             command.command_mut().env_remove(name);
         }
+        // On Windows, Rust only searches the child's explicitly set PATH before
+        // the application and system directories, so re-set the inherited PATH
+        // to resolve Git for Windows bash.exe ahead of System32's WSL launcher.
+        #[cfg(windows)]
+        if let Some(path) = std::env::var_os("PATH") {
+            command.command_mut().env("PATH", path);
+        }
         command.wrap(KillOnDrop);
         #[cfg(unix)]
         command.wrap(ProcessGroup::leader());
