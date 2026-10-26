@@ -65,7 +65,16 @@ pub struct CompactionPlan {
 }
 
 pub fn input_bytes(messages: &[InferenceMessage], tools: &[ToolDefinition]) -> u64 {
-    crate::json::encoded_len(&(messages, tools)).map_or(u64::MAX, |bytes| bytes as u64)
+    let base = crate::json::encoded_len(&(messages, tools)).map_or(u64::MAX, |bytes| bytes as u64);
+    // Image bytes travel as base64 only on the wire; the stored inference view
+    // holds small artifact references. Budget a fixed conservative estimate
+    // per image (IMAGE_TOKEN_ESTIMATE tokens) instead of the wire length.
+    let images = messages
+        .iter()
+        .flat_map(|m| &m.blocks)
+        .filter(|b| matches!(b.content, BlockContent::Image { .. }))
+        .count() as u64;
+    base.saturating_add(images.saturating_mul(crate::providers::inference::IMAGE_BYTE_ESTIMATE))
 }
 
 pub fn estimated_tokens(bytes: u64, reported: Option<ContextUsage>) -> u64 {
@@ -300,6 +309,10 @@ fn compaction_transcript(
             match &mut block.content {
                 BlockContent::Text { text } | BlockContent::Refusal { text } => {
                     *text = excerpt(text, block_cap)
+                }
+                BlockContent::Image { .. } => {
+                    // Image bytes never enter the summary; the artifact
+                    // reference (id + media type) is preserved as-is.
                 }
                 BlockContent::ToolCall { arguments, .. } => {
                     let encoded = serde_json::to_string(arguments)?;
@@ -683,6 +696,7 @@ mod tests {
             },
             messages,
             tools: Vec::new(),
+            images: Default::default(),
         };
         request.validate(provider, &caps).unwrap();
     }
@@ -774,6 +788,7 @@ mod tests {
             settings: summary_settings(true),
             messages: compacted,
             tools: Vec::new(),
+            images: Default::default(),
         }
         .validate(
             provider,

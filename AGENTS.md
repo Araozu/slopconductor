@@ -87,6 +87,6 @@ tasks are implemented. Scoped daemon peering now adds a separate optional
 loopback peer listener, explicit owner targeting, and session inspection/control.
 Deployed tailnet validation remains open. TUI, browser client, and Electron
 client remain planned in external repositories. Linux and native Windows offline
-CI pass; live-provider validation remains outstanding. See
+CI pass; live-provider validation is recorded for OpenCode Go only. See
 `docs/native-validation.md` for the recorded run and scope and
 `docs/capacity-validation.md` for Linux release workloads and measurement limits.

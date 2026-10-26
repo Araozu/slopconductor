@@ -244,6 +244,105 @@ pub(crate) async fn artifact_content(
 }
 
 #[utoipa::path(
+    post,
+    path = "/v1/artifacts",
+    tag = "chat",
+    request_body(
+        content = Vec<u8>,
+        description = "Raw image bytes. Content-Type must be image/png, image/jpeg, image/gif, or image/webp. Max 20 MiB."
+    ),
+    responses(
+        (status = 201, description = "Image artifact stored (content-addressed, idempotent)", body = hive_protocol::execution::ArtifactResponse),
+        (status = 400, description = "Empty or unrecognized image bytes", body = hive_protocol::ErrorResponse),
+        (status = 401, description = "Missing or invalid bearer token", body = hive_protocol::ErrorResponse),
+        (status = 413, description = "Image exceeds the 20 MiB limit", body = hive_protocol::ErrorResponse),
+        (status = 415, description = "Unsupported media type", body = hive_protocol::ErrorResponse),
+        (status = 503, description = "Artifact storage unavailable", body = hive_protocol::ErrorResponse)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn upload_artifact(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: Body,
+) -> Response {
+    use hive_runtime::providers::inference;
+    let declared = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or("").trim().to_lowercase())
+        .unwrap_or_default();
+    if !inference::ALLOWED_IMAGE_MEDIA_TYPES.contains(&declared.as_str()) {
+        return error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_media_type",
+            "Content-Type must be image/png, image/jpeg, image/gif, or image/webp.",
+        );
+    }
+    let bytes = match axum::body::to_bytes(body, inference::MAX_IMAGE_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "image_too_large",
+                "The image exceeds the 20 MiB limit.",
+            );
+        }
+    };
+    if bytes.is_empty() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "invalid_image",
+            "The image bytes are empty.",
+        );
+    }
+    let artifact = match state
+        .runtime
+        .tools()
+        .save_image_bytes(&bytes, &declared)
+        .await
+    {
+        Ok(artifact) => artifact,
+        Err("unsupported_media_type") => {
+            return error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media_type",
+                "Content-Type must be image/png, image/jpeg, image/gif, or image/webp.",
+            );
+        }
+        Err("invalid_image") => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_image",
+                "The image bytes are empty or do not match the declared Content-Type.",
+            );
+        }
+        Err("image_too_large") => {
+            return error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "image_too_large",
+                "The image exceeds the 20 MiB limit.",
+            );
+        }
+        Err(_) => {
+            return error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "artifact_unavailable",
+                "Artifact storage is unavailable.",
+            );
+        }
+    };
+    match state
+        .store
+        .register_artifact(&artifact.id, artifact.size_bytes, &artifact.media_type)
+        .await
+    {
+        Ok(metadata) => (StatusCode::CREATED, Json(metadata)).into_response(),
+        Err(error) => store_error(error),
+    }
+}
+
+#[utoipa::path(
     get,
     path = "/v1/models",
     tag = "chat",
@@ -272,7 +371,7 @@ pub(crate) async fn models(State(state): State<Arc<AppState>>) -> Response {
             let client_caps = client.as_ref().map(|c| c.capabilities(&model.id));
             let fallback_caps =
                 hive_runtime::providers::inference::capabilities(provider, &model.id);
-            let tools = client_caps.as_ref().unwrap_or(&fallback_caps).tools;
+            let effective = client_caps.as_ref().unwrap_or(&fallback_caps);
             let subscription = client.as_ref().is_some_and(|c| {
                 c.auth_mode() == hive_runtime::providers::AuthMode::ChatGptSubscription
             });
@@ -287,13 +386,14 @@ pub(crate) async fn models(State(state): State<Arc<AppState>>) -> Response {
                     == state.runtime.default_model(),
                 reason: reason.clone(),
                 capabilities: hive_protocol::execution::ModelCapabilities {
-                    tools,
+                    tools: effective.tools,
                     context_window_tokens: fallback_caps.context_window_tokens,
                     max_input_tokens: fallback_caps.max_input_tokens,
-                    reasoning_efforts: client_caps.unwrap_or(fallback_caps).reasoning_efforts,
+                    reasoning_efforts: effective.reasoning_efforts.clone(),
                     incremental_streaming: true,
                     max_output_tokens: if cap_supported { 65_536 } else { 0 },
                     output_token_cap_supported: cap_supported,
+                    image_input: effective.image_input,
                 },
             });
         }

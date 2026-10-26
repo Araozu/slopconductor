@@ -20,6 +20,7 @@ pub(super) struct TurnSelection {
     pub model: Option<String>,
     pub settings: Option<hive_protocol::execution::GenerationSettings>,
     pub delivery: Option<hive_protocol::chat::DeliveryMode>,
+    pub images: Vec<hive_protocol::chat::ImageAttachment>,
 }
 
 pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()> {
@@ -82,6 +83,18 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
             context.output.value(&page, || {
                 for message in &page.items {
                     println!("{}\t{}: {}", message.id, message.role, message.text);
+                    for block in &message.blocks {
+                        if let hive_protocol::execution::BlockContent::Image {
+                            artifact_id,
+                            media_type,
+                        } = &block.content
+                        {
+                            println!(
+                                "  {}",
+                                crate::images::format_image_block(media_type, artifact_id)
+                            );
+                        }
+                    }
                 }
             })?;
         }
@@ -177,9 +190,11 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
             max_output_tokens,
             full_context,
             delivery,
+            images,
         } => {
             let text = prompt_value(text, prompt_file).await?;
             let command_id = choose_command_id(command_id)?;
+            let images = crate::images::load_image_attachments(&client, &images).await?;
             let selection = TurnSelection {
                 model,
                 delivery: delivery.map(|value| match value.as_str() {
@@ -201,6 +216,7 @@ pub(super) async fn run(command: SessionCommand, context: &Context) -> Result<()
                 } else {
                     None
                 },
+                images,
             };
             send_and_follow(
                 &client,
@@ -236,6 +252,7 @@ pub(super) async fn send_and_follow(
         delivery: selection.delivery,
         model: selection.model,
         settings: selection.settings,
+        images: selection.images,
     };
     let receipt = client
         .send_message(session_id, &request)

@@ -12,6 +12,8 @@ pub struct ModelCapabilities {
     pub context_window_tokens: Option<u64>,
     #[serde(default)]
     pub max_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub image_input: bool,
 }
 
 fn default_output_token_cap_support() -> bool {

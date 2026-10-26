@@ -219,6 +219,9 @@ fn parse(bytes: &[u8]) -> Result<Catalog, ProviderError> {
                 }
             }
             let positive = |field: &str| model["limit"][field].as_u64().filter(|n| *n > 0);
+            let image_input = model["modalities"]["input"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "image"));
             parsed.insert(
                 id.clone(),
                 Metadata {
@@ -230,6 +233,7 @@ fn parse(bytes: &[u8]) -> Result<Catalog, ProviderError> {
                         reasoning_efforts,
                         context_window_tokens: positive("context"),
                         max_input_tokens: positive("input"),
+                        image_input,
                     },
                 },
             );

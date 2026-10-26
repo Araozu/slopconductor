@@ -121,6 +121,38 @@ fn invalid_or_partial_catalog_cannot_replace_last_good_data() {
 }
 
 #[test]
+fn image_input_tracks_modalities_input() {
+    let mut value = fixture();
+    value["opencode-go"]["models"]["fresh-chat"]["modalities"] =
+        json!({"input": ["text", "image"], "output": ["text"]});
+    value["opencode-go"]["models"]["fixed"]["modalities"] =
+        json!({"input": ["text"], "output": ["text"]});
+    let catalog = parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(
+        catalog.0[&ProviderId::OpencodeGo]["fresh-chat"]
+            .capabilities
+            .image_input
+    );
+    assert!(
+        !catalog.0[&ProviderId::OpencodeGo]["fixed"]
+            .capabilities
+            .image_input
+    );
+    // The bundled snapshot agrees: a vision flash model accepts images while
+    // a text-only model does not.
+    assert!(
+        capabilities(ProviderId::OpencodeGo, "glm-5.3-flash")
+            .unwrap()
+            .image_input
+    );
+    assert!(
+        !capabilities(ProviderId::OpencodeGo, "hy3")
+            .unwrap()
+            .image_input
+    );
+}
+
+#[test]
 fn new_models_require_explicit_text_output_and_well_formed_api_mappings() {
     let mut value = fixture();
     value["opencode-go"]["models"]["fresh-chat"]["modalities"] = json!({"output":["image"]});

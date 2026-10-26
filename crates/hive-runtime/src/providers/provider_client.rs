@@ -26,6 +26,7 @@ pub trait ProviderClient: Send + Sync {
             reasoning_efforts: Vec::new(),
             context_window_tokens,
             max_input_tokens,
+            image_input: false,
         }
     }
 

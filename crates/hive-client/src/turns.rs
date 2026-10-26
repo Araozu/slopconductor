@@ -48,6 +48,9 @@ impl DaemonClient {
         request: &hive_protocol::chat::InterruptSessionRequest,
     ) -> Result<CommandReceipt, ClientError> {
         self.require_feature("message-queue").await?;
+        if request.messages.iter().any(|m| !m.images.is_empty()) {
+            self.require_feature("image-input").await?;
+        }
         self.post_json(
             session_url(&self.endpoint, session_id, Some("interrupt"))?,
             request,

@@ -239,11 +239,42 @@ impl StoreClient {
             check_revision(&source, request.expected_revision)?;
             let (ordinal, role) = target(&tx, &session, &message)?;
             if !matches!(role.as_str(), "user" | "assistant") { return Err(StoreError::Invalid); }
+            // A user edit keeps the original message's images with the
+            // replacement text; queue/text edits never drop attachments.
+            let preserved_images: Vec<hive_protocol::chat::ImageAttachment> = if role == "user" {
+                let blocks_json: Option<String> = tx
+                    .query_row(
+                        "SELECT blocks FROM messages WHERE id=?1 AND session_id=?2",
+                        rusqlite::params![message, session],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|_| StoreError::Database)?
+                    .flatten();
+                match blocks_json {
+                    Some(json) => serde_json::from_str::<
+                        Vec<hive_runtime::providers::inference::ContentBlock>,
+                    >(&json)
+                    .map_err(|_| StoreError::Database)?
+                    .into_iter()
+                    .filter_map(|block| match block.content {
+                        hive_runtime::providers::inference::BlockContent::Image {
+                            artifact_id,
+                            ..
+                        } => Some(hive_protocol::chat::ImageAttachment { artifact_id }),
+                        _ => None,
+                    })
+                    .collect(),
+                    None => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
             let through = if role=="user" { ordinal-1 } else { ordinal };
             let (id, copied) = branch(&tx, &source, &message, through, None, true, data_dir)?;
             let (turn_id, message_id) = if role=="user" {
                 let accepted = send_message_tx(&tx, &id, SendMessageRequest {
-                    command_id: opaque_id()?, text: request.text, ..Default::default()
+                    command_id: opaque_id()?, text: request.text, images: preserved_images, ..Default::default()
                 }, effective_settings, None)?;
                 (accepted.turn_id, accepted.message_id)
             } else {

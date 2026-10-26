@@ -7,6 +7,10 @@ pub enum BlockContent {
     Text {
         text: String,
     },
+    Image {
+        artifact_id: String,
+        media_type: String,
+    },
     ToolCall {
         call_id: String,
         name: String,

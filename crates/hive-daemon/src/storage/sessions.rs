@@ -73,6 +73,8 @@ pub(super) fn create_session_tx(
             .draft_id
             .as_ref()
             .is_some_and(|id| !valid_command_id(id) || request.prompt.is_none())
+        || (!request.images.is_empty() && request.prompt.is_none())
+        || request.images.len() > hive_runtime::providers::inference::MAX_IMAGES_PER_MESSAGE
     {
         return Err(StoreError::Invalid);
     }
@@ -171,6 +173,7 @@ pub(super) fn create_session_tx(
                 command_id: opaque_id()?,
                 text: prompt,
                 settings: request.settings,
+                images: request.images,
                 ..Default::default()
             },
             Some(spec.settings),

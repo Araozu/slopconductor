@@ -1,4 +1,5 @@
 use super::*;
+use hive_protocol::execution::ArtifactResponse;
 use sha2::{Digest, Sha256};
 
 impl DaemonClient {
@@ -83,5 +84,44 @@ impl DaemonClient {
             hash: Sha256::new(),
             finished: false,
         })
+    }
+
+    /// Upload raw image bytes as a content-addressed artifact for later
+    /// attachment to user messages. Idempotent: same bytes yield the same id.
+    pub async fn upload_image(
+        &self,
+        bytes: &[u8],
+        media_type: &str,
+    ) -> Result<ArtifactResponse, ClientError> {
+        self.upload_artifact(bytes, media_type).await
+    }
+
+    /// Upload raw artifact bytes (currently image uploads only).
+    pub async fn upload_artifact(
+        &self,
+        bytes: &[u8],
+        media_type: &str,
+    ) -> Result<ArtifactResponse, ClientError> {
+        self.require_feature("image-input").await?;
+        if !matches!(
+            media_type,
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+        ) || bytes.is_empty()
+            || bytes.len() > 20 * 1024 * 1024
+        {
+            return Err(ClientError::InvalidResponse);
+        }
+        self.health().await?;
+        let url = self.endpoint.join("/v1/artifacts")?;
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.routed_url(url)?)
+                    .header(reqwest::header::CONTENT_TYPE, media_type)
+                    .body(bytes.to_vec()),
+            )
+            .send()
+            .await?;
+        self.decode_json(response).await
     }
 }

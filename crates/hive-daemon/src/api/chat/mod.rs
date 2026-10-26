@@ -85,6 +85,7 @@ pub fn router(token: Arc<LocalToken>) -> Router<Arc<AppState>> {
         .route("/v1/tools/{id}", get(tool_invocation))
         .route("/v1/messages/{id}", get(message))
         .route("/v1/artifacts/{id}", get(artifact))
+        .route("/v1/artifacts", post(upload_artifact))
         .route("/v1/artifacts/{id}/content", get(artifact_content))
         .route("/v1/turns/{turn_id}/cancel", post(cancel_turn))
         .route("/v1/turns/{turn_id}/pause", post(pause_turn))

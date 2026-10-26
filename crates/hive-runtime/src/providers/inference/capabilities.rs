@@ -17,5 +17,6 @@ pub fn capabilities(provider: &dyn Provider, model: &str) -> ModelCapabilities {
         reasoning_efforts: Vec::new(),
         context_window_tokens,
         max_input_tokens,
+        image_input: false,
     }
 }

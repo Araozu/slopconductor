@@ -36,6 +36,7 @@ fn request() -> InferenceRequest {
             .into_iter()
             .filter(|tool| tool.name == "read")
             .collect(),
+        images: Default::default(),
     }
 }
 

@@ -67,6 +67,9 @@ impl DaemonClient {
         request: &CreateSessionRequest,
     ) -> Result<CommandReceipt, ClientError> {
         self.require_feature("unified-workspaces").await?;
+        if !request.images.is_empty() {
+            self.require_feature("image-input").await?;
+        }
         if request.settings.is_some() {
             self.require_feature("per-turn-settings").await?;
         }
@@ -139,6 +142,9 @@ impl DaemonClient {
         session_id: &str,
         request: &SendMessageRequest,
     ) -> Result<CommandReceipt, ClientError> {
+        if !request.images.is_empty() {
+            self.require_feature("image-input").await?;
+        }
         if request.model.is_some() || request.settings.is_some() {
             self.require_feature("per-turn-settings").await?;
         }

@@ -9,7 +9,11 @@ pub use request_completion::RequestCompletion;
 pub use request_intent::RequestIntent;
 pub use tool_intent::ToolIntent;
 
-use std::{collections::BTreeMap, sync::Mutex, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use hive_core::provider::ProviderModelRef;
 
@@ -36,6 +40,68 @@ async fn stop<R: ChatRepository>(
 ) -> bool {
     outcome.usage = usage;
     finish_with_retry(repository, turn, outcome).await
+}
+
+/// Replace historical image blocks with a visible omission notice when the
+/// turn's model cannot accept image input (e.g. after a mid-conversation
+/// model switch). New image messages to such models are rejected at
+/// acceptance; this only rewrites the in-memory inference view, never storage.
+fn omit_images_for_text_model(
+    messages: Vec<InferenceMessage>,
+    model: &str,
+) -> Vec<InferenceMessage> {
+    messages
+        .into_iter()
+        .map(|mut message| {
+            for block in &mut message.blocks {
+                if matches!(block.content, BlockContent::Image { .. }) {
+                    block.content = BlockContent::Text {
+                        text: format!("[image omitted: {model} does not accept image input]"),
+                    };
+                }
+            }
+            message
+        })
+        .collect()
+}
+
+/// Load and verify image bytes for every image block in the request.
+/// Fails the turn with a clear error instead of silently dropping images.
+async fn resolve_images(
+    tools: &ToolService,
+    messages: &[InferenceMessage],
+) -> Result<HashMap<String, ResolvedImage>, (&'static str, &'static str)> {
+    let mut images = HashMap::new();
+    for message in messages {
+        for block in &message.blocks {
+            if let BlockContent::Image {
+                artifact_id,
+                media_type,
+            } = &block.content
+            {
+                if images.contains_key(artifact_id) {
+                    continue;
+                }
+                let bytes = tools
+                    .read_verified_artifact(artifact_id)
+                    .await
+                    .map_err(|_| {
+                        (
+                            "image_unavailable",
+                            "An attached image is missing or corrupt; re-upload it and retry.",
+                        )
+                    })?;
+                images.insert(
+                    artifact_id.clone(),
+                    ResolvedImage {
+                        media_type: media_type.clone(),
+                        bytes: Arc::from(bytes.into_boxed_slice()),
+                    },
+                );
+            }
+        }
+    }
+    Ok(images)
 }
 
 #[derive(Default)]
@@ -285,6 +351,31 @@ pub(crate) async fn execute<R: ChatRepository>(
             return stop(repository, &work.turn_id,
                 failed("model_budget_exhausted", "Context compaction needs a summary request and a continuation, but this turn has no remaining model-request budget."), total).await;
         }
+        let request_messages = compaction_plan.as_mut().map_or_else(
+            || std::mem::take(&mut messages),
+            |plan| std::mem::take(&mut plan.prompt),
+        );
+        let request_tools = if is_compaction {
+            Vec::new()
+        } else {
+            std::mem::take(&mut definitions)
+        };
+        let image_input = provider.capabilities(model.model()).image_input;
+        let (request_messages, resolved_images) = if is_compaction {
+            (request_messages, Default::default())
+        } else if !image_input {
+            (
+                omit_images_for_text_model(request_messages, &work.requested_model),
+                Default::default(),
+            )
+        } else {
+            match resolve_images(tools, &request_messages).await {
+                Ok(images) => (request_messages, images),
+                Err((code, message)) => {
+                    return stop(repository, &work.turn_id, failed(code, message), total).await;
+                }
+            }
+        };
         let request = InferenceRequest {
             request_id: request_id.clone(),
             session_id: work.session_id.clone(),
@@ -296,15 +387,9 @@ pub(crate) async fn execute<R: ChatRepository>(
             } else {
                 settings.clone()
             },
-            messages: compaction_plan.as_mut().map_or_else(
-                || std::mem::take(&mut messages),
-                |plan| std::mem::take(&mut plan.prompt),
-            ),
-            tools: if is_compaction {
-                Vec::new()
-            } else {
-                std::mem::take(&mut definitions)
-            },
+            messages: request_messages,
+            tools: request_tools,
+            images: resolved_images,
         };
         if let Err(error) = request.validate(
             provider.descriptor(),
@@ -978,5 +1063,52 @@ fn steering_yield(code: &str, usage: Usage) -> ChatOutcome {
         status: ChatStatus::Interrupted,
         error_code: Some(code.to_owned()),
         error_message: Some("The active turn yielded at an execution boundary.".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn historical_images_become_omission_text_for_text_only_models() {
+        let messages = vec![InferenceMessage {
+            role: MessageRole::User,
+            blocks: vec![
+                ContentBlock {
+                    id: "text".into(),
+                    content: BlockContent::Text {
+                        text: "See this".into(),
+                    },
+                },
+                ContentBlock {
+                    id: "image".into(),
+                    content: BlockContent::Image {
+                        artifact_id: "ab".repeat(32),
+                        media_type: "image/png".into(),
+                    },
+                },
+            ],
+            continuation: None,
+        }];
+        let omitted = omit_images_for_text_model(messages, "opencode-go/hy3");
+        assert_eq!(omitted.len(), 1);
+        assert!(
+            !omitted[0]
+                .blocks
+                .iter()
+                .any(|b| matches!(b.content, BlockContent::Image { .. }))
+        );
+        let visible = omitted[0].visible_text();
+        assert!(visible.contains("See this"));
+        assert!(visible.contains("[image omitted: opencode-go/hy3 does not accept image input]"));
+        // Text-only messages pass through untouched.
+        let plain = vec![InferenceMessage::text(
+            MessageRole::User,
+            "plain".into(),
+            "hello".into(),
+        )];
+        let kept = omit_images_for_text_model(plain.clone(), "opencode-go/hy3");
+        assert_eq!(kept, plain);
     }
 }

@@ -12,4 +12,6 @@ pub struct SendMessageRequest {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<crate::execution::GenerationSettings>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<super::ImageAttachment>,
 }

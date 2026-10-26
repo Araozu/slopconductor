@@ -172,6 +172,8 @@ turn. Do not turn partial tool arguments into executable operations.
 
 Artifacts have their own write protocol: write a bounded temporary file, compute
 its content hash, complete/rename it, then register metadata and references.
+Image uploads follow the same protocol through `POST /v1/artifacts`
+(content-addressed, idempotent, no command id).
 Clean up abandoned temporary files conservatively. Never publish a durable event
 that requires an artifact before the artifact is available.
 

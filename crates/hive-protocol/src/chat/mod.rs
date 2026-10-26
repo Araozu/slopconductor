@@ -15,6 +15,8 @@ mod delete_message_request;
 pub use delete_message_request::DeleteMessageRequest;
 mod create_session_request;
 pub use create_session_request::CreateSessionRequest;
+mod image_attachment;
+pub use image_attachment::ImageAttachment;
 mod rename_session_request;
 pub use rename_session_request::RenameSessionRequest;
 mod send_message_request;

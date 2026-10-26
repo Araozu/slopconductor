@@ -85,6 +85,9 @@ pub enum SessionCommand {
         full_context: Option<bool>,
         #[arg(long, value_parser=["after-turn", "after-finish", "next-boundary", "immediate"])]
         delivery: Option<String>,
+        /// Attach an image file to the message; repeat for multiple images (max 16).
+        #[arg(long = "image", value_name = "PATH")]
+        images: Vec<PathBuf>,
     },
     Follow {
         id: String,

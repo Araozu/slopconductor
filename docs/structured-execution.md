@@ -25,7 +25,7 @@ call ID, adapters deterministically assign distinct IDs in the outgoing history
 and apply the same mapping to paired results and compatible replay items.
 Persisted call metadata and opaque reasoning remain unchanged. Content blocks
 have stable IDs and
-preserve text, refusals, tool proposals, arguments, result errors, artifact
+preserve text, image attachments, refusals, tool proposals, arguments, result errors, artifact
 references, and uncertainty about effects. `MessageResponse.text` remains a
 visible-text projection for existing clients. Each message also exposes its
 persisted `provider` and `model`: selected for user messages, reported when
@@ -35,7 +35,14 @@ its own identity.
 
 `ProviderClient::infer` accepts provider-neutral messages, generation settings,
 and tool definitions. Gateway adapters translate Chat Completions, Responses,
-and Anthropic Messages directly. Completed arguments must be JSON objects;
+and Anthropic Messages directly, including user image blocks resolved from the
+artifact store at dispatch time: Chat Completions uses
+`{"type":"image_url","image_url":{"url":"data:<media-type>;base64,..."}}`,
+Responses uses `{"type":"input_image","image_url":"data:..."}`, and Anthropic
+uses `{"type":"image","source":{"type":"base64",...}}`. Image bytes are verified
+against their content hash before sending and never live in SQLite or the
+serialized inference view; context budgeting counts a fixed 2,000-token
+estimate per image. Completed arguments must be JSON objects;
 partial argument fragments are provisional. Recognized upstream completion
 and successfully parsed proposals precede execution. Truncated, malformed,
 contradictory, or output-limited responses launch no tools. The adapter proposes
@@ -272,7 +279,10 @@ to continue; there is no automatic replay of unknown operations.
 
 Artifacts are content-addressed SHA-256 files in the private data directory.
 A bounded temporary file is synchronized and published before its metadata
-and references commit. Public downloads are authenticated and streamed. The
+and references commit. User image uploads (`POST /v1/artifacts`, max 20 MiB,
+`image/png`/`image/jpeg`/`image/gif`/`image/webp` with matching magic bytes)
+share this store idempotently: identical bytes yield the same id with or
+without a prior metadata row. Public downloads are authenticated and streamed. The
 native SDK verifies committed length and checksum at EOF; the CLI publishes a
 new destination only after verification and refuses to overwrite an existing
 file. Retention, artifact garbage collection, exports, and quotas on accumulated
@@ -299,6 +309,7 @@ require the existing local bearer token, including artifact bytes.
 | `GET /v1/turns/{id}/tools` | Paginated invocation states/results |
 | `GET /v1/tools/{id}` | One canonical invocation |
 | `GET /v1/artifacts/{id}` | Hash, committed length, and media type |
+| `POST /v1/artifacts` | Implemented: image upload (raw bytes, content-addressed, idempotent); see [image input](text-chat.md#image-input) |
 | `GET /v1/artifacts/{id}/content` | Streamed artifact bytes |
 
 NDJSON uses the existing durable/delta/heartbeat envelope. Delta fields now

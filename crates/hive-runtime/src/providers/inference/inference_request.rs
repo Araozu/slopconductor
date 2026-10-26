@@ -1,11 +1,22 @@
 use super::super::{ChatRequest, Provider, ProviderError, WireProtocol};
 use super::{
-    BlockContent, GenerationSettings, InferenceMessage, MAX_ARGUMENT_BYTES, MAX_BLOCKS,
-    MAX_TOOL_CALLS, MessageRole, ModelCapabilities, ToolDefinition,
+    ALLOWED_IMAGE_MEDIA_TYPES, BlockContent, GenerationSettings, InferenceMessage,
+    MAX_ARGUMENT_BYTES, MAX_BLOCKS, MAX_TOOL_CALLS, MessageRole, ModelCapabilities, ToolDefinition,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+/// Resolved image bytes for one `BlockContent::Image`, loaded from the
+/// content-addressed artifact store at dispatch time. The bytes never live in
+/// SQLite or in the serialized inference view; this side map travels only in
+/// memory from the agent loop to the provider encoder.
 #[derive(Debug, Clone)]
+pub struct ResolvedImage {
+    pub media_type: String,
+    pub bytes: Arc<[u8]>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct InferenceRequest {
     pub request_id: String,
     pub session_id: String,
@@ -13,6 +24,7 @@ pub struct InferenceRequest {
     pub settings: GenerationSettings,
     pub messages: Vec<InferenceMessage>,
     pub tools: Vec<ToolDefinition>,
+    pub images: HashMap<String, ResolvedImage>,
 }
 
 impl InferenceRequest {
@@ -106,6 +118,25 @@ impl InferenceRequest {
                         .map_err(|_| ProviderError::InvalidRequest("invalid block"))?,
                 );
                 match &block.content {
+                    BlockContent::Image {
+                        artifact_id,
+                        media_type,
+                    } => {
+                        if message.role != MessageRole::User
+                            || !is_valid_artifact_id(artifact_id)
+                            || !ALLOWED_IMAGE_MEDIA_TYPES.contains(&media_type.as_str())
+                        {
+                            return Err(ProviderError::InvalidRequest("invalid image block"));
+                        }
+                        if !capabilities.image_input {
+                            return Err(ProviderError::UnsupportedCapability {
+                                capability: "image_input",
+                            });
+                        }
+                        if !self.images.contains_key(artifact_id) {
+                            return Err(ProviderError::InvalidRequest("missing image data"));
+                        }
+                    }
                     BlockContent::ToolCall {
                         call_id,
                         provider_call_id,
@@ -170,4 +201,11 @@ pub fn valid_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+}
+
+pub fn is_valid_artifact_id(id: &str) -> bool {
+    id.len() == 64
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }

@@ -338,13 +338,14 @@ pub(crate) async fn discover(
                     context_window_tokens: caps.context_window_tokens,
                     max_input_tokens: caps.max_input_tokens,
                     reasoning_efforts: if executable {
-                        caps.reasoning_efforts
+                        caps.reasoning_efforts.clone()
                     } else {
                         Vec::new()
                     },
                     incremental_streaming: executable,
                     max_output_tokens: if subscription { 0 } else { 65_536 },
                     output_token_cap_supported: !subscription,
+                    image_input: executable && caps.image_input,
                 },
             }
         })

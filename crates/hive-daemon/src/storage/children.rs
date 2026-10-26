@@ -295,11 +295,11 @@ fn selected_context(
         if !seen.insert(id) || id.len() > 128 {
             return Err(StoreError::Invalid);
         }
-        let (session, status, public): (String, String, String) = c
+        let (session, status, public, blocks_json): (String, String, String, Option<String>) = c
             .query_row(
-                "SELECT session_id,status,text FROM messages WHERE id=?1 AND deleted=0",
+                "SELECT session_id,status,text,blocks FROM messages WHERE id=?1 AND deleted=0",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()
             .map_err(|_| StoreError::Database)?
@@ -315,6 +315,25 @@ fn selected_context(
             return Err(StoreError::Unsupported("child.context"));
         }
         text.push_str(&format!("\n\nSelected public message {id}:\n{public}"));
+        // Image attachments are text-previewed as references rather than
+        // silently dropped from the child's context selection.
+        if let Some(json) = blocks_json
+            && let Ok(blocks) =
+                serde_json::from_str::<Vec<hive_runtime::providers::inference::ContentBlock>>(&json)
+        {
+            for block in &blocks {
+                if let hive_runtime::providers::inference::BlockContent::Image {
+                    artifact_id,
+                    media_type,
+                } = &block.content
+                {
+                    text.push_str(&format!(
+                        "\n[image {media_type} {}]",
+                        &artifact_id[..16.min(artifact_id.len())]
+                    ));
+                }
+            }
+        }
         if text.len() > MAX_MESSAGE_BYTES {
             return Err(StoreError::Limit);
         }
@@ -1478,6 +1497,7 @@ mod tests {
             settings: None,
             workspace: Default::default(),
             prompt: Some("delegating session".into()),
+            images: Vec::new(),
             draft_id: None,
             budget: Some(OperationBudget {
                 max_model_requests: 4,

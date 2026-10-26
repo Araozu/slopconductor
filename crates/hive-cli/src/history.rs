@@ -13,11 +13,22 @@ pub async fn print_history(client: &DaemonClient, session_id: &str) -> Result<Op
             if !matches!(message.status.as_str(), "checkpoint" | "pending") {
                 println!("{}: {}", message.role, message.text);
                 for block in &message.blocks {
-                    if let hive_protocol::execution::BlockContent::ToolCall {
-                        name, call_id, ..
-                    } = &block.content
-                    {
-                        println!("  {name} requested ({call_id})");
+                    match &block.content {
+                        hive_protocol::execution::BlockContent::ToolCall {
+                            name, call_id, ..
+                        } => {
+                            println!("  {name} requested ({call_id})");
+                        }
+                        hive_protocol::execution::BlockContent::Image {
+                            artifact_id,
+                            media_type,
+                        } => {
+                            println!(
+                                "  {}",
+                                crate::images::format_image_block(media_type, artifact_id)
+                            );
+                        }
+                        _ => {}
                     }
                 }
             }

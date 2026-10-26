@@ -68,6 +68,7 @@ async fn live_subscription_tool_result_round_trip() {
             description: "Read the synthetic Cargo manifest fixture; takes no arguments.".into(),
             parameters: serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
         }],
+        images: Default::default(),
     };
     let response = client.infer(&request, &mut |_| {}).await.unwrap();
     assert_eq!(response.finish_reason, FinishReason::ToolCalls);

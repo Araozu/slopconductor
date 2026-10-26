@@ -20,6 +20,8 @@ pub fn model_capabilities(model: &str) -> ModelCapabilities {
         reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
         context_window_tokens,
         max_input_tokens,
+        // Codex GPT models accept images via Responses `input_image`.
+        image_input: true,
     }
 }
 

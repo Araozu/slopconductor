@@ -7,6 +7,8 @@ pub struct QueuedMessageResponse {
     pub id: String,
     pub text: String,
     pub delivery: DeliveryMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<super::ImageAttachment>,
 }
 
 /// Change an unsent message in place, preserving its FIFO position and settings.

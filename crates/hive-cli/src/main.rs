@@ -3,6 +3,7 @@ mod commands;
 mod connection;
 mod follow;
 mod history;
+mod images;
 mod input;
 mod mutation;
 mod output;

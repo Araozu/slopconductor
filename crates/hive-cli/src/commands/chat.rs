@@ -36,6 +36,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         delivery,
         workspace_id,
         no_workspace,
+        images,
     } = args;
     let input = prompt_value_optional(prompt, prompt_file).await?;
     let interactive = input.is_none() && io::stdin().is_terminal();
@@ -45,6 +46,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
         );
     }
     let client = context.client()?;
+    let attachments = crate::images::load_image_attachments(&client, &images).await?;
     let settings = if effort.is_some() || max_output_tokens.is_some() || full_context.is_some() {
         Some(hive_protocol::execution::GenerationSettings {
             max_output_tokens,
@@ -65,6 +67,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
                 "immediate" => hive_protocol::chat::DeliveryMode::Immediate,
                 _ => unreachable!("CLI validates delivery mode"),
             }),
+            images: Vec::new(),
         }
     } else {
         TurnSelection::default()
@@ -144,6 +147,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
     }
     let mut next_id = command_id;
     let mut first = input;
+    let mut pending_images = Some(attachments);
     loop {
         let message = match first.take() {
             Some(text) => text,
@@ -168,6 +172,9 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
             None => break,
         };
         let id = choose_command_id(next_id.take())?;
+        let mut current = selection.clone();
+        // --image flags attach to the first message only.
+        current.images = pending_images.take().unwrap_or_default();
         match send_and_follow(
             &client,
             &session_id,
@@ -175,7 +182,7 @@ pub(super) async fn run(args: ChatArgs, context: &Context) -> Result<()> {
             id,
             detach,
             context.output,
-            selection.clone(),
+            current,
         )
         .await
         {

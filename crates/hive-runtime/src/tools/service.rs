@@ -231,7 +231,10 @@ impl ToolService {
         }
     }
 
-    async fn save_artifact(&self, bytes: &[u8], media_type: &str) -> std::io::Result<Artifact> {
+    /// Store content-addressed bytes and return their metadata. Idempotent:
+    /// the same bytes always yield the same id. Used by tool output and by
+    /// the image-upload route (via [`ToolService::save_image_bytes`]).
+    pub async fn save_artifact(&self, bytes: &[u8], media_type: &str) -> std::io::Result<Artifact> {
         let dir = self
             .artifact_dir
             .as_ref()
@@ -265,6 +268,46 @@ impl ToolService {
             size_bytes: bytes.len() as u64,
             media_type: media_type.into(),
         })
+    }
+
+    /// Validate image bytes against a declared media type and store them.
+    /// Returns the stored artifact on success; the error string is a stable
+    /// machine code (`unsupported_media_type` / `invalid_image`) for the API.
+    pub async fn save_image_bytes(
+        &self,
+        bytes: &[u8],
+        declared: &str,
+    ) -> Result<Artifact, &'static str> {
+        if bytes.is_empty() {
+            return Err("invalid_image");
+        }
+        if !crate::providers::inference::ALLOWED_IMAGE_MEDIA_TYPES.contains(&declared) {
+            return Err("unsupported_media_type");
+        }
+        if bytes.len() > crate::providers::inference::MAX_IMAGE_BYTES {
+            return Err("image_too_large");
+        }
+        match sniff_image_media_type(bytes) {
+            Some(sniffed) if sniffed == declared => {}
+            _ => return Err("invalid_image"),
+        }
+        self.save_artifact(bytes, declared)
+            .await
+            .map_err(|_| "artifact_storage_failed")
+    }
+
+    /// Read artifact bytes and verify the sha256 digest equals the id.
+    /// Used at dispatch time to resolve image blocks; never silently drops.
+    pub async fn read_verified_artifact(&self, id: &str) -> std::io::Result<Vec<u8>> {
+        let path = self
+            .artifact_path(id)
+            .ok_or_else(|| std::io::Error::other("invalid artifact id"))?;
+        let bytes = tokio::fs::read(&path).await?;
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        if digest != id {
+            return Err(std::io::Error::other("artifact checksum mismatch"));
+        }
+        Ok(bytes)
     }
 
     async fn bash(
@@ -461,9 +504,109 @@ impl ToolService {
     }
 }
 
+/// Sniff image bytes and return the matching allowed media type, or None.
+/// PNG: 8-byte signature; JPEG: FF D8 FF; GIF: GIF87a/GIF89a; WebP: RIFF....WEBP.
+pub fn sniff_image_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 8 && bytes[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        return Some("image/png");
+    }
+    if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+        return Some("image/jpeg");
+    }
+    if bytes.len() >= 6 && (bytes[..6] == *b"GIF87a" || bytes[..6] == *b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && bytes[..4] == *b"RIFF" && bytes[8..12] == *b"WEBP" {
+        return Some("image/webp");
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_upload_validates_magic_size_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = ToolService::new(dir.path().to_path_buf()).unwrap();
+        let png: Vec<u8> = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+            .into_iter()
+            .chain(b"fake-image".iter().copied())
+            .collect();
+        let expected = format!("{:x}", Sha256::digest(&png));
+        let stored = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(service.save_image_bytes(&png, "image/png"))
+            .unwrap();
+        assert_eq!(stored.id, expected);
+        assert_eq!(stored.sha256, expected);
+        assert_eq!(stored.size_bytes, png.len() as u64);
+        assert_eq!(stored.media_type, "image/png");
+        // Idempotent re-upload of the same bytes yields the same id.
+        let again = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(service.save_image_bytes(&png, "image/png"))
+            .unwrap();
+        assert_eq!(again.id, expected);
+        // Declared type must match sniffed magic bytes.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert_eq!(
+            runtime
+                .block_on(service.save_image_bytes(&png, "image/jpeg"))
+                .unwrap_err(),
+            "invalid_image"
+        );
+        assert_eq!(
+            runtime
+                .block_on(service.save_image_bytes(&png, "image/tiff"))
+                .unwrap_err(),
+            "unsupported_media_type"
+        );
+        assert_eq!(
+            runtime
+                .block_on(service.save_image_bytes(&[], "image/png"))
+                .unwrap_err(),
+            "invalid_image"
+        );
+        assert_eq!(
+            runtime
+                .block_on(service.save_image_bytes(b"not an image", "image/png"))
+                .unwrap_err(),
+            "invalid_image"
+        );
+        // Verified reads reject a corrupted file rather than serving it.
+        let bytes = runtime
+            .block_on(service.read_verified_artifact(&expected))
+            .unwrap();
+        assert_eq!(bytes, png);
+    }
+
+    #[test]
+    fn image_magic_sniffing_covers_supported_types() {
+        assert_eq!(
+            sniff_image_media_type(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00]),
+            Some("image/png")
+        );
+        assert_eq!(
+            sniff_image_media_type(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]),
+            Some("image/jpeg")
+        );
+        assert_eq!(sniff_image_media_type(b"GIF89a..."), Some("image/gif"));
+        assert_eq!(sniff_image_media_type(b"GIF87a..."), Some("image/gif"));
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        webp.extend_from_slice(b"WEBP");
+        assert_eq!(sniff_image_media_type(&webp), Some("image/webp"));
+        assert_eq!(sniff_image_media_type(b"plain text"), None);
+    }
 
     #[test]
     fn streamed_unicode_and_invalid_bytes_match_canonical_lossy_text() {

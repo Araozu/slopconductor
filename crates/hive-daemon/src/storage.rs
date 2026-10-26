@@ -156,6 +156,8 @@ use lifecycle::open_and_initialize;
 #[cfg(all(test, unix))]
 use lifecycle::open_lock;
 #[cfg(test)]
+mod image_tests;
+#[cfg(test)]
 mod long_turn_tests;
 mod messages;
 mod repository;

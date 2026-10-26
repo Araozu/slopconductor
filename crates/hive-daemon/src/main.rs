@@ -349,6 +349,7 @@ pub(crate) async fn health() -> Json<HealthResponse> {
             "child-tasks".to_owned(),
             "subagent-v2".to_owned(),
             "batch-matrices".to_owned(),
+            "image-input".to_owned(),
         ],
     })
 }

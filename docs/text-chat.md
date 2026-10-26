@@ -107,6 +107,50 @@ anonymous. The daemon accepts loopback listeners only.
 | POST /v1/turns/{id}/cancel | Idempotent explicit cancellation |
 | POST /v1/turns/{id}/pause, /resume | Durable pause at safe boundaries and explicit fresh admission |
 
+## Image input
+
+Health advertises `image-input`. Clients upload raw image bytes first, then
+attach the returned artifact ids to a user message:
+
+```sh
+# Upload returns {"id": "<sha256>", "sha256": "<sha256>", "size_bytes": N, "media_type": "image/png"}
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: image/png" \
+  --data-binary @photo.png http://127.0.0.1:7331/v1/artifacts
+hivectl session send SESSION --text "What is in this image?" --image photo.png
+hivectl chat --prompt "Describe this" --image photo.png
+```
+
+`POST /v1/artifacts` accepts `image/png`, `image/jpeg`, `image/gif`, and
+`image/webp` up to 20 MiB. Magic bytes must match the declared `Content-Type`
+(else `400 invalid_image` or `415 unsupported_media_type`); oversize bodies
+return `413 image_too_large`. Storage is content-addressed (`id == sha256`),
+so re-uploading the same bytes is idempotent and needs no command id. Missing
+artifact storage returns `503 artifact_unavailable`.
+
+`SendMessageRequest` and `CreateSessionRequest` (initial prompt) carry
+`images: [{ "artifact_id": "<sha256>" }]`. At most 16 images per message. Text
+may be empty when images are present. Each id must exist in the artifacts table
+with an allowed image media type (else `404 not_found` / `400 invalid_request`),
+and the turn's effective model (including a per-message `model` override) must
+advertise `image_input` in `/v1/models`, otherwise the send is rejected with
+`unsupported_capability`. Command-id replay with different images conflicts.
+Uploads target the daemon that owns the session; the peer gateway is not
+extended for uploads.
+
+The stored user message holds one text block first plus one `image` block per
+attachment (`BlockContent::Image { artifact_id, media_type }`), exposed through
+history, queued-message inspection, forks, and edits (queue text edits and
+message edits keep the images). `next-boundary`/`immediate` steering is
+text-only and rejects image attachments. History prints image blocks as
+`[image <media_type> <short id>]`; bytes stream from
+`GET /v1/artifacts/{id}/content`. At dispatch the daemon verifies each file's
+sha256 against its id and encodes data URLs for the provider (Chat Completions
+`image_url`, Responses `input_image`, Anthropic base64 `image`); missing or
+corrupt images fail the turn as `image_unavailable` instead of being dropped.
+Histories replayed to a model without `image_input` substitute
+`[image omitted: <model> does not accept image input]`. Context budgeting counts
+a fixed 2,000-token estimate per image rather than the wire base64 length.
+
 ## Editing queued prompts
 
 Health advertises `queue-editing`. Queue PATCH accepts `command_id` plus optional

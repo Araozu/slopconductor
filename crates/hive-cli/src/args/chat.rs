@@ -34,6 +34,9 @@ pub struct ChatArgs {
     pub prompt_file: Option<PathBuf>,
     #[arg(long)]
     pub command_id: Option<String>,
+    /// Attach an image file to the message; repeat for multiple images (max 16).
+    #[arg(long = "image", value_name = "PATH")]
+    pub images: Vec<PathBuf>,
     /// Return after durable acceptance without following the turn.
     #[arg(long)]
     pub detach: bool,

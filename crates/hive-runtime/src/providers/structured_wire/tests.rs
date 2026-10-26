@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hive_core::provider::ProviderId;
 use serde_json::{Value, json};
 
@@ -70,6 +73,7 @@ fn request(wire: WireProtocol) -> InferenceRequest {
             .into_iter()
             .filter(|d| d.name == "read")
             .collect(),
+        images: Default::default(),
     }
 }
 fn terminal(wire: WireProtocol) -> Value {
@@ -683,4 +687,148 @@ fn streamed_chat_refusals_share_the_visible_output_byte_limit() {
     );
     assert!(matches!(result, Err(DecodeError::LimitExceeded { .. })));
     assert!(!emitted);
+}
+
+fn image_request(wire: WireProtocol) -> (InferenceRequest, String, String) {
+    let artifact_id = "ab".repeat(32);
+    let bytes = b"fake-png-bytes".to_vec();
+    let mut input = request(wire);
+    input.messages = vec![InferenceMessage {
+        role: MessageRole::User,
+        blocks: vec![
+            ContentBlock {
+                id: "text-block".into(),
+                content: BlockContent::Text {
+                    text: "Look at this".into(),
+                },
+            },
+            ContentBlock {
+                id: "image-block".into(),
+                content: BlockContent::Image {
+                    artifact_id: artifact_id.clone(),
+                    media_type: "image/png".into(),
+                },
+            },
+        ],
+        continuation: None,
+    }];
+    input.images.insert(
+        artifact_id.clone(),
+        ResolvedImage {
+            media_type: "image/png".into(),
+            bytes: Arc::from(bytes.into_boxed_slice()),
+        },
+    );
+    let expected_url = format!("data:image/png;base64,{}", BASE64.encode(b"fake-png-bytes"));
+    (input, artifact_id, expected_url)
+}
+
+fn vision_caps(wire: WireProtocol, input: &InferenceRequest) -> ModelCapabilities {
+    use crate::providers::Provider;
+    let provider = OpencodeGoProvider::instance();
+    let mut caps = inference::capabilities(provider, &input.model);
+    caps.image_input = true;
+    // The fixture models must already map to the wire under test.
+    assert_eq!(provider.wire_protocol(&input.model).unwrap(), wire);
+    caps
+}
+
+#[test]
+fn image_blocks_encode_as_data_urls_on_every_wire() {
+    for wire in [
+        WireProtocol::OpenAiChatCompletions,
+        WireProtocol::OpenAiResponses,
+        WireProtocol::AnthropicMessages,
+    ] {
+        let (input, _, expected_url) = image_request(wire);
+        let provider = OpencodeGoProvider::instance();
+        let caps = vision_caps(wire, &input);
+        input.validate(provider, &caps).unwrap();
+        let body = encode(&input, wire, ProviderId::OpencodeGo, "").unwrap();
+        match wire {
+            WireProtocol::OpenAiChatCompletions => {
+                let content = &body["messages"][0]["content"];
+                assert!(content.is_array(), "images require a content array");
+                assert_eq!(content[0], json!({"type": "text", "text": "Look at this"}));
+                assert_eq!(content[1]["type"], "image_url");
+                assert_eq!(content[1]["image_url"]["url"], expected_url);
+            }
+            WireProtocol::OpenAiResponses => {
+                let items = body["input"].as_array().unwrap();
+                let user = items
+                    .iter()
+                    .find(|item| item["role"] == "user")
+                    .expect("grouped user content");
+                assert_eq!(
+                    user["content"][0],
+                    json!({"type": "input_text", "text": "Look at this"})
+                );
+                assert_eq!(user["content"][1]["type"], "input_image");
+                assert_eq!(user["content"][1]["image_url"], expected_url);
+            }
+            WireProtocol::AnthropicMessages => {
+                let content = &body["messages"][0]["content"];
+                assert_eq!(content[0], json!({"type": "text", "text": "Look at this"}));
+                assert_eq!(content[1]["type"], "image");
+                assert_eq!(content[1]["source"]["type"], "base64");
+                assert_eq!(content[1]["source"]["media_type"], "image/png");
+                assert_eq!(
+                    content[1]["source"]["data"],
+                    BASE64.encode(b"fake-png-bytes")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn text_only_messages_keep_their_legacy_wire_shape() {
+    for wire in [
+        WireProtocol::OpenAiChatCompletions,
+        WireProtocol::OpenAiResponses,
+        WireProtocol::AnthropicMessages,
+    ] {
+        let input = request(wire);
+        let body = encode(&input, wire, ProviderId::OpencodeGo, "").unwrap();
+        match wire {
+            WireProtocol::OpenAiChatCompletions => {
+                assert_eq!(body["messages"][0]["content"], "Read Cargo.toml");
+            }
+            WireProtocol::OpenAiResponses => {
+                assert_eq!(body["input"][0]["content"], "Read Cargo.toml");
+            }
+            WireProtocol::AnthropicMessages => {
+                assert_eq!(
+                    body["messages"][0]["content"][0],
+                    json!({"type": "text", "text": "Read Cargo.toml"})
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn image_validation_rejects_missing_data_and_text_only_models() {
+    let (mut input, _, _) = image_request(WireProtocol::OpenAiChatCompletions);
+    let provider = OpencodeGoProvider::instance();
+    // Missing side-map bytes are never silently dropped.
+    input.images.clear();
+    let mut caps = vision_caps(WireProtocol::OpenAiChatCompletions, &input);
+    assert!(matches!(
+        input.validate(provider, &caps),
+        Err(crate::providers::ProviderError::InvalidRequest(_))
+    ));
+    // Non-vision models reject image blocks with a stable capability code.
+    let (input, _, _) = image_request(WireProtocol::OpenAiChatCompletions);
+    caps.image_input = false;
+    assert!(matches!(
+        input.validate(provider, &caps),
+        Err(crate::providers::ProviderError::UnsupportedCapability { capability })
+        if capability == "image_input"
+    ));
+    // Image blocks outside user messages are invalid.
+    let (mut input, _, _) = image_request(WireProtocol::OpenAiChatCompletions);
+    input.messages[0].role = MessageRole::Assistant;
+    let caps = vision_caps(WireProtocol::OpenAiChatCompletions, &input);
+    assert!(input.validate(provider, &caps).is_err());
 }

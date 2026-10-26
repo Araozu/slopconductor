@@ -19,6 +19,53 @@ The [capacity harness](capacity-validation.md) adds Linux release resource
 measurements. Native Windows resource measurements, credentialed live-provider
 checks, and deployed Tailscale validation remain separate gates.
 
+## Image input and first live-provider run, 2026-10-26
+
+The uncommitted image-input work on top of `f5d6e88` passed locally on Linux:
+formatting, Clippy with warnings denied, all 286 offline workspace tests, the
+OpenAPI dump (`POST /v1/artifacts` and `ImageAttachment` present), and the
+complete `python3 scripts/smoke.py` suite. Sixteen credentialed tests are now
+opt-in, including three new image tests.
+
+This is the first recorded credentialed run, using a short-lived OpenCode Go key:
+
+```sh
+set -a; . ./.env; set +a
+cargo test -p hive-runtime --test opencode_go_live --locked -- --ignored
+cargo test -p hive-runtime --test opencode_go_image_live --locked -- --include-ignored
+```
+
+All seven existing OpenCode Go checks passed (model list plus blocking and
+streaming turns on Chat Completions, Anthropic Messages, and Responses). The
+three image checks send a generated 64x64 solid-red PNG through `infer` and
+require a completed turn that names the colour. All answered `red`:
+`glm-5.3-flash` (Chat Completions), `claude-haiku-5-5` (Anthropic Messages),
+and `muse-spark-1.3-contributor` (Responses).
+
+An isolated real daemon (private data directory, `--listen 127.0.0.1:47331`,
+environment-imported key) was then driven with `hivectl` and `curl`:
+
+- `chat --image` with `opencode-go/muse-spark-1.3-contributor` answered `red`.
+  The history showed `[image image/png <id>]`, where the id equals the file's
+  SHA-256.
+- A follow-up `session send --image` with a blue PNG answered `red, blue`. The
+  earlier image is therefore replayed from the artifact store with history.
+- Re-uploading identical bytes returned the same id (201). A mismatched
+  declared type returned 400, a non-image body 400, `text/plain` 415, and a
+  21 MiB body 413.
+- Attaching an image for a ready text-only model (`opencode-go/beam-free`) was
+  rejected with `unsupported_capability: image_input`. The CLI refused 17 images.
+- Sending a stored artifact corrupted on disk failed the turn with
+  `image_unavailable` before any provider request.
+
+Two quirks were observed. `hivectl chat` creates the session before the send is
+rejected, which leaves an empty session behind. Re-uploading bytes whose stored
+file is corrupt returns `503 artifact_unavailable`, which fails safe but reports
+a misleading message.
+
+Not covered: OpenCode Zen and Codex live checks, peer-forwarded uploads (not
+supported), and native Windows.
+
 ## Capacity tooling and Linux release workloads, 2026-10-16
 
 The expanded harness passed its small debug-binary fixture checks and three

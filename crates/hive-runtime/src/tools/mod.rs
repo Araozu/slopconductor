@@ -36,4 +36,4 @@ use arguments::{BashArgs, file_tool};
 pub use arguments::{definitions, validate_arguments};
 pub use outcome::{Artifact, ToolOutcome};
 pub use policy::WorkspacePolicy;
-pub use service::ToolService;
+pub use service::{ToolService, sniff_image_media_type};

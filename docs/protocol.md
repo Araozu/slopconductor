@@ -165,6 +165,7 @@ document covers all administrator routes, including workspace and peer routes.
 | GET /v1/turns/{id}/tools | Implemented: paginated tool invocations/results |
 | GET /v1/tools/{id} | Implemented: one canonical tool invocation |
 | GET /v1/artifacts/{id} | Implemented: artifact metadata |
+| POST /v1/artifacts | Implemented: image upload as raw bytes (`image/png`, `image/jpeg`, `image/gif`, `image/webp`, max 20 MiB); content-addressed and idempotent, returns `ArtifactResponse` |
 | GET /v1/artifacts/{id}/content | Implemented: authenticated artifact byte stream |
 | GET, POST /v1/tasks | Implemented: conversation convenience operations; task/session and run/turn IDs are identical |
 | GET /v1/tasks/{id} | Implemented: requested/effective inputs, latest attempt, and event watermark |

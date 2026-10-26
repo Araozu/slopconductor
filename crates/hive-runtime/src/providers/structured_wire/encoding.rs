@@ -1,11 +1,30 @@
 use std::collections::{HashMap, HashSet};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hive_core::provider::ProviderId;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::super::{WireProtocol, inference::*};
 use super::common::{role, tool_output};
+
+fn image_data_url(media_type: &str, bytes: &[u8]) -> String {
+    format!("data:{media_type};base64,{}", BASE64.encode(bytes))
+}
+
+fn image_bytes<'a>(
+    request: &'a InferenceRequest,
+    artifact_id: &str,
+) -> std::result::Result<(&'a str, &'a [u8]), super::super::ProviderError> {
+    let image =
+        request
+            .images
+            .get(artifact_id)
+            .ok_or(super::super::ProviderError::InvalidRequest(
+                "missing image data",
+            ))?;
+    Ok((image.media_type.as_str(), &image.bytes))
+}
 
 pub(in crate::providers) fn encode(
     request: &InferenceRequest,
@@ -43,9 +62,44 @@ pub(in crate::providers) fn encode(
                     }
                     continue;
                 }
-                let mut value =
-                    json!({"role":role(&message.role),"content":message.visible_text()});
-                if message.role == MessageRole::Assistant {
+                let has_images = message
+                    .blocks
+                    .iter()
+                    .any(|b| matches!(b.content, BlockContent::Image { .. }));
+                let mut value = if has_images {
+                    let text: String = message
+                        .blocks
+                        .iter()
+                        .filter_map(|block| match &block.content {
+                            BlockContent::Text { text } => Some(text.as_str()),
+                            BlockContent::Refusal { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    let mut content = Vec::new();
+                    if !text.is_empty() {
+                        content.push(json!({"type":"text","text":text}));
+                    }
+                    for block in &message.blocks {
+                        if let BlockContent::Image {
+                            artifact_id,
+                            media_type,
+                        } = &block.content
+                        {
+                            let (resolved_media, bytes) = image_bytes(request, artifact_id)?;
+                            let media = if resolved_media.is_empty() {
+                                media_type.as_str()
+                            } else {
+                                resolved_media
+                            };
+                            content.push(json!({"type":"image_url","image_url":{"url":image_data_url(media, bytes)}}));
+                        }
+                    }
+                    json!({"role":role(&message.role),"content":content})
+                } else {
+                    json!({"role":role(&message.role),"content":message.visible_text()})
+                };
+                if message.role == MessageRole::Assistant && !has_images {
                     let text: String = message
                         .blocks
                         .iter()
@@ -81,9 +135,55 @@ pub(in crate::providers) fn encode(
                     messages.extend(call_ids.replay(message, &original.items, wire));
                     continue;
                 }
+                let has_images = message
+                    .blocks
+                    .iter()
+                    .any(|b| matches!(b.content, BlockContent::Image { .. }));
+                if has_images {
+                    let mut content = Vec::new();
+                    for block in &message.blocks {
+                        match &block.content {
+                            BlockContent::Text { text } | BlockContent::Refusal { text } => {
+                                content.push(json!({"type":"input_text","text":text}));
+                            }
+                            BlockContent::Image {
+                                artifact_id,
+                                media_type,
+                            } => {
+                                let (resolved_media, bytes) = image_bytes(request, artifact_id)?;
+                                let media = if resolved_media.is_empty() {
+                                    media_type.as_str()
+                                } else {
+                                    resolved_media
+                                };
+                                content.push(json!({"type":"input_image","image_url":image_data_url(media, bytes)}));
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !content.is_empty() {
+                        messages.push(json!({"role":role(&message.role),"content":content}));
+                    }
+                    // Tool blocks cannot legally share a user image message;
+                    // encode any present ones separately rather than dropping them.
+                    for block in &message.blocks {
+                        match &block.content {
+                            BlockContent::ToolCall { call_id, provider_call_id, name, arguments } => messages.push(json!({"type":"function_call","call_id":call_ids.id(call_id, provider_call_id),"name":name,"arguments":arguments.to_string()})),
+                            BlockContent::ToolResult { call_id, provider_call_id, .. } => messages.push(json!({"type":"function_call_output","call_id":call_ids.id(call_id, provider_call_id),"output":tool_output(&block.content)})),
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
                 for block in &message.blocks {
                     messages.push(match &block.content {
                         BlockContent::Text { text } | BlockContent::Refusal { text } => json!({"role":role(&message.role),"content":text}),
+                        BlockContent::Image { artifact_id, .. } => {
+                            match image_bytes(request, artifact_id) {
+                                Ok((media, bytes)) => json!({"role":role(&message.role),"content":[{"type":"input_image","image_url":image_data_url(media, bytes)}]}),
+                                Err(error) => return Err(error),
+                            }
+                        }
                         BlockContent::ToolCall { call_id, provider_call_id, name, arguments } => json!({"type":"function_call","call_id":call_ids.id(call_id, provider_call_id),"name":name,"arguments":arguments.to_string()}),
                         BlockContent::ToolResult { call_id, provider_call_id, .. } => json!({"type":"function_call_output","call_id":call_ids.id(call_id, provider_call_id),"output":tool_output(&block.content)}),
                     });
@@ -97,11 +197,20 @@ pub(in crate::providers) fn encode(
                 let content = if let Some(original) = original {
                     call_ids.replay(message, &original.items, wire)
                 } else {
-                    message.blocks.iter().map(|block| match &block.content {
-                        BlockContent::Text { text } | BlockContent::Refusal { text } => json!({"type":"text","text":text}),
-                        BlockContent::ToolCall { call_id, provider_call_id, name, arguments } => json!({"type":"tool_use","id":call_ids.id(call_id, provider_call_id),"name":name,"input":arguments}),
-                        BlockContent::ToolResult { call_id, provider_call_id, is_error, .. } => json!({"type":"tool_result","tool_use_id":call_ids.id(call_id, provider_call_id),"content":tool_output(&block.content),"is_error":is_error}),
-                    }).collect()
+                    let mut content = Vec::new();
+                    for block in &message.blocks {
+                        match &block.content {
+                            BlockContent::Text { text } | BlockContent::Refusal { text } => content.push(json!({"type":"text","text":text})),
+                            BlockContent::Image { artifact_id, media_type } => {
+                                let (resolved_media, bytes) = image_bytes(request, artifact_id)?;
+                                let media = if resolved_media.is_empty() { media_type.as_str() } else { resolved_media };
+                                content.push(json!({"type":"image","source":{"type":"base64","media_type":media,"data":BASE64.encode(bytes)}}));
+                            }
+                            BlockContent::ToolCall { call_id, provider_call_id, name, arguments } => content.push(json!({"type":"tool_use","id":call_ids.id(call_id, provider_call_id),"name":name,"input":arguments})),
+                            BlockContent::ToolResult { call_id, provider_call_id, is_error, .. } => content.push(json!({"type":"tool_result","tool_use_id":call_ids.id(call_id, provider_call_id),"content":tool_output(&block.content),"is_error":is_error})),
+                        }
+                    }
+                    content
                 };
                 let author = if message.role == MessageRole::Tool {
                     "user"

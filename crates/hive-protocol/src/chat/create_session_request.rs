@@ -13,6 +13,8 @@ pub struct CreateSessionRequest {
     pub workspace: crate::workspaces::WorkspaceSelection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<super::ImageAttachment>,
     /// Consume a saved compose draft atomically with session acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft_id: Option<String>,

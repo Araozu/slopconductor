@@ -105,7 +105,7 @@ pub(super) fn send_direct_tx(
     user_activity: bool,
 ) -> StoreResult<CommandReceipt> {
     if !valid_command_id(&request.command_id)
-        || request.text.trim().is_empty()
+        || (request.text.trim().is_empty() && request.images.is_empty())
         || request.text.len() > MAX_MESSAGE_BYTES
         || request.text.chars().any(|c| c == '\0')
     {
@@ -160,6 +160,11 @@ pub(super) fn send_direct_tx(
         if let Some(active_turn) = active_turn {
             if request.model.is_some() || request.settings.is_some() {
                 return Err(StoreError::ActiveTurnOverride);
+            }
+            // Steering instructions are text-only; image attachments cannot
+            // ride next-boundary/immediate delivery to a running turn.
+            if !request.images.is_empty() {
+                return Err(StoreError::Invalid);
             }
             let pending: i64 = tx
                 .query_row(
@@ -267,6 +272,8 @@ pub(super) fn send_direct_tx(
         }
         None => execution::turn_settings(&session, &request, &requested_model)?,
     };
+    execution::validate_images(tx, &request.images, &requested_model)?;
+    let blocks = execution::user_blocks(tx, &message_id, &request.text, &request.images)?;
     tx.execute("INSERT INTO turns(id,session_id,ordinal,user_message_id,status,requested_model) VALUES(?1,?2,?3,?4,'queued',?5)",rusqlite::params![turn_id,session_id,ordinal,message_id,requested_model]).map_err(|_|StoreError::Database)?;
     tx.execute(
         "UPDATE turns SET settings=?1,requested_settings=?2 WHERE id=?3",
@@ -292,7 +299,7 @@ pub(super) fn send_direct_tx(
         rusqlite::params![canonical(&spec)?, canonical(&requested)?, session_id],
     )
     .map_err(|_| StoreError::Database)?;
-    tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,provider,model) VALUES(?1,?2,?3,?4,'user',?5,'completed',?6,?7)",rusqlite::params![message_id,session_id,turn_id,user_order,request.text,model_ref.provider().as_str(),model_ref.model()]).map_err(|_|StoreError::Database)?;
+    tx.execute("INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,provider,model) VALUES(?1,?2,?3,?4,'user',?5,'completed',?6,?7,?8)",rusqlite::params![message_id,session_id,turn_id,user_order,request.text,canonical(&blocks)?,model_ref.provider().as_str(),model_ref.model()]).map_err(|_|StoreError::Database)?;
     if user_activity {
         record_user_activity(tx, session_id)?;
     }

@@ -153,6 +153,7 @@ pub(super) fn accept_tx(
         }
         None => execution::turn_settings(session, request, &model)?,
     };
+    execution::validate_images(tx, &request.images, &model)?;
     let id = opaque_id()?;
     let reserved_turn = opaque_id()?;
     tx.execute(
@@ -248,9 +249,10 @@ fn append_message(
 ) -> StoreResult<()> {
     let model = messages::turn_model(tx, turn)?;
     let ordinal = execution::next_message_ordinal(tx, turn)?;
+    let blocks = execution::user_blocks(tx, &entry.id, &entry.request.text, &entry.request.images)?;
     tx.execute(
-        "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,provider,model) VALUES(?1,?2,?3,?4,'user',?5,'completed',?6,?7)",
-        rusqlite::params![entry.id, session, turn, ordinal, entry.request.text, model.provider().as_str(), model.model()],
+        "INSERT INTO messages(id,session_id,turn_id,ordinal,role,text,status,blocks,provider,model) VALUES(?1,?2,?3,?4,'user',?5,'completed',?6,?7,?8)",
+        rusqlite::params![entry.id, session, turn, ordinal, entry.request.text, canonical(&blocks)?, model.provider().as_str(), model.model()],
     ).map_err(|_| StoreError::Database)?;
     sent(tx, session, turn, &entry.id)
 }
@@ -332,9 +334,10 @@ impl StoreClient {
         self.submit(move |connection| {
             if !valid_command_id(&request.command_id)
                 || (request.text.is_none() && request.delivery.is_none())
-                || request.text.as_ref().is_some_and(|text| {
-                    text.trim().is_empty() || text.len() > MAX_MESSAGE_BYTES || text.contains('\0')
-                })
+                || request
+                    .text
+                    .as_ref()
+                    .is_some_and(|text| text.len() > MAX_MESSAGE_BYTES || text.contains('\0'))
                 || request.delivery.is_some_and(|mode| {
                     !matches!(mode, DeliveryMode::AfterTurn | DeliveryMode::AfterFinish)
                 })
@@ -352,6 +355,9 @@ impl StoreClient {
             let (turn, mut queued) = pending_entry(&tx, &session, &message)?;
             if let Some(text) = request.text {
                 queued.text = text;
+            }
+            if queued.text.trim().is_empty() && queued.images.is_empty() {
+                return Err(StoreError::Invalid);
             }
             if let Some(delivery) = request.delivery {
                 queued.delivery = Some(delivery);
@@ -446,8 +452,9 @@ impl StoreClient {
                 .map(|entry| {
                     Ok(QueuedMessageResponse {
                         id: entry.id,
-                        text: entry.request.text,
+                        text: entry.request.text.clone(),
                         delivery: entry.request.delivery.unwrap_or_default(),
+                        images: entry.request.images.clone(),
                     })
                 })
                 .collect()

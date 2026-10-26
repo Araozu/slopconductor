@@ -146,6 +146,13 @@ fn public_block(block: ContentBlock) -> wire::ContentBlock {
         id: block.id,
         content: match block.content {
             BlockContent::Text { text } => wire::BlockContent::Text { text },
+            BlockContent::Image {
+                artifact_id,
+                media_type,
+            } => wire::BlockContent::Image {
+                artifact_id,
+                media_type,
+            },
             BlockContent::Refusal { text } => wire::BlockContent::Refusal { text },
             BlockContent::ToolCall {
                 call_id,
@@ -191,6 +198,85 @@ pub(super) fn public_blocks_from_row(
         });
     }
     Ok(blocks.into_iter().map(public_block).collect())
+}
+pub(super) fn validate_images(
+    tx: &Transaction<'_>,
+    images: &[hive_protocol::chat::ImageAttachment],
+    model: &str,
+) -> StoreResult<()> {
+    if images.len() > inference::MAX_IMAGES_PER_MESSAGE {
+        return Err(StoreError::Invalid);
+    }
+    if images.is_empty() {
+        return Ok(());
+    }
+    for image in images {
+        if !inference::is_valid_artifact_id(&image.artifact_id) {
+            return Err(StoreError::Invalid);
+        }
+        let media: Option<String> = tx
+            .query_row(
+                "SELECT media_type FROM artifacts WHERE id=?1",
+                [&image.artifact_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::Database)?;
+        let Some(media) = media else {
+            return Err(StoreError::NotFound);
+        };
+        if !inference::ALLOWED_IMAGE_MEDIA_TYPES.contains(&media.as_str()) {
+            return Err(StoreError::Invalid);
+        }
+    }
+    let model_ref = model
+        .parse::<hive_core::provider::ProviderModelRef>()
+        .map_err(|_| StoreError::Invalid)?;
+    let Some(provider) = hive_runtime::providers::provider(model_ref.provider()) else {
+        return Err(StoreError::Unsupported("model"));
+    };
+    if provider.wire_protocol(model_ref.model()).is_err() {
+        return Err(StoreError::Unsupported("model"));
+    }
+    if !inference::capabilities(provider, model_ref.model()).image_input {
+        return Err(StoreError::Unsupported("image_input"));
+    }
+    Ok(())
+}
+/// Build the stored blocks for a user message: one text block first, then one
+/// image block per attachment (media types read from the artifacts table).
+pub(super) fn user_blocks(
+    tx: &Transaction<'_>,
+    message_id: &str,
+    text: &str,
+    images: &[hive_protocol::chat::ImageAttachment],
+) -> StoreResult<Vec<ContentBlock>> {
+    let mut blocks = Vec::with_capacity(1 + images.len());
+    blocks.push(ContentBlock {
+        id: format!("{message_id}:block:0"),
+        content: BlockContent::Text {
+            text: text.to_owned(),
+        },
+    });
+    for (index, image) in images.iter().enumerate() {
+        let media: String = tx
+            .query_row(
+                "SELECT media_type FROM artifacts WHERE id=?1",
+                [&image.artifact_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::Database)?
+            .ok_or(StoreError::NotFound)?;
+        blocks.push(ContentBlock {
+            id: format!("{message_id}:block:{}", index + 1),
+            content: BlockContent::Image {
+                artifact_id: image.artifact_id.clone(),
+                media_type: media,
+            },
+        });
+    }
+    Ok(blocks)
 }
 pub(super) fn next_message_ordinal(tx: &Transaction<'_>, turn: &str) -> StoreResult<i64> {
     let (turn_ordinal,last):(i64,Option<i64>)=tx.query_row("SELECT t.ordinal,(SELECT MAX(ordinal) FROM messages WHERE turn_id=t.id) FROM turns t WHERE id=?1",[turn],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|StoreError::Database)?;
@@ -1261,6 +1347,39 @@ impl StoreClient {
             .optional()
             .map_err(|_| StoreError::Database)?
             .ok_or(StoreError::NotFound)
+        })
+        .await
+    }
+    /// Idempotent artifact metadata registration for content-addressed uploads.
+    /// Same bytes always yield the same id; re-registration is a no-op.
+    pub async fn register_artifact(
+        &self,
+        id: &str,
+        size_bytes: u64,
+        media_type: &str,
+    ) -> StoreResult<wire::ArtifactResponse> {
+        let (id, media_type) = (id.to_owned(), media_type.to_owned());
+        self.submit(move |c| {
+            c.execute(
+                "INSERT OR IGNORE INTO artifacts(id,sha256,size_bytes,media_type) VALUES(?1,?2,?3,?4)",
+                rusqlite::params![id, id, size_bytes as i64, media_type],
+            )
+            .map_err(|_| StoreError::Database)?;
+            c.query_row(
+                "SELECT id,sha256,size_bytes,media_type FROM artifacts WHERE id=?1",
+                [&id],
+                |r| {
+                    Ok(wire::ArtifactResponse {
+                        id: r.get(0)?,
+                        sha256: r.get(1)?,
+                        size_bytes: r.get::<_, i64>(2)? as u64,
+                        media_type: r.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::Database)?
+            .ok_or(StoreError::Database)
         })
         .await
     }
